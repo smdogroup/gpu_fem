@@ -30,12 +30,14 @@ class ExecParameters {
    public:
 };
 
+#ifdef USE_GPU
+
+// an atomic add for complex numbers, so we can do complex-step tests on GPU calls for unittests
 __device__ inline void atomicAdd(A2D_complex_t<double>* addr, A2D_complex_t<double> val) {
     atomicAdd(reinterpret_cast<double*>(addr), val.real());
     atomicAdd(reinterpret_cast<double*>(addr) + 1, val.imag());
 }
 
-#ifdef USE_GPU
 #define CHECK_CUDA(call)                                                         \
     {                                                                            \
         cudaError_t err = call;                                                  \

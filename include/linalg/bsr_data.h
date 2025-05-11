@@ -226,7 +226,7 @@ class BsrData {
                    bandwidth_1);
 
         // then we perform random reordering to reduce chain lengths
-        int prune_width = (int)1.0 / p_factor * bandwidth_1;
+        int prune_width = (int)(1.0 / p_factor * bandwidth_1);
         if (print)
             printf("qordering with init bandwidth %d and prune width %d\n", bandwidth_1,
                    prune_width);

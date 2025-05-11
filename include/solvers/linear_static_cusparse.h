@@ -100,7 +100,7 @@ void direct_LU_solve(BsrMat<DeviceVec<T>> &mat, DeviceVec<T> &rhs, DeviceVec<T> 
 template <typename T, bool use_precond = true, bool right = false>
 void GMRES_solve(BsrMat<DeviceVec<T>> &mat, DeviceVec<T> &rhs, DeviceVec<T> &soln,
                  int _n_iter = 100, int max_iter = 500, T abs_tol = 1e-8, T rel_tol = 1e-8,
-                 bool can_print = false, bool debug = false) {
+                 bool can_print = false, bool debug = false, int print_freq = 10) {
     /* GMRES iterative solve using a BsrMat on GPU with CUDA / CuSparse
         only supports T = double right now, may add float at some point (but float won't converge as
        deeply the residual, only about 1e-7) */
@@ -110,9 +110,9 @@ void GMRES_solve(BsrMat<DeviceVec<T>> &mat, DeviceVec<T> &rhs, DeviceVec<T> &sol
     constexpr bool left_precond = use_precond && !right;
     constexpr bool right_precond = use_precond && right;
 
-    if (can_print) {
-        printf("begin cusparse direct LU solve\n");
-    }
+    // if (can_print) {
+    //     printf("begin cusparse GMRES solve\n");
+    // }
     auto start = std::chrono::high_resolution_clock::now();
 
     // copy important inputs for Bsr structure out of BsrMat
@@ -181,6 +181,9 @@ void GMRES_solve(BsrMat<DeviceVec<T>> &mat, DeviceVec<T> &rhs, DeviceVec<T> &sol
     void *pBuffer = 0;
     const cusparseSolvePolicy_t policy_L = CUSPARSE_SOLVE_POLICY_NO_LEVEL,
                                 policy_U = CUSPARSE_SOLVE_POLICY_USE_LEVEL;
+    // tried changing both policy L and U to be USE_LEVEL not really a change
+    // policy_L = CUSPARSE_SOLVE_POLICY_NO_LEVEL,
+    // policy_U = CUSPARSE_SOLVE_POLICY_USE_LEVEL;
     const cusparseOperation_t trans_L = CUSPARSE_OPERATION_NON_TRANSPOSE,
                               trans_U = CUSPARSE_OPERATION_NON_TRANSPOSE;
     const cusparseDirection_t dir = CUSPARSE_DIRECTION_ROW;
@@ -431,7 +434,8 @@ void GMRES_solve(BsrMat<DeviceVec<T>> &mat, DeviceVec<T> &rhs, DeviceVec<T> &sol
             g[j + 1] = -ss[j] * g_temp;
 
             // printf("GMRES iter %d : resid %.9e\n", j, nrm_w);
-            if (can_print) printf("GMRES iter %d : resid %.9e\n", j, abs(g[j + 1]));
+            if (can_print && (j % print_freq == 0))
+                printf("GMRES iter %d : resid %.9e\n", j, abs(g[j + 1]));
 
             if (debug) printf("j=%d, g[j]=%.9e, g[j+1]=%.9e\n", j, g[j], g[j + 1]);
 
