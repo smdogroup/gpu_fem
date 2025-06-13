@@ -68,6 +68,14 @@ void printKernelTiming(long long microseconds) {
     printf("\ttook %s%d%s microseconds to run\n", color_time, (int)microseconds, color_reset);
 }
 
+void printKernelTiming(double sec) {
+    // const char* color_time = "\033[33m";  // yellow
+    const char* color_time = "\033[2m";   // dim gray/white
+    const char* color_reset = "\033[0m";  // reset
+
+    printf("\ttook %s%.4e%s sec to run\n", color_time, sec, color_reset);
+}
+
 template <typename T>
 T rel_err(HostVec<T> vec1, HostVec<T> vec2, T min_tol = 1e-10) {
     assert(vec1.getSize() == vec2.getSize());

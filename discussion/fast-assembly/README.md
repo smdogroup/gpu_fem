@@ -1,0 +1,1 @@
+* these mds discuss notes in my study for fast assembly and using few number of registers, no local memory preferably..

@@ -28,6 +28,14 @@ __HOST_DEVICE__ void printVec<double>(const int N, const double *vec) {
 }
 
 template <>
+__HOST_DEVICE__ void printVec<float>(const int N, const float *vec) {
+    for (int i = 0; i < N; i++) {
+        printf("%.5e,", vec[i]);
+    }
+    printf("\n");
+}
+
+template <>
 __HOST_DEVICE__ void printVec<A2D::ADScalar<double, 1>>(const int N,
                                                         const A2D::ADScalar<double, 1> *vec) {
     for (int i = 0; i < N; i++) {

@@ -8,24 +8,32 @@
     * **2.2**: demo structural optimization with unstiffened panels
 
 Low-level tasks are:
-- [x] compute stresses
-- [x] assert that data and physics are compatible with each other..
-- [x] move tying strain computations outside of physics class into shell_utils.h and just check linear or nonlinear from physics template argument
-- [x] add nonlinear version of tying strains
-    - [x] update calls to have variables in those sections too
-- [x] compute KS failure scalar for von mises stress of unstiffened panels
-- [x] compute mass routine
-- [x] function objects
-- [x] design variable objects => decided no DV objects
-- [x] evalFunctions routine
-- [x] _compute_mass_DVsens
-- [x] _compute_ksfailure_DVsens
-- [x] _compute_ksfailure_SVsens
-- [x] _compute_ksfailure_adjResProduct
-- [ ] demo adjoint solve for ksfailure with K^T * psi = -df/du and then total deriv df/dx = (df/dx)_partial + dR/dx^T psi
+- [ ] some source of high registers and slow computation in the shell elements, maybe templates or interp orders?
+- [ ] try implementing a light version, then generalize stuff..
+- [ ] the sens functions break the register count in drill strain (if comment out registers drop and then runtime increases by 10x)
+- [ ] speedup drill strain again (can't run with more than 64 elems_per_block without it not running it)
+    - [ ] hard-code stuff so no templates and clearly low register usage
+- [ ] look at krylov enrichment
+    - [ ] isolate problematic eigenmode, sick it in the arnoldi
+    - [ ] deflated GMRES strategy
+    - [ ] other enrichment strategies to improve GMRES speedup
+    - [ ] what is A stability and L stability
+    - [ ] I can check the condition number of the Kmat on the uCRM case and its eigenvalues
+    * need to find a good preconditioner in GMRES, this method is still king
+    - [ ] see work by Mark Carpenter in LaRC
+- [ ] Dr. K said to pull out TACS CPU Kmat and try to solve with pyAMG to see if superior preconditioners to ILU(k) for GMRES
 
-- [ ] put function declarations at top of each class so easier to use by new users
-- [ ] review journal paper
+# Useful literature from NASA CFD Workshop
+- [ ] FUN3D uses Jacobian-free Newton-Krylov method and variable preconditioner with ( Linear agglomeration multigrid [a geometric multigrid] + defect-correction Gauss-Seidel iterations )
+    - [ ] I could look at implementing a Jacobian-free Newton-Krylov method, where I do compute preconditioner at some nonlinear steps, but don't always update it if soln update is small and then I can do matrix-vec products using an assembly
+    * multigrid is very helpful for very large scale problem convergence
+- [ ] look at work by Hessam Babae for reduced order models and quantum inspired ROMs
+    - [ ] Dynamic Low-Rank Approximation of Matrix Differential equations
+    - [ ] tensor train for high-dimensional such as 3-dimenisonal grids ROMs
+    - [ ] can even solve high-dimensional nonlinear PDEs (Fokker-Planck, PDF/FDF transport equations)
+    - [ ] DEIM-CUR Low-rank approximation
+
+
 
 - [ ] verify derivatives for structural optimization
     - [ ] compute ksfailure with simple plate under simple strain distribution

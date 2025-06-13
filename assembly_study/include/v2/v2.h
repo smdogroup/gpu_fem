@@ -1,0 +1,11 @@
+// include all headers in shell elements
+#include "basis.h"
+#include "director.h"
+#include "drill_strain.cuh"
+#include "elem_group.cuh"
+#include "elem_group.h"
+#include "isotropic_data.h"
+#include "isotropic_shell.h"
+#include "minimal_assembler.h"
+#include "quadrature.h"
+#include "shell_utils.h"

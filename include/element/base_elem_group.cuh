@@ -1,6 +1,10 @@
 
 #include "cuda_utils.h"
 
+// now include the other .cuh files
+#include "shell/shell_elem_group.cuh"
+#include "shell/shell_elem_group_fast.cuh"
+
 // base class methods to launch kernel depending on how many elements per block
 // may override these in some base classes
 
@@ -78,7 +82,7 @@ __GLOBAL__ void add_energy_gpu(const int32_t num_elements, const Vec<int32_t> ge
 
 template <typename T, class ElemGroup, class Data, int32_t elems_per_block = 1,
           template <typename> class Vec>
-__GLOBAL__ void add_residual_gpu(const int32_t num_elements, const Vec<int32_t> geo_conn,
+__GLOBAL__ void add_residual_gpu_baseline(const int32_t num_elements, const Vec<int32_t> geo_conn,
                                  const Vec<int32_t> vars_conn, const Vec<T> xpts, const Vec<T> vars,
                                  Vec<Data> physData, Vec<T> res) {
     // note in the above : CPU code passes Vec<> objects by reference
@@ -111,6 +115,9 @@ __GLOBAL__ void add_residual_gpu(const int32_t num_elements, const Vec<int32_t> 
     __SHARED__ T block_vars[elems_per_block][vars_per_elem];
     __SHARED__ T block_res[elems_per_block][vars_per_elem];
     __SHARED__ Data block_data[elems_per_block];
+
+    // try extra block work array
+    // __SHARED__ T block_work_arrays[elems_per_block * 4][21];
 
     // load data into block shared mem using some subset of threads
     const int32_t *geo_elem_conn = &_geo_conn[global_elem * Geo::num_nodes];
@@ -153,6 +160,233 @@ __GLOBAL__ void add_residual_gpu(const int32_t num_elements, const Vec<int32_t> 
     res.addElementValuesFromShared(active_thread, threadIdx.y, blockDim.y, Phys::vars_per_node,
                                    Basis::num_nodes, vars_elem_conn,
                                    &block_res[local_elem][0]);
+}  // end of add_residual_gpu kernel
+
+template <typename T, class ElemGroup, class Data, int32_t elems_per_block = 1,
+          template <typename> class Vec>
+__GLOBAL__ void add_residual_gpu_v2(const int32_t num_elements, const Vec<int32_t> geo_conn,
+                                 const Vec<int32_t> vars_conn, const Vec<T> xpts, const Vec<T> vars,
+                                 Vec<Data> physData, Vec<T> res) {
+    // v2 has warp reduction and no shared memory for block_res
+
+    using Geo = typename ElemGroup::Geo;
+    using Basis = typename ElemGroup::Basis;
+    using Phys = typename ElemGroup::Phys;
+    using Quadrature = typename ElemGroup::Quadrature;
+
+    // (iquad, ielem) in thraed block chosen so that iquad = 0,1,2,3 on single elem
+    // are consectuve threads on the GPU
+    int local_elem = threadIdx.y;
+    int iquad = threadIdx.x;
+    int global_elem = local_elem + blockDim.y * blockIdx.x;
+    bool active_thread = global_elem < num_elements;
+    int local_thread =
+        (blockDim.x * blockDim.y) * threadIdx.z + blockDim.x * threadIdx.y + threadIdx.x;
+
+    const int nxpts_per_elem = Geo::num_nodes * Geo::spatial_dim;
+    const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
+
+    const int32_t *_geo_conn = geo_conn.getPtr();
+    const int32_t *_vars_conn = vars_conn.getPtr();
+    const Data *_phys_data = physData.getPtr();
+
+    __SHARED__ T block_xpts[elems_per_block][nxpts_per_elem];
+    __SHARED__ T block_vars[elems_per_block][vars_per_elem];
+    __SHARED__ Data block_data[elems_per_block];
+
+    // load data into block shared mem using some subset of threads
+    const int32_t *geo_elem_conn = &_geo_conn[global_elem * Geo::num_nodes];
+    xpts.copyElemValuesToShared(active_thread, iquad, Quadrature::num_quad_pts, Geo::spatial_dim,
+                            Geo::num_nodes, geo_elem_conn, &block_xpts[local_elem][0]);
+
+    const int32_t *vars_elem_conn = &_vars_conn[global_elem * Basis::num_nodes];
+    vars.copyElemValuesToShared(active_thread, iquad, Quadrature::num_quad_pts, Phys::vars_per_node,
+                                Basis::num_nodes, vars_elem_conn, &block_vars[local_elem][0]);
+
+    if (active_thread) {
+        if (local_thread < elems_per_block) {
+            int global_elem_thread = local_thread + blockDim.y * blockIdx.x;
+            block_data[local_thread] = _phys_data[global_elem_thread];
+        }
+    }
+    __syncthreads();
+
+    T local_res[vars_per_elem];
+    memset(local_res, 0.0, sizeof(T) * vars_per_elem);
+
+    // accessing value crashes the kernel.. (block_xpts not initialized right)
+    // printf("block_xpts:");
+    // printVec<T>(12,&block_xpts[local_elem][0]);
+
+    ElemGroup::template add_element_quadpt_residual<Data>(
+        active_thread, iquad, block_xpts[local_elem], block_vars[local_elem],
+        block_data[local_elem], local_res);
+        
+    for (int idof = 0; idof < vars_per_elem; idof++) {
+        T lane_val = local_res[idof];
+        // warp reduction across 4 threads (need to update how to do this for triangle elements later)
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 2);
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 1);
+
+        local_res[idof] = lane_val;
+    }
+
+    // add from local to global (no shared)
+    if (iquad == 0) {
+        res.addElementValuesFromShared(active_thread, 0, 1, Phys::vars_per_node,
+                                   Basis::num_nodes, vars_elem_conn,
+                                   local_res);
+    }
+}  // end of add_residual_gpu kernel
+
+template <typename T, class ElemGroup, class Data, int32_t elems_per_block = 1,
+          template <typename> class Vec>
+__GLOBAL__ void add_residual_gpu_v3(const int32_t num_elements, const Vec<int32_t> geo_conn,
+                                 const Vec<int32_t> vars_conn, const Vec<T> xpts, const Vec<T> vars,
+                                 Vec<Data> physData, Vec<T> res) {
+    // v3 does warp reduction but then adds into shared instead of straight into global
+
+    using Geo = typename ElemGroup::Geo;
+    using Basis = typename ElemGroup::Basis;
+    using Phys = typename ElemGroup::Phys;
+    using Quadrature = typename ElemGroup::Quadrature;
+
+    // (iquad, ielem) in thraed block chosen so that iquad = 0,1,2,3 on single elem
+    // are consectuve threads on the GPU
+    int local_elem = threadIdx.y;
+    int iquad = threadIdx.x;
+    int global_elem = local_elem + blockDim.y * blockIdx.x;
+    bool active_thread = global_elem < num_elements;
+    int local_thread =
+        (blockDim.x * blockDim.y) * threadIdx.z + blockDim.x * threadIdx.y + threadIdx.x;
+
+    const int nxpts_per_elem = Geo::num_nodes * Geo::spatial_dim;
+    const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
+
+    const int32_t *_geo_conn = geo_conn.getPtr();
+    const int32_t *_vars_conn = vars_conn.getPtr();
+    const Data *_phys_data = physData.getPtr();
+
+    __SHARED__ T block_xpts[elems_per_block][nxpts_per_elem];
+    __SHARED__ T block_vars[elems_per_block][vars_per_elem];
+    __SHARED__ T block_res[elems_per_block][vars_per_elem];
+    __SHARED__ Data block_data[elems_per_block];
+
+    // load data into block shared mem using some subset of threads
+    const int32_t *geo_elem_conn = &_geo_conn[global_elem * Geo::num_nodes];
+    xpts.copyElemValuesToShared(active_thread, iquad, Quadrature::num_quad_pts, Geo::spatial_dim,
+                            Geo::num_nodes, geo_elem_conn, &block_xpts[local_elem][0]);
+
+    const int32_t *vars_elem_conn = &_vars_conn[global_elem * Basis::num_nodes];
+    vars.copyElemValuesToShared(active_thread, iquad, Quadrature::num_quad_pts, Phys::vars_per_node,
+                                Basis::num_nodes, vars_elem_conn, &block_vars[local_elem][0]);
+
+    if (active_thread) {
+        memset(&block_res[local_elem][0], 0.0, sizeof(T) * vars_per_elem);
+
+        if (local_thread < elems_per_block) {
+            int global_elem_thread = local_thread + blockDim.y * blockIdx.x;
+            block_data[local_thread] = _phys_data[global_elem_thread];
+        }
+    }
+    __syncthreads();
+
+    T local_res[vars_per_elem];
+    memset(local_res, 0.0, sizeof(T) * vars_per_elem);
+
+    // accessing value crashes the kernel.. (block_xpts not initialized right)
+    // printf("block_xpts:");
+    // printVec<T>(12,&block_xpts[local_elem][0]);
+
+    ElemGroup::template add_element_quadpt_residual<Data>(
+        active_thread, iquad, block_xpts[local_elem], block_vars[local_elem],
+        block_data[local_elem], local_res);
+        
+    for (int idof = 0; idof < vars_per_elem; idof++) {
+        T lane_val = local_res[idof];
+        // warp reduction across 4 threads (need to update how to do this for triangle elements later)
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 2);
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 1);
+
+        local_res[idof] = lane_val;
+    }
+
+    // add from local to global (no shared)
+    if (iquad == 0) {
+        Vec<T>::copyLocalToShared(active_thread, 1.0, vars_per_elem, &local_res[0],
+                              &block_res[local_elem][0]);
+
+        res.addElementValuesFromShared(active_thread, 0, 1, Phys::vars_per_node,
+                                   Basis::num_nodes, vars_elem_conn,
+                                   &block_res[local_elem][0]);
+    }
+}  // end of add_residual_gpu kernel
+
+template <typename T, class ElemGroup, class Data, int32_t elems_per_block = 1,
+          template <typename> class Vec>
+__GLOBAL__ void add_residual_gpu_v6(const int32_t num_elements, const Vec<int32_t> geo_conn,
+                                 const Vec<int32_t> vars_conn, const Vec<T> xpts, const Vec<T> vars,
+                                 Vec<Data> physData, Vec<T> res) {
+    // v2 has warp reduction and no shared memory for block_res
+
+    using Geo = typename ElemGroup::Geo;
+    using Basis = typename ElemGroup::Basis;
+    using Phys = typename ElemGroup::Phys;
+    using Quadrature = typename ElemGroup::Quadrature;
+
+    // (iquad, ielem) in thraed block chosen so that iquad = 0,1,2,3 on single elem
+    // are consectuve threads on the GPU
+    int local_elem = threadIdx.x;
+    int global_elem = local_elem + blockDim.x * blockIdx.x;
+    bool active_thread = global_elem < num_elements;
+    int local_thread =
+        (blockDim.x * blockDim.y) * threadIdx.z + blockDim.x * threadIdx.y + threadIdx.x;
+
+    const int nxpts_per_elem = Geo::num_nodes * Geo::spatial_dim;
+    const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
+
+    const int32_t *_geo_conn = geo_conn.getPtr();
+    const int32_t *_vars_conn = vars_conn.getPtr();
+    const Data *_phys_data = physData.getPtr();
+
+    __SHARED__ T block_xpts[elems_per_block][nxpts_per_elem];
+    __SHARED__ T block_vars[elems_per_block][vars_per_elem];
+    __SHARED__ Data block_data[elems_per_block];
+
+    // load data into block shared mem using some subset of threads
+    const int32_t *geo_elem_conn = &_geo_conn[global_elem * Geo::num_nodes];
+    xpts.copyElemValuesToShared(active_thread, 0, 1, Geo::spatial_dim,
+                            Geo::num_nodes, geo_elem_conn, &block_xpts[local_elem][0]);
+
+    const int32_t *vars_elem_conn = &_vars_conn[global_elem * Basis::num_nodes];
+    vars.copyElemValuesToShared(active_thread, 0, 1, Phys::vars_per_node,
+                                Basis::num_nodes, vars_elem_conn, &block_vars[local_elem][0]);
+
+    if (active_thread) {
+        if (local_thread < elems_per_block) {
+            int global_elem_thread = local_thread + blockDim.y * blockIdx.x;
+            block_data[local_thread] = _phys_data[global_elem_thread];
+        }
+    }
+    __syncthreads();
+
+    T local_res[vars_per_elem];
+    memset(local_res, 0.0, sizeof(T) * vars_per_elem);
+
+    // accessing value crashes the kernel.. (block_xpts not initialized right)
+    // printf("block_xpts:");
+    // printVec<T>(12,&block_xpts[local_elem][0]);
+
+    for (int iquad = 0; iquad < Quadrature::num_quad_pts; iquad++) {
+        ElemGroup::template add_element_quadpt_residual<Data>(
+        active_thread, iquad, block_xpts[local_elem], block_vars[local_elem],
+        block_data[local_elem], local_res);
+    }
+
+    // add from local to global (no shared)
+    res.addElementValuesFromShared(active_thread, 0, 1, Phys::vars_per_node,
+                                Basis::num_nodes, vars_elem_conn,
+                                local_res);
 }  // end of add_residual_gpu kernel
 
 // add_jacobian_gpu kernel
@@ -261,44 +495,464 @@ __GLOBAL__ static void add_jacobian_gpu(int32_t vars_num_nodes, int32_t num_elem
 
 }  // end of add_jacobian_gpu
 
-// add_jacobian_gpu kernel
-// -------------------
-template <typename T, int32_t elems_per_block, class Data, 
-          template <typename> class Vec>
-__GLOBAL__ static void set_design_variables_gpu(const int32_t num_elements, const Vec<T> design_vars, 
-        const Vec<int32_t> elem_components, Vec<Data> physData) {
+template <typename T, class ElemGroup, class Data, int32_t elems_per_block,
+          template <typename> class Vec, class Mat>
+__GLOBAL__ static void add_jacobian_gpu_v2(int32_t vars_num_nodes, int32_t num_elements,
+                                        Vec<int32_t> geo_conn, Vec<int32_t> vars_conn, Vec<T> xpts,
+                                        Vec<T> vars, Vec<Data> physData, Vec<T> res, Mat mat) {
+    using Geo = typename ElemGroup::Geo;
+    using Basis = typename ElemGroup::Basis;
+    using Phys = typename ElemGroup::Phys;
 
-    int local_elem = threadIdx.x;
-    int global_elem = local_elem + blockDim.x * blockIdx.x;
-    
-    const int ndvs_global = design_vars.getSize();
-    const int ndvs_per_comp = Data::ndvs_per_comp;
-    const int *_elem_components = elem_components.getPtr();
-    const T *_design_vars = design_vars.getPtr();
-    Data *_phys_data = physData.getPtr();
+    // printf("in kernel\n");
 
-    // don't load to shared, just read from global and set there
-    if (global_elem < num_elements) {
-        // get which component the element belongs to
-        int icomp = _elem_components[global_elem];
+    // if you want to precompute some things?
+    // __SHARED__ T geo_data[elems_per_block][Geo::geo_data_size];
+    // __SHARED__ T basis_data[elems_per_block][Geo::geo_data_size];
 
-        // if (global_elem < 32)
-        //     printf("icomp %d, ndvs_global %d\n", icomp, ndvs_global);
+    int local_elem = threadIdx.z;
+    int global_elem = local_elem + blockDim.z * blockIdx.x;
+    bool active_thread = global_elem < num_elements;
+    int local_thread =
+        (blockDim.x * blockDim.y) * threadIdx.z + blockDim.x * threadIdx.y + threadIdx.x;
+    int ideriv = threadIdx.y;
+    int iquad = threadIdx.x;
 
-        // one thread per elem
-        T loc_dvs[ndvs_per_comp];
-        for (int idv = 0; idv < ndvs_per_comp; idv++) {
-            loc_dvs[idv] = _design_vars[ndvs_per_comp * icomp + idv];
+    const int nxpts_per_elem = Geo::num_nodes * Geo::spatial_dim;
+    const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
+    const int num_vars = vars_num_nodes * Phys::vars_per_node;    
+
+    const int32_t *_geo_conn = geo_conn.getPtr();
+    const int32_t *_vars_conn = vars_conn.getPtr();
+    const Data *_phys_data = physData.getPtr();
+
+    // currently using 1416 T values per block on this element (want to be below
+    // 6000 doubles shared mem)
+    __SHARED__ T block_xpts[elems_per_block][nxpts_per_elem];
+    __SHARED__ T block_vars[elems_per_block][vars_per_elem];
+    __SHARED__ Data block_data[elems_per_block];
+
+    int nthread_xy = blockDim.x * blockDim.y;
+    int thread_xy = threadIdx.x * blockDim.y + threadIdx.y;
+    int global_elem_thread = local_thread + blockDim.z * blockIdx.x;
+
+    // load data into block shared mem using some subset of threads
+    const int32_t *geo_elem_conn = &_geo_conn[global_elem * Geo::num_nodes];
+    xpts.copyElemValuesToShared(active_thread, thread_xy, nthread_xy, Geo::spatial_dim,
+                                Geo::num_nodes, geo_elem_conn, &block_xpts[local_elem][0]);
+
+    const int32_t *vars_elem_conn = &_vars_conn[global_elem * Basis::num_nodes];
+    vars.copyElemValuesToShared(active_thread, thread_xy, nthread_xy, Phys::vars_per_node,
+                                Basis::num_nodes, vars_elem_conn, &block_vars[local_elem][0]);
+
+    if (active_thread) {
+        if (local_thread < elems_per_block) {
+            block_data[local_thread] = _phys_data[global_elem_thread];
         }
+    }
+    __syncthreads();
 
-        _phys_data[global_elem].set_design_variables(loc_dvs);
+    T local_res[vars_per_elem];
+    memset(local_res, 0.0, sizeof(T) * vars_per_elem);
+    T local_mat_col[vars_per_elem];
+    memset(local_mat_col, 0.0, sizeof(T) * vars_per_elem);
 
-        // if (global_elem < 32) {
-        //     printf("global elem %d, thick = %.4e\n", global_elem, _phys_data[global_elem].thick);
-        // }
+    // call the device function to get one column of the element stiffness
+    // matrix at one quadrature point
+    ElemGroup::template add_element_quadpt_jacobian_col<Data>(
+        active_thread, iquad, ideriv, block_xpts[local_elem], block_vars[local_elem],
+        block_data[local_elem], local_res, local_mat_col);
+
+    // warp shuffle over local_res
+    for (int idof = 0; idof < vars_per_elem; idof++) {
+        T lane_val = local_res[idof];
+        // warp reduction across 4 threads (need to update how to do this for triangle elements later)
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 2);
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 1);
+
+        local_res[idof] = lane_val;
     }
 
-}  // end of set_design_variables_gpu
+    // warp shuffle over local_mat_col
+    for (int idof = 0; idof < vars_per_elem; idof++) {
+        T lane_val = local_mat_col[idof];
+        // warp reduction across 4 threads (need to update how to do this for triangle elements later)
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 2);
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 1);
+
+        local_mat_col[idof] = lane_val;
+    }
+
+    // add from local to global (no shared)
+    if (iquad == 0) {
+        int nderiv = blockDim.y;
+
+        res.addElementValuesFromShared(active_thread, ideriv, nderiv, Phys::vars_per_node,
+                                   Basis::num_nodes, vars_elem_conn,
+                                   local_res);
+
+        // mat.addElementMatrixValuesFromShared(active_thread, ideriv, nderiv, 1.0, global_elem,
+        //         Phys::vars_per_node, Basis::num_nodes, vars_elem_conn,
+        //         &block_mat[local_elem][0]);
+        mat.addElementMatRow(active_thread, ideriv / 4, ideriv % 4, global_elem, ideriv, nderiv,
+        Phys::vars_per_node, Basis::num_nodes, vars_elem_conn, local_mat_col);
+    }
+}  // end of add_jacobian_gpu
+
+template <typename T, class ElemGroup, class Data, int32_t elems_per_block,
+          template <typename> class Vec, class Mat>
+__GLOBAL__ static void add_jacobian_gpu_v3(int32_t vars_num_nodes, int32_t num_elements,
+                                        Vec<int32_t> geo_conn, Vec<int32_t> vars_conn, Vec<T> xpts,
+                                        Vec<T> vars, Vec<Data> physData, Vec<T> res, Mat mat) {
+    using Geo = typename ElemGroup::Geo;
+    using Basis = typename ElemGroup::Basis;
+    using Phys = typename ElemGroup::Phys;
+
+    // printf("in kernel\n");
+
+    // if you want to precompute some things?
+    // __SHARED__ T geo_data[elems_per_block][Geo::geo_data_size];
+    // __SHARED__ T basis_data[elems_per_block][Geo::geo_data_size];
+
+    int local_elem = threadIdx.z;
+    int global_elem = local_elem + blockDim.z * blockIdx.x;
+    bool active_thread = global_elem < num_elements;
+    int local_thread =
+        (blockDim.x * blockDim.y) * threadIdx.z + blockDim.x * threadIdx.y + threadIdx.x;
+    int ideriv = threadIdx.y;
+    int iquad = threadIdx.x;
+
+    const int nxpts_per_elem = Geo::num_nodes * Geo::spatial_dim;
+    const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
+    const int num_vars = vars_num_nodes * Phys::vars_per_node;    
+
+    const int32_t *_geo_conn = geo_conn.getPtr();
+    const int32_t *_vars_conn = vars_conn.getPtr();
+    const Data *_phys_data = physData.getPtr();
+
+    // currently using 1416 T values per block on this element (want to be below
+    // 6000 doubles shared mem)
+    __SHARED__ T block_xpts[elems_per_block][nxpts_per_elem];
+    __SHARED__ T block_vars[elems_per_block][vars_per_elem];
+    __SHARED__ T block_res[elems_per_block][vars_per_elem];
+    __SHARED__ T block_mat_col[elems_per_block][24][vars_per_elem];
+    __SHARED__ Data block_data[elems_per_block];
+
+    int nthread_xy = blockDim.x * blockDim.y;
+    int thread_xy = threadIdx.x * blockDim.y + threadIdx.y;
+    int global_elem_thread = local_thread + blockDim.z * blockIdx.x;
+
+    // load data into block shared mem using some subset of threads
+    const int32_t *geo_elem_conn = &_geo_conn[global_elem * Geo::num_nodes];
+    xpts.copyElemValuesToShared(active_thread, thread_xy, nthread_xy, Geo::spatial_dim,
+                                Geo::num_nodes, geo_elem_conn, &block_xpts[local_elem][0]);
+
+    const int32_t *vars_elem_conn = &_vars_conn[global_elem * Basis::num_nodes];
+    vars.copyElemValuesToShared(active_thread, thread_xy, nthread_xy, Phys::vars_per_node,
+                                Basis::num_nodes, vars_elem_conn, &block_vars[local_elem][0]);
+
+    if (active_thread) {
+        if (local_thread < elems_per_block) {
+            block_data[local_thread] = _phys_data[global_elem_thread];
+        }
+    }
+    __syncthreads();
+
+    T local_res[vars_per_elem];
+    memset(local_res, 0.0, sizeof(T) * vars_per_elem);
+    T local_mat_col[vars_per_elem];
+    memset(local_mat_col, 0.0, sizeof(T) * vars_per_elem);
+
+    // call the device function to get one column of the element stiffness
+    // matrix at one quadrature point
+    ElemGroup::template add_element_quadpt_jacobian_col<Data>(
+        active_thread, iquad, ideriv, block_xpts[local_elem], block_vars[local_elem],
+        block_data[local_elem], local_res, local_mat_col);
+
+    // warp shuffle over local_res
+    for (int idof = 0; idof < vars_per_elem; idof++) {
+        T lane_val = local_res[idof];
+        // warp reduction across 4 threads (need to update how to do this for triangle elements later)
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 2);
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 1);
+
+        local_res[idof] = lane_val;
+    }
+
+    // warp shuffle over local_mat_col
+    for (int idof = 0; idof < vars_per_elem; idof++) {
+        T lane_val = local_mat_col[idof];
+        // warp reduction across 4 threads (need to update how to do this for triangle elements later)
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 2);
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 1);
+
+        local_mat_col[idof] = lane_val;
+    }
+
+    // add from local to global (no shared)
+    if (iquad == 0) {
+        // add into shared memory first
+        Vec<T>::copyLocalToShared(active_thread, 1.0 / blockDim.y, vars_per_elem, &local_res[0],
+                              &block_res[local_elem][0]);
+        Vec<T>::copyLocalToShared(active_thread, 1.0, vars_per_elem, &local_mat_col[0],
+                                &block_mat_col[local_elem][ideriv][0]);
+
+        int nderiv = blockDim.y;
+
+        res.addElementValuesFromShared(active_thread, ideriv, nderiv, Phys::vars_per_node,
+                                   Basis::num_nodes, vars_elem_conn,
+                                   &block_res[local_elem][0]);
+        mat.addElementMatRow(active_thread, ideriv / 4, ideriv % 4, global_elem, ideriv, nderiv,
+            Phys::vars_per_node, Basis::num_nodes, vars_elem_conn, &block_mat_col[local_elem][ideriv][0]);
+    }
+}  // end of add_jacobian_gpu
+
+template <typename T, class ElemGroup, class Data, int32_t elems_per_block,
+          template <typename> class Vec, class Mat>
+__GLOBAL__ static void add_jacobian_gpu_v4(int32_t vars_num_nodes, int32_t num_elements,
+                                        Vec<int32_t> geo_conn, Vec<int32_t> vars_conn, Vec<T> xpts,
+                                        Vec<T> vars, Vec<Data> physData, Vec<T> res, Mat mat) {
+    using Geo = typename ElemGroup::Geo;
+    using Basis = typename ElemGroup::Basis;
+    using Phys = typename ElemGroup::Phys;
+
+    // printf("in kernel\n");
+
+    // if you want to precompute some things?
+    // __SHARED__ T geo_data[elems_per_block][Geo::geo_data_size];
+    // __SHARED__ T basis_data[elems_per_block][Geo::geo_data_size];
+
+    int local_elem = threadIdx.z;
+    int global_elem = local_elem + blockDim.z * blockIdx.x;
+    bool active_thread = global_elem < num_elements;
+    int local_thread =
+        (blockDim.x * blockDim.y) * threadIdx.z + blockDim.x * threadIdx.y + threadIdx.x;
+    int ideriv = threadIdx.y;
+    int iquad = threadIdx.x;
+
+    const int nxpts_per_elem = Geo::num_nodes * Geo::spatial_dim;
+    const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
+    const int num_vars = vars_num_nodes * Phys::vars_per_node;    
+
+    const int32_t *_geo_conn = geo_conn.getPtr();
+    const int32_t *_vars_conn = vars_conn.getPtr();
+    const Data *_phys_data = physData.getPtr();
+
+    // currently using 1416 T values per block on this element (want to be below
+    // 6000 doubles shared mem)
+    __SHARED__ T block_xpts[elems_per_block][nxpts_per_elem];
+    __SHARED__ T block_vars[elems_per_block][vars_per_elem];
+    __SHARED__ Data block_data[elems_per_block];
+
+    int nthread_xy = blockDim.x * blockDim.y;
+    int thread_xy = threadIdx.x * blockDim.y + threadIdx.y;
+    int global_elem_thread = local_thread + blockDim.z * blockIdx.x;
+
+    // load data into block shared mem using some subset of threads
+    const int32_t *geo_elem_conn = &_geo_conn[global_elem * Geo::num_nodes];
+    xpts.copyElemValuesToShared(active_thread, thread_xy, nthread_xy, Geo::spatial_dim,
+                                Geo::num_nodes, geo_elem_conn, &block_xpts[local_elem][0]);
+
+    const int32_t *vars_elem_conn = &_vars_conn[global_elem * Basis::num_nodes];
+    vars.copyElemValuesToShared(active_thread, thread_xy, nthread_xy, Phys::vars_per_node,
+                                Basis::num_nodes, vars_elem_conn, &block_vars[local_elem][0]);
+
+    if (active_thread) {
+        if (local_thread < elems_per_block) {
+            block_data[local_thread] = _phys_data[global_elem_thread];
+        }
+    }
+    __syncthreads();
+
+    T local_mat_col[vars_per_elem];
+    memset(local_mat_col, 0.0, sizeof(T) * vars_per_elem);
+
+    // call the device function to get one column of the element stiffness
+    // matrix at one quadrature point
+    ElemGroup::template add_element_quadpt_jacobian_col_no_resid<Data>(
+        active_thread, iquad, ideriv, block_xpts[local_elem], block_vars[local_elem],
+        block_data[local_elem], local_mat_col);
+
+    // warp shuffle over local_mat_col
+    for (int idof = 0; idof < vars_per_elem; idof++) {
+        T lane_val = local_mat_col[idof];
+        // warp reduction across 4 threads (need to update how to do this for triangle elements later)
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 2);
+        lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 1);
+
+        local_mat_col[idof] = lane_val;
+    }
+
+    // add from local to global (no shared)
+    if (iquad == 0) {
+        int nderiv = blockDim.y;
+        mat.addElementMatRow(active_thread, ideriv / 4, ideriv % 4, global_elem, ideriv, nderiv,
+            Phys::vars_per_node, Basis::num_nodes, vars_elem_conn, local_mat_col);
+    }
+}  // end of add_jacobian_gpu
+
+template <typename T, class ElemGroup, class Data, int32_t elems_per_block,
+          template <typename> class Vec, class Mat>
+__GLOBAL__ static void add_jacobian_gpu_v6(int32_t vars_num_nodes, int32_t num_elements,
+                                        Vec<int32_t> geo_conn, Vec<int32_t> vars_conn, Vec<T> xpts,
+                                        Vec<T> vars, Vec<Data> physData, Vec<T> res, Mat mat) {
+    using Geo = typename ElemGroup::Geo;
+    using Basis = typename ElemGroup::Basis;
+    using Phys = typename ElemGroup::Phys;
+    using Quadrature = typename ElemGroup::Quadrature;
+
+    int local_elem = threadIdx.z;
+    int global_elem = local_elem + blockDim.z * blockIdx.x;
+    bool active_thread = global_elem < num_elements;
+    int local_thread =
+        (blockDim.x * blockDim.y) * threadIdx.z + blockDim.x * threadIdx.y + threadIdx.x;
+    int ideriv = threadIdx.y;
+    int iquad = threadIdx.x;
+
+    const int nxpts_per_elem = Geo::num_nodes * Geo::spatial_dim;
+    const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
+    const int num_vars = vars_num_nodes * Phys::vars_per_node;    
+
+    const int32_t *_geo_conn = geo_conn.getPtr();
+    const int32_t *_vars_conn = vars_conn.getPtr();
+    const Data *_phys_data = physData.getPtr();
+
+    // currently using 1416 T values per block on this element (want to be below
+    // 6000 doubles shared mem)
+    __SHARED__ T block_xpts[elems_per_block][nxpts_per_elem];
+    __SHARED__ T block_vars[elems_per_block][vars_per_elem];
+    __SHARED__ Data block_data[elems_per_block];
+
+    int nthread_xy = blockDim.x * blockDim.y;
+    int thread_xy = threadIdx.x * blockDim.y + threadIdx.y;
+    int global_elem_thread = local_thread + blockDim.z * blockIdx.x;
+
+    // load data into block shared mem using some subset of threads
+    const int32_t *geo_elem_conn = &_geo_conn[global_elem * Geo::num_nodes];
+    xpts.copyElemValuesToShared(active_thread, thread_xy, nthread_xy, Geo::spatial_dim,
+                                Geo::num_nodes, geo_elem_conn, &block_xpts[local_elem][0]);
+
+    const int32_t *vars_elem_conn = &_vars_conn[global_elem * Basis::num_nodes];
+    vars.copyElemValuesToShared(active_thread, thread_xy, nthread_xy, Phys::vars_per_node,
+                                Basis::num_nodes, vars_elem_conn, &block_vars[local_elem][0]);
+
+    if (active_thread) {
+        if (local_thread < elems_per_block) {
+            block_data[local_thread] = _phys_data[global_elem_thread];
+        }
+    }
+    __syncthreads();
+
+    T local_mat_col[vars_per_elem];
+    memset(local_mat_col, 0.0, sizeof(T) * vars_per_elem);
+
+    // call the device function to get one column of the element stiffness
+    // matrix at one quadrature point
+    for (int iquad = 0; iquad < Quadrature::num_quad_pts; iquad++) {
+        ElemGroup::template add_element_quadpt_jacobian_col_no_resid<Data>(
+            active_thread, iquad, ideriv, block_xpts[local_elem], block_vars[local_elem],
+            block_data[local_elem], local_mat_col);
+    }
+
+    // warp shuffle over local_mat_col
+    // for (int idof = 0; idof < vars_per_elem; idof++) {
+    //     T lane_val = local_mat_col[idof];
+    //     // warp reduction across 4 threads (need to update how to do this for triangle elements later)
+    //     lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 2);
+    //     lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 1);
+
+    //     local_mat_col[idof] = lane_val;
+    // }
+
+    // add from local to global (no shared)
+    if (iquad == 0) {
+        int nderiv = blockDim.y;
+        mat.addElementMatRow(active_thread, ideriv / 4, ideriv % 4, global_elem, ideriv, nderiv,
+            Phys::vars_per_node, Basis::num_nodes, vars_elem_conn, local_mat_col);
+    }
+}  // end of add_jacobian_gpu
+
+template <typename T, class ElemGroup, class Data, int32_t elems_per_block,
+          template <typename> class Vec, class Mat>
+__GLOBAL__ static void add_jacobian_gpu_v7(int32_t vars_num_nodes, int32_t num_elements,
+                                        Vec<int32_t> geo_conn, Vec<int32_t> vars_conn, Vec<T> xpts,
+                                        Vec<T> vars, Vec<Data> physData, Vec<T> res, Mat mat) {
+    using Geo = typename ElemGroup::Geo;
+    using Basis = typename ElemGroup::Basis;
+    using Phys = typename ElemGroup::Phys;
+    using Quadrature = typename ElemGroup::Quadrature;
+
+    int local_elem = threadIdx.z;
+    int global_elem = local_elem + blockDim.z * blockIdx.x;
+    bool active_thread = global_elem < num_elements;
+    int local_thread =
+        (blockDim.x * blockDim.y) * threadIdx.z + blockDim.x * threadIdx.y + threadIdx.x;
+    int ideriv = threadIdx.y;
+    int iquad = threadIdx.x;
+
+    const int nxpts_per_elem = Geo::num_nodes * Geo::spatial_dim;
+    const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
+    const int num_vars = vars_num_nodes * Phys::vars_per_node;    
+
+    const int32_t *_geo_conn = geo_conn.getPtr();
+    const int32_t *_vars_conn = vars_conn.getPtr();
+    const Data *_phys_data = physData.getPtr();
+
+    // currently using 1416 T values per block on this element (want to be below
+    // 6000 doubles shared mem)
+    __SHARED__ T block_xpts[elems_per_block][nxpts_per_elem];
+    __SHARED__ T block_vars[elems_per_block][vars_per_elem];
+    __SHARED__ Data block_data[elems_per_block];
+
+    int nthread_xy = blockDim.x * blockDim.y;
+    int thread_xy = threadIdx.x * blockDim.y + threadIdx.y;
+    int global_elem_thread = local_thread + blockDim.z * blockIdx.x;
+
+    // load data into block shared mem using some subset of threads
+    const int32_t *geo_elem_conn = &_geo_conn[global_elem * Geo::num_nodes];
+    xpts.copyElemValuesToShared(active_thread, thread_xy, nthread_xy, Geo::spatial_dim,
+                                Geo::num_nodes, geo_elem_conn, &block_xpts[local_elem][0]);
+
+    const int32_t *vars_elem_conn = &_vars_conn[global_elem * Basis::num_nodes];
+    vars.copyElemValuesToShared(active_thread, thread_xy, nthread_xy, Phys::vars_per_node,
+                                Basis::num_nodes, vars_elem_conn, &block_vars[local_elem][0]);
+
+    if (active_thread) {
+        if (local_thread < elems_per_block) {
+            block_data[local_thread] = _phys_data[global_elem_thread];
+        }
+    }
+    __syncthreads();
+
+    T local_mat_col[vars_per_elem];
+    memset(local_mat_col, 0.0, sizeof(T) * vars_per_elem);
+
+    // call the device function to get one column of the element stiffness
+    // matrix at one quadrature point
+    for (int iquad = 0; iquad < Quadrature::num_quad_pts; iquad++) {
+        ElemGroup::template add_element_quadpt_jacobian_col_no_resid<Data>(
+            active_thread, iquad, ideriv, block_xpts[local_elem], block_vars[local_elem],
+            block_data[local_elem], local_mat_col);
+    }
+
+    // warp shuffle over local_mat_col
+    // for (int idof = 0; idof < vars_per_elem; idof++) {
+    //     T lane_val = local_mat_col[idof];
+    //     // warp reduction across 4 threads (need to update how to do this for triangle elements later)
+    //     lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 2);
+    //     lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 1);
+
+    //     local_mat_col[idof] = lane_val;
+    // }
+
+    // add from local to global (no shared)
+    if (iquad == 0) {
+        int nderiv = blockDim.y;
+        mat.addElementMatRow(active_thread, ideriv / 4, ideriv % 4, global_elem, ideriv, nderiv,
+            Phys::vars_per_node, Basis::num_nodes, vars_elem_conn, local_mat_col);
+    }
+}  // end of add_jacobian_gpu
+
 
 template <typename T, class ElemGroup, class Data, int32_t elems_per_block = 1,
           template <typename> class Vec>

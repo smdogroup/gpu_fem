@@ -394,6 +394,7 @@ class DeviceVec : public BaseVec<T> {
             int iglobal = _global_inode * dof_per_node + (idof % dof_per_node);
 
             atomicAdd(&this->data[iglobal], shared_data[idof]);
+            // this->data[iglobal] += shared_data[idof];
         }
     }
 
@@ -428,6 +429,10 @@ class HostVec : public BaseVec<T> {
         if constexpr (std::is_same<T, double>::value) {
             for (int i = 0; i < this->N; i++) {
                 this->data[i] = maxVal * static_cast<double>(rand()) / RAND_MAX;
+            }
+        } else if constexpr (std::is_same<T, float>::value) {
+            for (int i = 0; i < this->N; i++) {
+                this->data[i] = maxVal * static_cast<float>(rand()) / RAND_MAX;
             }
         } else if constexpr (std::is_same<T, std::complex<double>>::value) {
             for (int i = 0; i < this->N; i++) {

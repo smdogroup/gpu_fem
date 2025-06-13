@@ -24,9 +24,10 @@ class BaseDirector {
 };  // end of base director class
 
 // uses CFRP to have compile-time inheritance
-template <typename T, int offset = 3>
-class LinearizedRotation : public BaseDirector<LinearizedRotation<T, offset>, T> {
+template <typename T, int offset_ = 3>
+class LinearizedRotation : public BaseDirector<LinearizedRotation<T, offset_>, T> {
    public:
+    static const int32_t offset = offset_;
     static const int32_t num_params = 3;
 
     // TODO fix so in base class only
@@ -100,6 +101,50 @@ class LinearizedRotation : public BaseDirector<LinearizedRotation<T, offset>, T>
             t += 3;
             d += 3;
             q += vars_per_node;
+        }
+    }
+
+    template <class Basis, int vars_per_node, int num_nodes>
+    __HOST_DEVICE__ static void interpDirectorLight(const T pt[], const T xpts[], const T vars[],
+                                                    T d0[]) {
+        const T *q = &vars[offset];
+#pragma unroll
+        for (int i = 0; i < 3; i++) d0[i] = 0.0;
+
+#pragma unroll
+        for (int inode = 0; inode < num_nodes; inode++) {
+            T n0[3], node_pt[2], d[3];
+            Basis::getNodePoint(inode, node_pt);
+            Basis::ShellComputeNodeNormal(node_pt, xpts, n0);
+
+            A2D::VecCrossCore<T>(q, n0, d);
+            q += vars_per_node;
+
+#pragma unroll
+            for (int ifield = 0; ifield < 3; ifield++) {
+                d0[ifield] += Basis::lagrangeLobatto2DLight(inode, pt[0], pt[1]) * d[ifield];
+            }
+        }
+    }
+
+    template <class Basis, int vars_per_node, int num_nodes>
+    __HOST_DEVICE__ static void interpDirectorLightSens(const T scale, const T pt[], const T xpts[],
+                                                        const T d0_bar[], T res[]) {
+        T *q_bar = &res[offset];
+#pragma unroll
+        for (int inode = 0; inode < num_nodes; inode++) {
+            T n0[3], node_pt[2], d_bar[3];
+            Basis::getNodePoint(inode, node_pt);
+            Basis::ShellComputeNodeNormal(node_pt, xpts, n0);
+
+#pragma unroll
+            for (int ifield = 0; ifield < 3; ifield++) {
+                T jac = Basis::lagrangeLobatto2DLight(inode, pt[0], pt[1]);
+                d_bar[ifield] = scale * jac * d0_bar[ifield];
+            }
+
+            A2D::VecCrossCoreAdd<T>(n0, d_bar, q_bar);
+            q_bar += vars_per_node;
         }
     }
 

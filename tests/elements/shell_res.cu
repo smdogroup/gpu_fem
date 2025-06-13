@@ -7,6 +7,7 @@
 #include "assembler.h"
 #include "element/shell/physics/isotropic_shell.h"
 #include "element/shell/shell_elem_group.h"
+#include "element/shell/shell_elem_group_v2.h"
 
 template <bool is_nonlinear>
 void test_elemres_GPU() {
@@ -41,7 +42,8 @@ void test_elemres_GPU() {
     using Data = ShellIsotropicData<T, has_ref_axis>;
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
-    using ElemGroup = ShellElementGroup<T, Director, Basis, Physics>;
+    // using ElemGroup = ShellElementGroup<T, Director, Basis, Physics>;
+    using ElemGroup = ShellElementGroupV2<T, Director, Basis, Physics>;
     using Assembler = ElementAssembler<T, ElemGroup, VecType, DenseMat>;
 
     // printf("running!\n");
@@ -63,14 +65,16 @@ void test_elemres_GPU() {
 
     auto vars = h_vars.createDeviceVec();
     assembler.set_variables(vars);
+
+    // warmup kernel
+    assembler.apply_bcs(res);
     
 
     // time add residual method
     auto start = std::chrono::high_resolution_clock::now();
     assembler.add_residual(res);
     auto stop = std::chrono::high_resolution_clock::now();
-    auto duration =
-        std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+    std::chrono::duration<double> duration = stop - start;
 
     // compute total direc derivative of analytic residual
     auto h_res = res.createHostVec();
