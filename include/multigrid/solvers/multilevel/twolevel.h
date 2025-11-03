@@ -2,7 +2,7 @@
 
 #include "../solve_utils.h"
 
-template <class GRID>
+template <class GRID, bool is_nonlinear = false>
 class MultigridTwoLevelSolver : public BaseSolver {
 public:
     // generic multigrid cycle subpsace solver (can be V-cycle, W-cycle, etc.)
@@ -33,7 +33,12 @@ public:
 
             // presmooth and restrict
             fine_grid->smoothDefect(options.nsmooth, options.debug, options.nsmooth-1);
-            coarse_grid->restrict_defect(fine_grid->d_defect);
+            if constexpr (is_nonlinear) {
+                coarse_grid->restrict_loads(fine_grid->d_rhs);
+            } else {
+                coarse_grid->restrict_defect(fine_grid->d_defect);
+            }
+            
 
             // coarse grid solve
             coarse_solver->solve(coarse_grid->d_defect, coarse_grid->d_soln);

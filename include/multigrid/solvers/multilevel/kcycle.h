@@ -74,7 +74,7 @@ public:
         auto inner_subspaceOptions = SolverOptions(omega, n_smooth, nvcyc_inner);
         auto outer_subspaceOptions = SolverOptions(omega, n_smooth, nvcyc_outer);
         auto innerKrylovOptions = SolverOptions(omega, 0, nkcyc_inner);
-        bool symmetric = false;
+        // bool symmetric = false;
         auto outerKrylovOptions = SolverOptions(omega, 0, nkcyc_outer, false, atol, rtol, print_freq);
         outerKrylovOptions.print = print;
 

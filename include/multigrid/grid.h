@@ -216,6 +216,31 @@ class SingleGrid {
         cudaMemset(d_soln.getPtr(), 0.0, N * sizeof(T));
     }
 
+    void restrict_loads(DeviceVec<T> fine_loads_in) {
+        /* transfer total loads from a finer mesh to THIS coarse mesh and then compute defect */
+
+        // zero this coarse defect + restrict the finer defect to this coarse grid
+        cudaMemset(d_rhs.getPtr(), 0.0, N * sizeof(T));  // reset defect
+        restriction->restrict_vec(fine_loads_in, d_rhs);
+
+        // apply bcs to the defect again (cause it will accumulate on the boundary by backprop)
+        // apply bcs is on un-permuted data
+        d_rhs.permuteData(block_dim, d_perm);  // better way to do this later?
+        assembler.apply_bcs(d_rhs);
+        d_rhs.permuteData(block_dim, d_iperm);
+
+        // now compute new defect based on d_vars, defect = d_rhs - K * d_vars
+        d_rhs.copyValuesTo(d_defect); // so we can now compute defect
+        T a = -1.0, b = 1.0;  // -K * d_vars + 1.0 * d_defect => d_defect
+        CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
+                                      CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes, nnodes, kmat_nnzb,
+                                      &a, descrKmat, d_kmat_vals, d_kmat_rowp, d_kmat_cols,
+                                      block_dim, d_vars.getPtr(), &b, d_defect.getPtr()));
+
+        // reset soln (with bcs zero here, TBD others later)
+        cudaMemset(d_soln.getPtr(), 0.0, N * sizeof(T));
+    }
+
     void restrict_soln(DeviceVec<T> fine_vars_in) {
         /* transfer soln (du) from a finer mesh to THIS coarse mesh */
 
