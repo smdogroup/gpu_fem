@@ -5,9 +5,12 @@
 #include "mesh/vtk_writer.h"
 
 // shell imports
-#include "assembler.h"
-#include "element/shell/shell_elem_group.h"
+#include "element/shell/director/linear_rotation.h"
 #include "element/shell/physics/isotropic_shell.h"
+
+// lagrange MITC element
+#include "element/shell/basis/lagrange_basis.h"
+#include "element/shell/mitc_shell.h"
 
 /* command line args:
     [linear|nonlinear] [--iterative] [--nxe int]
@@ -30,9 +33,7 @@ void solve_linear(bool full_LU, int nxe) {
     constexpr bool is_nonlinear = false;
     using Data = ShellIsotropicData<T, has_ref_axis>;
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
-
-    using ElemGroup = ShellElementGroup<T, Director, Basis, Physics>;
-    using Assembler = ElementAssembler<T, ElemGroup, VecType, BsrMat>;
+    using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
 
     int nye = nxe;
     double Lx = 2.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 0.005, rho = 2500, ys = 350e6;
@@ -126,9 +127,7 @@ void solve_nonlinear(int nxe) {
     constexpr bool is_nonlinear = true;
     using Data = ShellIsotropicData<T, has_ref_axis>;
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
-
-    using ElemGroup = ShellElementGroup<T, Director, Basis, Physics>;
-    using Assembler = ElementAssembler<T, ElemGroup, VecType, BsrMat>;
+    using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
 
     int nye = nxe;
     double Lx = 2.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 0.005;
@@ -143,9 +142,10 @@ void solve_nonlinear(int nxe) {
     assembler.moveBsrDataToDevice();
 
     // get the loads
-    double Q = 1e6; // load magnitude
-    T *my_loads = getPlatePointLoad<T, Physics>(nxe, nye, Lx, Ly, Q);
-    // T *my_loads = getPlateLoads<T, Physics>(nxe, nye, Lx, Ly, Q);
+    // double Q = 1e6; // load magnitude
+    double Q = 1.0;
+    // T *my_loads = getPlatePointLoad<T, Physics>(nxe, nye, Lx, Ly, Q);
+    T *my_loads = getPlateLoads<T, Physics>(nxe, nye, Lx, Ly, Q);
     auto loads = assembler.createVarsVec(my_loads);
     assembler.apply_bcs(loads);
 
@@ -162,14 +162,15 @@ void solve_nonlinear(int nxe) {
         rel_tol = 1e-4;
     auto solve_func = CUSPARSE::direct_LU_solve<T>;
     std::string outputPrefix = "out/uCRM_";
-    // newton_solve<T, BsrMat<DeviceVec<T>>, DeviceVec<T>, Assembler>(
-    //     solve_func, kmat, loads, soln, assembler, res, rhs, vars,
-    //     num_load_factors, min_load_factor, max_load_factor, num_newton, abs_tol,
-    //     rel_tol, outputPrefix, print);
+    constexpr bool fast_assembly = true;
+    newton_solve<T, BsrMat<DeviceVec<T>>, DeviceVec<T>, Assembler, fast_assembly>(
+        solve_func, kmat, loads, soln, assembler, res, rhs, vars,
+        num_load_factors, min_load_factor, max_load_factor, num_newton, abs_tol,
+        rel_tol, outputPrefix, print);
 
-    // // print some of the data of host residual
-    // auto h_soln = soln.createHostVec();
-    // printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "plate_nl.vtk");
+    // print some of the data of host residual
+    auto h_soln = soln.createHostVec();
+    printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "plate_nl.vtk");
 }
 
 int main(int argc, char **argv) {
