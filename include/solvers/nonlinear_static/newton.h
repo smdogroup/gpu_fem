@@ -1,5 +1,7 @@
 #pragma once
 
+// a very basic, non-robust newton solver, for prelim testing
+
 #include <functional>
 #include <iostream>
 #include <sstream>
