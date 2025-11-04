@@ -105,8 +105,8 @@ int main(int argc, char **argv) {
   /* new nonlinear solver of Ali's on GPU */
 
   // build the inexact newton + outer continuation solver
-  // constexpr bool fast_assembly = true;
-  constexpr bool fast_assembly = false;
+  constexpr bool fast_assembly = true;
+  // constexpr bool fast_assembly = false;
   using Mat = BsrMat<DeviceVec<T>>;
   using Vec = DeviceVec<T>;
   using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, fast_assembly>;
