@@ -112,7 +112,7 @@ public:
 
             delete[] h_kmat_rowp;
             delete[] h_kmat_cols;
-        }
+        } // end of startup
 
         // call the kernel to copy out diag vals first
         int ndiag_vals = block_dim * block_dim * nnodes;
@@ -122,11 +122,76 @@ public:
         k_copyBlockDiagFromBsrMat<T>
             <<<grid, block>>>(nnodes, block_dim, d_kmat_diagp, d_kmat_vals, d_diag_LU_vals);
 
+        // ilu0 factoriation
+        if constexpr (startup) {
+            
+            // create M matrix object (for full numeric factorization)
+            cusparseCreateMatDescr(&descr_M);
+            cusparseSetMatIndexBase(descr_M, CUSPARSE_INDEX_BASE_ZERO);
+            cusparseSetMatType(descr_M, CUSPARSE_MATRIX_TYPE_GENERAL);
+            cusparseCreateBsrilu02Info(&info_M);
+
+            // init L matrix objects (for triangular solve)
+            cusparseCreateMatDescr(&descr_L);
+            cusparseSetMatIndexBase(descr_L, CUSPARSE_INDEX_BASE_ZERO);
+            cusparseSetMatType(descr_L, CUSPARSE_MATRIX_TYPE_GENERAL);
+            cusparseSetMatFillMode(descr_L, CUSPARSE_FILL_MODE_LOWER);
+            cusparseSetMatDiagType(descr_L, CUSPARSE_DIAG_TYPE_UNIT);
+            cusparseCreateBsrsv2Info(&info_L);
+
+            // init U matrix objects (for triangular solve)
+            cusparseCreateMatDescr(&descr_U);
+            cusparseSetMatIndexBase(descr_U, CUSPARSE_INDEX_BASE_ZERO);
+            cusparseSetMatType(descr_U, CUSPARSE_MATRIX_TYPE_GENERAL);
+            cusparseSetMatFillMode(descr_U, CUSPARSE_FILL_MODE_UPPER);
+            cusparseSetMatDiagType(descr_U, CUSPARSE_DIAG_TYPE_NON_UNIT);
+            cusparseCreateBsrsv2Info(&info_U);
+
+            // symbolic and numeric factorizations
+            CHECK_CUSPARSE(cusparseDbsrilu02_bufferSize(cusparseHandle, dir, nnodes, diag_inv_nnzb, descr_M, d_diag_LU_vals, d_diag_rowp, d_diag_cols,
+                                                        block_dim, info_M, &pBufferSize_M));
+            CHECK_CUSPARSE(cusparseDbsrsv2_bufferSize(cusparseHandle, dir, trans_L, nnodes, diag_inv_nnzb, descr_L, d_diag_LU_vals, d_diag_rowp,
+                                                    d_diag_cols, block_dim, info_L, &pBufferSize_L));
+            CHECK_CUSPARSE(cusparseDbsrsv2_bufferSize(cusparseHandle, dir, trans_U, nnodes, diag_inv_nnzb, descr_U, d_diag_LU_vals, d_diag_rowp,
+                                                    d_diag_cols, block_dim, info_U, &pBufferSize_U));
+            pBufferSize = std::max({pBufferSize_M, pBufferSize_L, pBufferSize_U});
+            // cudaMalloc((void **)&pBuffer, pBufferSize);
+            cudaMalloc(&pBuffer, pBufferSize);
+
+            // perform ILU symbolic factorization on L
+            CHECK_CUSPARSE(cusparseDbsrilu02_analysis(cusparseHandle, dir, nnodes, diag_inv_nnzb, descr_M, d_diag_LU_vals, d_diag_rowp, d_diag_cols,
+                                                    block_dim, info_M, policy_M, pBuffer));
+            status = cusparseXbsrilu02_zeroPivot(cusparseHandle, info_M, &structural_zero);
+            if (CUSPARSE_STATUS_ZERO_PIVOT == status) {
+                printf("A(%d,%d) is missing\n", structural_zero, structural_zero);
+            }
+
+            // analyze sparsity patern of L for efficient triangular solves
+            CHECK_CUSPARSE(cusparseDbsrsv2_analysis(cusparseHandle, dir, trans_L, nnodes, diag_inv_nnzb, descr_L, d_diag_LU_vals, d_diag_rowp,
+                                                    d_diag_cols, block_dim, info_L, policy_L, pBuffer));
+            // CHECK_CUDA(cudaDeviceSynchronize());
+
+            // analyze sparsity pattern of U for efficient triangular solves
+            CHECK_CUSPARSE(cusparseDbsrsv2_analysis(cusparseHandle, dir, trans_U, nnodes, diag_inv_nnzb, descr_U, d_diag_LU_vals, d_diag_rowp,
+                                                    d_diag_cols, block_dim, info_U, policy_U, pBuffer));
+            // CHECK_CUDA(cudaDeviceSynchronize());
+
+        }
+
+        // perform ILU numeric factorization (with M policy)
+        CHECK_CUSPARSE(cusparseDbsrilu02(cusparseHandle, dir, nnodes, diag_inv_nnzb, descr_M, d_diag_LU_vals, d_diag_rowp, d_diag_cols, block_dim,
+                                        info_M, policy_M, pBuffer));
+        // CHECK_CUDA(cudaDeviceSynchronize());
+        status = cusparseXbsrilu02_zeroPivot(cusparseHandle, info_M, &numerical_zero);
+        if (CUSPARSE_STATUS_ZERO_PIVOT == status) {
+            printf("block U(%d,%d) is not invertible\n", numerical_zero, numerical_zero);
+        }
+
         // then on each nodal block of D matrix, cusparse computes LU factorization
-        CUSPARSE::perform_ilu0_factorization(cusparseHandle, descr_L, descr_U, info_L, info_U,
-                                             &pBuffer, nnodes, diag_inv_nnzb, block_dim,
-                                             d_diag_LU_vals, d_diag_rowp, d_diag_cols, trans_L,
-                                             trans_U, policy_L, policy_U, dir);
+        // CUSPARSE::perform_ilu0_factorization(cusparseHandle, descr_L, descr_U, info_L, info_U,
+        //                                      &pBuffer, nnodes, diag_inv_nnzb, block_dim,
+        //                                      d_diag_LU_vals, d_diag_rowp, d_diag_cols, trans_L,
+        //                                      trans_U, policy_L, policy_U, dir);
 
         // now compute Dinv linear operator from LU triang solves (so don't need triang solves in
         // main solve), costs 6 triang solves of D^-1 = U^-1 L^-1
@@ -463,4 +528,13 @@ public:
     cusparseMatDescr_t descr_kmat_L = 0, descr_kmat_U = 0;
     bsrsv2Info_t info_kmat_L = 0, info_kmat_U = 0;
     void *kmat_pBuffer = 0;
+
+    // more objects for ilu0 factorization
+    cusparseMatDescr_t descr_M = 0;
+    bsrilu02Info_t info_M = 0;
+    int pBufferSize_M, pBufferSize_L, pBufferSize_U, pBufferSize;
+    int structural_zero, numerical_zero;
+    const cusparseSolvePolicy_t policy_M =
+        CUSPARSE_SOLVE_POLICY_USE_LEVEL;  // CUSPARSE_SOLVE_POLICY_NO_LEVEL;
+    cusparseStatus_t status;
 };

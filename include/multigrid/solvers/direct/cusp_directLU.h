@@ -74,12 +74,12 @@ public:
         // analyze sparsity patern of L for efficient triangular solves
         CHECK_CUSPARSE(cusparseDbsrsv2_analysis(handle, dir, trans_L, mb, nnzb, descr_L, d_vals, d_rowp,
                                                 d_cols, block_dim, info_L, policy_L, pBuffer));
-        CHECK_CUDA(cudaDeviceSynchronize());
+        // CHECK_CUDA(cudaDeviceSynchronize());
 
         // analyze sparsity pattern of U for efficient triangular solves
         CHECK_CUSPARSE(cusparseDbsrsv2_analysis(handle, dir, trans_U, mb, nnzb, descr_U, d_vals, d_rowp,
                                                 d_cols, block_dim, info_U, policy_U, pBuffer));
-        CHECK_CUDA(cudaDeviceSynchronize());
+        // CHECK_CUDA(cudaDeviceSynchronize());
 
         // first time, then factor the matrix
         factor_matrix();
@@ -111,7 +111,7 @@ public:
             printf("block U(%d,%d) is not invertible\n", numerical_zero, numerical_zero);
         }
 
-        CHECK_CUDA(cudaDeviceSynchronize());
+        // CHECK_CUDA(cudaDeviceSynchronize());
     }
 
     void solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) {
