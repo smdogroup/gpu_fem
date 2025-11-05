@@ -10,8 +10,10 @@ template <typename T, class GRID>
 class PCGSolver : public BaseSolver {
 public:
 
-    PCGSolver(GRID *grid_, BaseSolver *pc_, SolverOptions options, int ilevel_ = -1) : 
-        grid(grid_), pc(pc_), options(options), ilevel(ilevel_) {
+    PCGSolver(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_, 
+        GRID *grid_, BaseSolver *pc_, SolverOptions options, int ilevel_ = -1) : 
+        grid(grid_), pc(pc_), options(options), ilevel(ilevel_), cublasHandle(cublasHandle_),
+        cusparseHandle(cusparseHandle_) {
 
         // get matrix and init other temp data for PCG solve
         mat = grid->Kmat;
@@ -206,8 +208,8 @@ private:
     DeviceVec<T> d_resid_vec;
 
     // cusparse and cublas handles
-    cusparseHandle_t cusparseHandle;
-    cublasHandle_t cublasHandle;
+    cusparseHandle_t &cusparseHandle;
+    cublasHandle_t &cublasHandle;
 
     // description of K matrix
     cusparseMatDescr_t descrK;

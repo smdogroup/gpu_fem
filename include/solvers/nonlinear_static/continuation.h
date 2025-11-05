@@ -4,8 +4,9 @@
 template <typename T, class Vec, class Assembler, class InnerSolver>
 class NonlinearContinuationSolver {
 public:
-    NonlinearContinuationSolver(Assembler &assembler_, InnerSolver inner_solver_) {
-        inner_solver = inner_solver_, assembler = assembler_;
+    NonlinearContinuationSolver(cublasHandle_t &cublasHandle_, Assembler &assembler_, InnerSolver *inner_solver_) : 
+    cublasHandle(cublasHandle_) {
+        inner_solver = inner_solver_, assembler = assembler_; //, cublasHandle = cublasHandle_;
 
         prev_state = assembler.createVarsVec();
         state = assembler.createVarsVec();
@@ -15,9 +16,6 @@ public:
         n_predictor = 4; // num predictor states to hold
         u_hist = DeviceVec<T>(n_predictor * nvars).getPtr(); 
         lam_hist = new T[n_predictor];
-
-        // cuda / cublas handles
-        CHECK_CUBLAS(cublasCreate(&cublasHandle));
     }
 
     // need func to set new RHS sometimes?
@@ -49,7 +47,7 @@ public:
             bool final_step = lambda == 1.0;
             T inner_rtol = final_step ? 1e-8 : 1e-3;
             T inner_atol = 1e-8;
-            bool inner_conv = inner_solver.solve(lambda, inner_rtol, inner_atol, state);
+            bool inner_conv = inner_solver->solve(lambda, inner_rtol, inner_atol, state);
 
             // update load factors adaptively and reset state if needed
             if (!inner_conv) {
@@ -64,7 +62,7 @@ public:
                     break;
                 } else {
                     // otherwise adaptively update step size
-                    int inewton_steps = inner_solver.get_num_newton_steps();
+                    int inewton_steps = inner_solver->get_num_newton_steps();
                     T Rlam = sqrt(8.0 / inewton_steps); // increases adaptive step size to hit target of 8 newton steps per inner solve
                     Rlam = std::clamp(Rlam, 0.5, 2.0); // clips so not huge change suddenly
                     dlambda *= Rlam;
@@ -136,11 +134,11 @@ private:
     }
 
     Vec prev_state, state;
-    InnerSolver inner_solver;
+    InnerSolver *inner_solver;
     Assembler assembler;
     int nvars;
 
-    cublasHandle_t cublasHandle = NULL;
+    cublasHandle_t &cublasHandle;
 
     int i_hist, n_hist, n_predictor;
     T *u_hist;

@@ -87,6 +87,14 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     using TwoLevelSolve = MultigridTwoLevelSolver<GRID, is_nonlinear>;
     using KMG = MultilevelKcycleSolver<GRID, CoarseSolver, TwoLevelSolve, KrylovSolve>;
 
+    // create cublas and cusparse handles (single one each)
+    // -----------------------------------------------------
+    cublasHandle_t cublasHandle = NULL;
+    CHECK_CUBLAS(cublasCreate(&cublasHandle));
+    cusparseHandle_t cusparseHandle = NULL;
+    CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+
+
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start0 = std::chrono::high_resolution_clock::now();
     
@@ -160,15 +168,15 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         // build smoother and prolongations..
         T omega = 1.5; // for GS-SOR
         // T omega = 0.7; // under-relaxed for better NL conv?
-        auto smoother = new Smoother(assembler, kmat, h_color_rowp, omega);
+        auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omega);
         auto prolongation = new Prolongation(assembler);
-        auto grid = GRID(assembler, prolongation, smoother, kmat, loads);
+        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
         
         if (is_kcycle) {
             kmg->grids.push_back(grid);
         } else {
             mg->grids.push_back(grid);
-            if (full_LU) mg->coarse_solver = new CoarseSolver(assembler, kmat);
+            if (full_LU) mg->coarse_solver = new CoarseSolver(cublasHandle, cusparseHandle, assembler, kmat);
         }
     }
 
@@ -200,7 +208,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
 
     if (is_kcycle) {
         int n_krylov = 500;
-        kmg->init_outer_solver(nsmooth, ninnercyc, n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
+        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
     }
 
     std::vector<GRID>& grids = kmg->grids;
@@ -259,13 +267,13 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG>;
     using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
-    auto inner_solver = INK(fine_assembler, fine_kmat, fine_loads, kmg);
-    auto nl_solver = NL(fine_assembler, inner_solver);
+    INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg);
+    NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver);
 
     // now try calling it
     T lambda0 = 0.2;
     // T lambda0 = 0.05;
-    nl_solver.solve(fine_vars, lambda0);
+    nl_solver->solve(fine_vars, lambda0);
     T nl_max_disp = get_max_disp(fine_vars);
 
     // print some of the data of host residual
@@ -313,6 +321,11 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     bsr_data.AMD_reordering();
     bsr_data.compute_full_LU_pattern(fillin, print);
     assembler.moveBsrDataToDevice();
+
+    cublasHandle_t cublasHandle = NULL;
+    CHECK_CUBLAS(cublasCreate(&cublasHandle));
+    cusparseHandle_t cusparseHandle = NULL;
+    CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
 
     // get plate loads
     double uniform_force = pressure * 1.0 * 1.0;
@@ -379,14 +392,14 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, LinearSolver>;
     using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
-    LinearSolver *solver = new LinearSolver(assembler, kmat);
-    auto inner_solver = INK(assembler, kmat, loads, solver);
-    auto nl_solver = NL(assembler, inner_solver);
+    LinearSolver *solver = new LinearSolver(cublasHandle, cusparseHandle, assembler, kmat);
+    INK *inner_solver = new INK(cublasHandle, assembler, kmat, loads, solver);
+    NL *nl_solver = new NL(cublasHandle, assembler, inner_solver);
 
     // now try calling it
     T lambda0 = 0.2;
     // T lambda0 = 0.05;
-    nl_solver.solve(vars, lambda0);
+    nl_solver->solve(vars, lambda0);
     T nl_max_disp = get_max_disp(vars);
 
     // print some of the data of host residual

@@ -27,8 +27,9 @@ class SingleGrid {
     SingleGrid() = default;
 
     SingleGrid(Assembler &assembler_, Prolongation *prolongation_, Smoother *smoother_, 
-        BsrMat<DeviceVec<T>> Kmat_, DeviceVec<T> d_rhs_) : assembler(assembler_), prolongation(prolongation_), smoother(smoother_),
-        Kmat(Kmat_), d_rhs(d_rhs_) {
+        BsrMat<DeviceVec<T>> Kmat_, DeviceVec<T> d_rhs_, cublasHandle_t &cublasHandle_, 
+        cusparseHandle_t &cusparseHandle_) : assembler(assembler_), prolongation(prolongation_), smoother(smoother_),
+        Kmat(Kmat_), d_rhs(d_rhs_), cublasHandle(cublasHandle_), cusparseHandle(cusparseHandle_) {
         
         N = assembler.get_num_vars();
         block_dim = 6;
@@ -62,9 +63,9 @@ class SingleGrid {
 
     template <bool startup = true>
     void initCuda() {
-        // init handles
-        CHECK_CUBLAS(cublasCreate(&cublasHandle));
-        CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+        // init handles (copied now from outside the class to not fracture cublas memory as much)
+        // CHECK_CUBLAS(cublasCreate(&cublasHandle));
+        // CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
 
         // init some util vecs
         d_defect = DeviceVec<T>(N);
@@ -275,8 +276,8 @@ class SingleGrid {
     int *d_perm, *d_iperm;
     DeviceVec<T> d_rhs, d_defect, d_soln, d_temp_vec, d_vars;
     BsrMat<DeviceVec<T>> Kmat;
-    cublasHandle_t cublasHandle = NULL;
-    cusparseHandle_t cusparseHandle = NULL;
+    cublasHandle_t &cublasHandle;
+    cusparseHandle_t &cusparseHandle;
 
   private:
     T *d_temp, *d_temp2, *d_resid;

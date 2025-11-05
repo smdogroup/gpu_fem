@@ -8,10 +8,12 @@ class MulticolorGSSmoother_V1 {
 public:
     using T = typename Assembler::T;
 
-    MulticolorGSSmoother_V1() = default;
+    // MulticolorGSSmoother_V1() = default;
 
-    MulticolorGSSmoother_V1(Assembler &assembler_, BsrMat<DeviceVec<T>> Kmat_, 
-        HostVec<int> h_color_rowp_, T omega_ = 1.0, bool symmetric_ = false) {
+    MulticolorGSSmoother_V1(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_, 
+        Assembler &assembler_, BsrMat<DeviceVec<T>> Kmat_, 
+        HostVec<int> h_color_rowp_, T omega_ = 1.0, bool symmetric_ = false) : 
+        cublasHandle(cublasHandle_), cusparseHandle(cusparseHandle_) {
 
         Kmat = Kmat_;
         h_color_rowp = h_color_rowp_;
@@ -42,9 +44,9 @@ public:
     }
 
     void initCuda() {
-        // init handles
-        CHECK_CUBLAS(cublasCreate(&cublasHandle));
-        CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+        // // init handles
+        // CHECK_CUBLAS(cublasCreate(&cublasHandle));
+        // CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
 
         // init some util vecs
         d_temp_vec = DeviceVec<T>(N);
@@ -169,19 +171,19 @@ public:
             // analyze sparsity patern of L for efficient triangular solves
             CHECK_CUSPARSE(cusparseDbsrsv2_analysis(cusparseHandle, dir, trans_L, nnodes, diag_inv_nnzb, descr_L, d_diag_LU_vals, d_diag_rowp,
                                                     d_diag_cols, block_dim, info_L, policy_L, pBuffer));
-            // CHECK_CUDA(cudaDeviceSynchronize());
+            CHECK_CUDA(cudaDeviceSynchronize());
 
             // analyze sparsity pattern of U for efficient triangular solves
             CHECK_CUSPARSE(cusparseDbsrsv2_analysis(cusparseHandle, dir, trans_U, nnodes, diag_inv_nnzb, descr_U, d_diag_LU_vals, d_diag_rowp,
                                                     d_diag_cols, block_dim, info_U, policy_U, pBuffer));
-            // CHECK_CUDA(cudaDeviceSynchronize());
+            CHECK_CUDA(cudaDeviceSynchronize());
 
         }
 
         // perform ILU numeric factorization (with M policy)
         CHECK_CUSPARSE(cusparseDbsrilu02(cusparseHandle, dir, nnodes, diag_inv_nnzb, descr_M, d_diag_LU_vals, d_diag_rowp, d_diag_cols, block_dim,
                                         info_M, policy_M, pBuffer));
-        // CHECK_CUDA(cudaDeviceSynchronize());
+        CHECK_CUDA(cudaDeviceSynchronize());
         status = cusparseXbsrilu02_zeroPivot(cusparseHandle, info_M, &numerical_zero);
         if (CUSPARSE_STATUS_ZERO_PIVOT == status) {
             printf("block U(%d,%d) is not invertible\n", numerical_zero, numerical_zero);
@@ -487,8 +489,8 @@ public:
     bool symmetric = false;
 
     // private data
-    cublasHandle_t cublasHandle = NULL;
-    cusparseHandle_t cusparseHandle = NULL;
+    cublasHandle_t &cublasHandle;
+    cusparseHandle_t &cusparseHandle;
     cusparseMatDescr_t descrKmat = 0, descrDinvMat = 0;
     size_t bufferSizeMV;
     void *buffer_MV = nullptr;

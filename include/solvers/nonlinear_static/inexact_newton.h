@@ -14,10 +14,8 @@ template <typename T, class Mat, class Vec, class Assembler, class Solver>
 class InexactNewtonSolver {
 public:
 
-    InexactNewtonSolver() = default; // default constructor
-
-    InexactNewtonSolver(Assembler &assembler_, Mat &kmat_, Vec &loads_, Solver *linear_solver_) {
-        assembler = assembler_, kmat = kmat_, loads = loads_, linear_solver = linear_solver_;
+    InexactNewtonSolver(cublasHandle_t &cublasHandle_, Assembler &assembler_, Mat &kmat_, Vec &loads_, Solver *linear_solver_) : 
+        assembler(assembler_), kmat(kmat_), loads(loads_), linear_solver(linear_solver_), cublasHandle(cublasHandle_) {
 
         // EW exponent
         omega = 0.5 * (1.0 + sqrt(5)); // golden ratio
@@ -33,9 +31,6 @@ public:
         temp = assembler.createVarsVec();
         vars = assembler.createVarsVec();
         update = assembler.createVarsVec();
-
-        // cuda / cublas handles
-        CHECK_CUBLAS(cublasCreate(&cublasHandle));
     }
 
     bool solve(T lambda, T rtol, T atol, Vec &state) {
@@ -225,7 +220,7 @@ private:
     // helper states
     T omega;
     int nvars, block_dim, *d_perm, *d_iperm;
-    cublasHandle_t cublasHandle = NULL;
+    cublasHandle_t &cublasHandle;
 
     int line_search_iters = 0;
     int inewton_iters = 0;

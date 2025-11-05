@@ -107,14 +107,19 @@ int main(int argc, char **argv) {
   using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, LinearSolver>;
   using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
-  LinearSolver *solver = new LinearSolver(assembler, kmat);
-  auto inner_solver = INK(assembler, kmat, d_loads, solver);
-  auto nl_solver = NL(assembler, inner_solver);
+  cublasHandle_t cublasHandle = NULL;
+  CHECK_CUBLAS(cublasCreate(&cublasHandle));
+  cusparseHandle_t cusparseHandle = NULL;
+  CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+
+  LinearSolver *solver = new LinearSolver(cublasHandle, cusparseHandle, assembler, kmat);
+  INK *inner_solver = new INK(cublasHandle, assembler, kmat, d_loads, solver);
+  NL *nl_solver = new NL(cublasHandle, assembler, inner_solver);
 
   // now try calling it
   T lambda0 = 0.2;
   // T lambda0 = 0.05;
-  nl_solver.solve(vars, lambda0);
+  nl_solver->solve(vars, lambda0);
 
   // permute vars to output order (from solve order?)
   auto d_bsr_data = assembler.getBsrData();

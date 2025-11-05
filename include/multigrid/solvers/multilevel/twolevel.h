@@ -8,7 +8,8 @@ public:
     // generic multigrid cycle subpsace solver (can be V-cycle, W-cycle, etc.)
     // only considers two levels, but can be nested with other solvers
 
-    MultigridTwoLevelSolver(GRID *fine_grid, GRID *coarse_grid, BaseSolver *coarse_solver_, SolverOptions options) : 
+    MultigridTwoLevelSolver(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_, 
+        GRID *fine_grid, GRID *coarse_grid, BaseSolver *coarse_solver_, SolverOptions options) : 
         fine_grid(fine_grid), coarse_grid(coarse_grid), coarse_solver(coarse_solver_), options(options) { }
 
     // nothing
