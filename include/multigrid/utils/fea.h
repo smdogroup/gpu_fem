@@ -287,7 +287,7 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
             T th = atan2(y, x);
             T nodal_load = load_mag * sin(5.0 * PI * r) * cos(4.0 * th);
 
-            my_loads[Phys::vars_per_node * inode + 2] = nodal_load * 10000.0 * dx * dy;
+            my_loads[Phys::vars_per_node * inode + 2] = nodal_load; // * dx * dy;
         }
     }
     return my_loads;

@@ -1,5 +1,5 @@
-// GPU implementation of Ali Gray's inexact Newton solver (with Eisenstat-Walker method from CPU TACS)
-// implemented by Sean Engelstad, Nov 4th 2025
+// GPU implementation of Ali Gray's inexact Newton solver (with Eisenstat-Walker method from CPU
+// TACS) implemented by Sean Engelstad, Nov 4th 2025
 
 #include <functional>
 #include <iostream>
@@ -7,18 +7,21 @@
 #include <string>
 
 #include "mesh/vtk_writer.h"
-#include "solvers/linear_static/_utils.h"
 #include "newton.h"
+#include "solvers/linear_static/_utils.h"
 
 template <typename T, class Mat, class Vec, class Assembler, class Solver>
 class InexactNewtonSolver {
-public:
-
-    InexactNewtonSolver(cublasHandle_t &cublasHandle_, Assembler &assembler_, Mat &kmat_, Vec &loads_, Solver *linear_solver_) : 
-        assembler(assembler_), kmat(kmat_), loads(loads_), linear_solver(linear_solver_), cublasHandle(cublasHandle_) {
-
+   public:
+    InexactNewtonSolver(cublasHandle_t &cublasHandle_, Assembler &assembler_, Mat &kmat_,
+                        Vec &loads_, Solver *linear_solver_)
+        : assembler(assembler_),
+          kmat(kmat_),
+          loads(loads_),
+          linear_solver(linear_solver_),
+          cublasHandle(cublasHandle_) {
         // EW exponent
-        omega = 0.5 * (1.0 + sqrt(5)); // golden ratio
+        omega = 0.5 * (1.0 + sqrt(5));  // golden ratio
         nvars = assembler.get_num_vars();
         auto bsr_data = kmat.getBsrData();
         block_dim = bsr_data.block_dim;
@@ -47,20 +50,20 @@ public:
 
         bool converged = false;
         // printf("inner solver with lambda = %.4e\n", lambda);
-        
 
         // for (int inewton = 0; inewton < 5; inewton++) {
         for (int inewton = 0; inewton < 40; inewton++) {
-
             inewton_iters = inewton + 1;
 
             // res and convergence check
             T res_nrm = computeResidual(lambda);
-            printf("\t inewton %d => resid %.8e, #line-srch %d\n", inewton, res_nrm, line_search_iters);
+            printf("\t inewton %d => resid %.8e, #line-srch %d\n", inewton, res_nrm,
+                   line_search_iters);
             converged = checkConvergence(res_nrm, rtol, atol, init_res_nrm);
-            if (converged) break; // return success
+            if (converged) break;  // return success
 
-            // update jacobian, TODO : could add Ali's delay redo pc here, not doing that in my work though
+            // update jacobian, TODO : could add Ali's delay redo pc here, not doing that in my work
+            // though
             updateJacobian();
 
             // Eisenstat-Walker method to update linear solve atol (to prevent over-solving)
@@ -69,13 +72,14 @@ public:
             T zeta_star = std::pow(prev_res_nrm, omega);
             // Ali has slight mistake here I think where he changes the atol not rtol in lin solve
             linSolveRtol = zeta_star < 0.1 ? zeta : max(zeta, zeta_star);
-            linSolveRtol = std::clamp(linSolveRtol, 1e-12, 1e-2); // clip the rtol
+            linSolveRtol = std::clamp(linSolveRtol, 1e-12, 1e-2);  // clip the rtol
             linear_solver->set_rel_tol(linSolveRtol);
 
             // do an iterative linear solve here
             // ---------------------------------
             update.zeroValues();
-            res.permuteData(block_dim, d_iperm); // iperm and perm cause solvers operate in solver ordering
+            res.permuteData(block_dim,
+                            d_iperm);  // iperm and perm cause solvers operate in solver ordering
             linear_solver->solve(res, update);
             update.permuteData(block_dim, d_perm);
 
@@ -88,14 +92,15 @@ public:
             T alpha = energyLineSearch(lambda);
             // T alpha = 1.0; // try no line search for a second..
             a = alpha;
-            CHECK_CUBLAS(cublasDaxpy(cublasHandle, nvars, &a, update.getPtr(), 1, vars.getPtr(), 1));
-            assembler.set_variables(vars);       
+            CHECK_CUBLAS(
+                cublasDaxpy(cublasHandle, nvars, &a, update.getPtr(), 1, vars.getPtr(), 1));
+            assembler.set_variables(vars);
 
-            T update_nrm;
-            CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, update.getPtr(), 1, &update_nrm));
-            T vars_nrm;
-            CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, vars.getPtr(), 1, &vars_nrm));
-            printf("\t\tupdate nrm %.8e, vars nrm %.8e\n", update_nrm, vars_nrm);
+            // T update_nrm;
+            // CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, update.getPtr(), 1, &update_nrm));
+            // T vars_nrm;
+            // CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, vars.getPtr(), 1, &vars_nrm));
+            // printf("\t\tupdate nrm %.8e, vars nrm %.8e\n", update_nrm, vars_nrm);
         }
 
         // now copy solution out
@@ -123,7 +128,8 @@ public:
     }
 
     void updateJacobian() {
-        // TODO : could add Ali's delay preconditioner here, not gonna do that yet, GPU assembly very fast
+        // TODO : could add Ali's delay preconditioner here, not gonna do that yet, GPU assembly
+        // very fast
         assembler.add_jacobian_fast(kmat);
         assembler.apply_bcs(kmat);
 
@@ -132,7 +138,7 @@ public:
     }
 
     int get_num_newton_steps() {
-        return inewton_iters; // return how many newton steps used by solver
+        return inewton_iters;  // return how many newton steps used by solver
     }
 
     T _dotProduct(Vec &vec1, Vec &vec2) {
@@ -148,22 +154,22 @@ public:
         // store u0 in temp for easy reset of state
         vars.copyValuesTo(temp);
         T alpha_old = 0.0;
-        T f0 = _energyObjective(alpha_old, _lambda); // f0 is merit function at alpha = 0
+        T f0 = _energyObjective(alpha_old, _lambda);  // f0 is merit function at alpha = 0
 
         // line search prelim settings
-        T MU = 1e-4; // expected decrase of line search
-        T alpha = 1.0; // starting value of alpha
+        T MU = 1e-4;    // expected decrase of line search
+        T alpha = 1.0;  // starting value of alpha
         T fold = f0;
         T alpha_new = alpha;
 
         for (int isearch = 0; isearch < 25; isearch++) {
-
-            line_search_iters = isearch + 1; // record the num line search iterations done
+            line_search_iters = isearch + 1;  // record the num line search iterations done
 
             T fnew = _energyObjective(alpha, _lambda);
             T fred = abs(fnew / fold);
 
-            // printf("\t\tline search %d => alpha=%.4e, fold=%.4e, fnew=%.4e\n", isearch, alpha, fold, fnew);
+            // printf("\t\tline search %d => alpha=%.4e, fold=%.4e, fnew=%.4e\n", isearch, alpha,
+            // fold, fnew);
 
             // can exit if already decreased
             if (fred <= (1.0 - MU * min(alpha, 1.0))) return alpha;
@@ -178,7 +184,7 @@ public:
             }
             // clip mag of alpha increase to 0.5 max
             T dalpha = alpha_new - alpha;
-            if (isearch > 0 &&  abs(dalpha) > 0.5) {
+            if (isearch > 0 && abs(dalpha) > 0.5) {
                 T sign_step = dalpha > 0.0 ? 1.0 : -1.0;
                 alpha_new = alpha + sign_step * 0.5;
             }
@@ -204,19 +210,18 @@ public:
         T objective = _dotProduct(update, res);
 
         // reset state to original
-        temp.copyValuesTo(vars); // temp is holding u0 (see start of line search call)
+        temp.copyValuesTo(vars);  // temp is holding u0 (see start of line search call)
         assembler.set_variables(temp);
         return objective;
     }
 
-
-private:
+   private:
     // main / most important states
     Assembler assembler;
     Mat kmat;
     Vec loads, res, soln, temp, vars, update;
     Solver *linear_solver;
-    
+
     // helper states
     T omega;
     int nvars, block_dim, *d_perm, *d_iperm;
@@ -224,5 +229,4 @@ private:
 
     int line_search_iters = 0;
     int inewton_iters = 0;
-
-};  
+};

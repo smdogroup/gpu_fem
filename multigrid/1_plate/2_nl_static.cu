@@ -157,7 +157,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
 
         // assemble the kmat
         auto start0 = std::chrono::high_resolution_clock::now();
-        assembler.add_jacobian(res, kmat);
+        // assembler.add_jacobian(res, kmat);
+        assembler.add_jacobian_fast(kmat);
         // assembler.apply_bcs(res);
         assembler.apply_bcs(kmat);
         CHECK_CUDA(cudaDeviceSynchronize());
@@ -228,7 +229,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     fine_assembler.apply_bcs(fine_loads);
 
     // ---------------------------------------------------
-    // 1) demo restrict fine to coarse soln
+    // 0) demo restrict fine to coarse soln
 
     // // first solve on fine grid (with initial linear defect)
     // kmg->solve();
@@ -384,8 +385,6 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     // ======================
 
     // build the inexact newton + outer continuation solver
-    constexpr bool fast_assembly = true;
-    // constexpr bool fast_assembly = false;
     using Mat = BsrMat<DeviceVec<T>>;
     using Vec = DeviceVec<T>;
     using LinearSolver = CusparseMGDirectLU<T, Assembler>;
@@ -435,10 +434,10 @@ void gatekeeper_method(bool is_multigrid, int nxe, double SR, int nsmooth, int n
 int main(int argc, char **argv) {
     // input ----------
     bool is_multigrid = true;
-    int nxe = 64; // default value (three grids)
+    int nxe = 256; // default value (three grids)
     double SR = 100.0; // default
     int n_vcycles = 50;
-    double pressure = 1.0e6;
+    double pressure = 3.0e6;
 
     int nsmooth = 2; // typically faster right now
     int ninnercyc = 2; // inner V-cycles to precond K-cycle

@@ -8,13 +8,15 @@
 
 template <typename T, class GRID>
 class PCGSolver : public BaseSolver {
-public:
-
-    PCGSolver(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_, 
-        GRID *grid_, BaseSolver *pc_, SolverOptions options, int ilevel_ = -1) : 
-        grid(grid_), pc(pc_), options(options), ilevel(ilevel_), cublasHandle(cublasHandle_),
-        cusparseHandle(cusparseHandle_) {
-
+   public:
+    PCGSolver(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_, GRID *grid_,
+              BaseSolver *pc_, SolverOptions options, int ilevel_ = -1)
+        : grid(grid_),
+          pc(pc_),
+          options(options),
+          ilevel(ilevel_),
+          cublasHandle(cublasHandle_),
+          cusparseHandle(cusparseHandle_) {
         // get matrix and init other temp data for PCG solve
         mat = grid->Kmat;
         soln = grid->d_soln;
@@ -31,12 +33,13 @@ public:
 
         cublasHandle = grid->cublasHandle;
         cusparseHandle = grid->cusparseHandle;
-        
+
         N = soln.getSize();
         d_rhs = rhs.getPtr();
-        d_x = DeviceVec<T>(N).getPtr(); // needs to be separate vec than soln in grid
+        d_x = DeviceVec<T>(N).getPtr();  // needs to be separate vec than soln in grid
 
-        // printf("PCG Krylov solver made with options ncycl %d and print %d, with problem size %d\n", options.ncycles, options.print, N);
+        // printf("PCG Krylov solver made with options ncycl %d and print %d, with problem size
+        // %d\n", options.ncycles, options.print, N);
 
         // description of the K matrix
         descrK = 0;
@@ -57,27 +60,25 @@ public:
     // nothing
     void update_after_assembly(DeviceVec<T> &vars) {}
 
-    void set_abs_tol(T atol) {
-        options.atol = atol;
-    }
-    void set_rel_tol(T rtol) {
-        options.rtol = rtol;
-    }
+    void set_abs_tol(T atol) { options.atol = atol; }
+    void set_rel_tol(T rtol) { options.rtol = rtol; }
 
     void solve(DeviceVec<T> rhs_in, DeviceVec<T> soln_out, bool check_conv = false) {
         // assumes rhs_in and soln_out are in permutation for solve (not natural order)
-        // performs full K-cycle with left-precond flexible PCG (note this shows true resid even though it is left precond, unlike GMRES)!
+        // performs full K-cycle with left-precond flexible PCG (note this shows true resid even
+        // though it is left precond, unlike GMRES)!
 
-        // copy rhs from method into internal rhs and set soln to zero cause this is like a defect solve
+        // copy rhs from method into internal rhs and set soln to zero cause this is like a defect
+        // solve
         cudaMemcpy(d_rhs, rhs_in.getPtr(), N * sizeof(T), cudaMemcpyDeviceToDevice);
-        cudaMemset(d_x, 0.0, N * sizeof(T)); // re-zero the solution
+        cudaMemset(d_x, 0.0, N * sizeof(T));  // re-zero the solution
 
         // compute r_0 = b - Ax
         CHECK_CUDA(cudaMemcpy(d_resid, d_rhs, N * sizeof(T), cudaMemcpyDeviceToDevice));
         T a = -1.0, b = 1.0;
         CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
-                                        CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb, &a, descrK,
-                                        d_vals, d_rowp, d_cols, block_dim, d_x, &b, d_resid));
+                                      CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb, &a, descrK,
+                                      d_vals, d_rowp, d_cols, block_dim, d_x, &b, d_resid));
 
         // compute |r_0|
         T init_resid_norm;
@@ -87,19 +88,18 @@ public:
             if (ilevel != 0) printf("\tL%d-PCG init_resid %.2e\n", ilevel, init_resid_norm);
         }
 
-        T rho_prev, rho; // coefficients that we need to remember
+        T rho_prev, rho;  // coefficients that we need to remember
         bool converged = false;
 
         // inner loop
         for (int j = 0; j < options.ncycles; j++) {
-
             /* inner 1) solve Mz = r for z (precond) */
             // ----------------------------------------
             pc->solve(d_resid_vec, d_z_vec);
 
             /* 2) compute dot products, and p vec */
             // -------------------------------------
-            
+
             // if fletcher-reeves method
             CHECK_CUBLAS(cublasDdot(cublasHandle, N, d_resid, 1, d_z, 1, &rho));
 
@@ -126,8 +126,8 @@ public:
             // w = A * p
             a = 1.0, b = 0.0;
             CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
-                                            CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb, &a,
-                                            descrK, d_vals, d_rowp, d_cols, block_dim, d_p, &b, d_w));
+                                          CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb, &a,
+                                          descrK, d_vals, d_rowp, d_cols, block_dim, d_p, &b, d_w));
 
             /* 4) update x and r using dot products */
             // ---------------------------------------
@@ -151,15 +151,19 @@ public:
             if (check_conv || options.print) {
                 T resid_norm;
                 CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_resid, 1, &resid_norm));
-                
+
                 if (j % options.print_freq == 0) {
                     if (ilevel == 0) printf("L0-PCG [%d] = %.8e\n", j, resid_norm);
                     if (ilevel != 0) printf("\tL%d-PCG [%d] = %.8e\n", ilevel, j, resid_norm);
                 }
-                    
-                if (check_conv && abs(resid_norm) < (options.atol + init_resid_norm * options.rtol)) {
+
+                if (check_conv &&
+                    abs(resid_norm) < (options.atol + init_resid_norm * options.rtol)) {
                     converged = true;
-                    printf("\nL0-PCG converged in %d iterations to %.9e resid\n", j + 1, resid_norm);
+                    printf("init resid %.8e, rtol %.8e, atol %.8e, resid_norm %.8e\n",
+                           init_resid_norm, options.rtol, options.atol, resid_norm);
+                    printf("\nL0-PCG converged in %d iterations to %.9e resid\n", j + 1,
+                           resid_norm);
                     break;
                 }
             }
@@ -171,16 +175,17 @@ public:
             T resid_norm1;
             CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_resid, 1, &resid_norm1));
             a = -1.0, b = 1.0;
-            CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
-                                            CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb, &a, descrK,
-                                            d_vals, d_rowp, d_cols, block_dim, d_x, &b, d_resid));
+            CHECK_CUSPARSE(cusparseDbsrmv(
+                cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb,
+                nnzb, &a, descrK, d_vals, d_rowp, d_cols, block_dim, d_x, &b, d_resid));
 
             T resid_norm;
             CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_resid, 1, &resid_norm));
 
             T x_nrm;
             CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_x, 1, &x_nrm));
-            printf("debug: L%d resid_nrm1 %.8e and v2 %.8e, with d_x norm %.2e\n", ilevel, resid_norm1, resid_norm, x_nrm);
+            printf("debug: L%d resid_nrm1 %.8e and v2 %.8e, with d_x norm %.2e\n", ilevel,
+                   resid_norm1, resid_norm, x_nrm);
         }
 
         // copy internal soln to external solution of the solve method
@@ -197,7 +202,7 @@ public:
     SolverOptions options;
     int ilevel;
 
-private:
+   private:
     // main matrix and linear system data
     BsrMat<DeviceVec<T>> mat;
     DeviceVec<T> soln, rhs;
