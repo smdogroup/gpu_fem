@@ -25,8 +25,9 @@ nu = 0.3  # poisson's ratio
 kcorr = 5.0 / 6.0  # shear correction factor
 ys = 350e6  # yield stress, Pa
 min_thickness = 0.002
-max_thickness = 0.20
-thickness = 0.02
+max_thickness = 2.0
+# thickness = 0.02
+thickness = 1.0
 
 # Loop over components, creating stiffness and element object for each
 num_components = struct_mesh.getNumComponents()
@@ -76,13 +77,15 @@ ordering = TACS.TACS_AMD_ORDER
 mat = tacs.createSchurMat(ordering)
 
 nz_time = time.time() - start_nz
+
+ILUk = 0
 # ILUk = 3
-ILUk = 7
+# ILUk = 7
 # ILUk = 1e6
 pc = TACS.Pc(mat, lev_fill=ILUk) #, lev_fill=ILUk) # for ILU(3), default is full LU or ILU(1000) if not set
-# subspace = 100
+subspace = 100
 end_nz = time.time()
-subspace = 300
+# subspace = 300
 restarts = 0
 rtol = 1e-10
 atol = 1e-6

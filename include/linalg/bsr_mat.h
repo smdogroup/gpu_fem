@@ -87,6 +87,23 @@ class BsrMat {
 #endif  // USE_GPU
     }
 
+    __HOST__ void add_diag_to_each_block(T eta = 1e-4) {
+        /* add diag nugget to each 6x6 (or whatever size) block nodal matrix, helps stabilize ILU factors in CuSparse */
+        int nnzb = bsr_data.nnzb;
+        int block_dim = bsr_data.block_dim;
+        T *vals = values.getPtr();
+
+#ifdef USE_GPU
+        dim3 block(32);
+        int nblocks = (nnzb + block.x - 1) / block.x;
+        dim3 grid(nblocks);
+
+        // adds eta * I to the diag where eta > 0 is a scalar
+        add_nodal_block_diag_kernel<T><<<grid, block>>>(nnzb, block_dim, vals, eta);
+        CHECK_CUDA(cudaDeviceSynchronize());
+#endif  // USE_GPU
+    }
+
     __HOST__ void mult_diag_nugget(T eta) {
         /* apply bcs to the matrix values (rows + cols) */
         const index_t *rowPtr = bsr_data.rowp, *colPtr = bsr_data.cols;

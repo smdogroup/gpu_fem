@@ -73,13 +73,11 @@ void solve_linear(MPI_Comm &comm, bool full_LU = true) {
   bool print = true;
   if (full_LU) {
     bsr_data.AMD_reordering();
-    // bsr_data.qorder_reordering(1.0);
     bsr_data.compute_full_LU_pattern(fillin, print);
   } else {
-    // bsr_data.RCM_reordering();
-    // bsr_data.AMD_reordering();
-    bsr_data.qorder_reordering(0.5, 1); // qordering not working well for some reason..
-    bsr_data.compute_ILUk_pattern(5, fillin); // 10, 20 (for BiCGStab)
+    bsr_data.RCM_reordering();
+    bsr_data.qorder_reordering(0.5); // qordering not working well for some reason..
+    bsr_data.compute_ILUk_pattern(0, fillin); // 10, 20 (for BiCGStab)
     // bsr_data.compute_full_LU_pattern(fillin, print);
   }
   assembler.moveBsrDataToDevice();
@@ -108,6 +106,10 @@ void solve_linear(MPI_Comm &comm, bool full_LU = true) {
   assembler.add_jacobian_fast(kmat);
   assembler.apply_bcs(res);
   assembler.apply_bcs(kmat);
+
+  
+  // // now add diag nugget to stabilize ILU factor
+  // kmat.add_diag_to_each_block(1e-3); // 1e-3 relative to trace abs value
 
   // solve the linear system
   if (full_LU) {

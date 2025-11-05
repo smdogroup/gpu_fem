@@ -4,6 +4,7 @@
 #include "chrono"
 #include "linalg/_linalg.h"
 #include "solvers/_solvers.h"
+#include "multigrid/solvers/direct/cusp_directLU.h"
 #include "mesh/TACSMeshLoader.h"
 
 // shell imports
@@ -97,22 +98,17 @@ int main(int argc, char **argv) {
   // auto rhs = assembler.createVarsVec();
   auto vars = assembler.createVarsVec();
 
-  // auto solve_func = CUSPARSE::direct_LU_solve<T>; // NEED wrapper function for extra input, one line
-  auto solve_func_iter = [](auto &A, auto &b, auto &x, int, int, bool can_print, bool permute_inout) {
-      CUSPARSE::direct_LU_solve(A, b, x, can_print, permute_inout);
-  };
-
   /* new nonlinear solver of Ali's on GPU */
 
   // build the inexact newton + outer continuation solver
-  constexpr bool fast_assembly = true;
-  // constexpr bool fast_assembly = false;
   using Mat = BsrMat<DeviceVec<T>>;
   using Vec = DeviceVec<T>;
-  using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, fast_assembly>;
+  using LinearSolver = CusparseMGDirectLU<T, Assembler>;
+  using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, LinearSolver>;
   using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
-  auto inner_solver = INK(assembler, kmat, d_loads, solve_func_iter);
+  LinearSolver *solver = new LinearSolver(assembler, kmat);
+  auto inner_solver = INK(assembler, kmat, d_loads, solver);
   auto nl_solver = NL(assembler, inner_solver);
 
   // now try calling it

@@ -10,22 +10,23 @@
 #include "solvers/linear_static/_utils.h"
 #include "newton.h"
 
-template <typename T, class Mat, class Vec, class Assembler, class Solver>
+template <class Mat, class Vec>
+using IterativeLinearSolveFunc = void (*)(Mat &, Vec &, Vec &, int, int, bool, bool);
+// args are: matrix, rhs, soln, rtol, atol, can_print, permute_inout
+
+
+template <typename T, class Mat, class Vec, class Assembler, bool fast_assembly = true>
 class InexactNewtonSolver {
 public:
 
     InexactNewtonSolver() = default; // default constructor
 
-    InexactNewtonSolver(Assembler &assembler_, Mat &kmat_, Vec &loads_, Solver *linear_solver_) {
-        assembler = assembler_, kmat = kmat_, loads = loads_, linear_solver = linear_solver_;
+    InexactNewtonSolver(Assembler &assembler_, Mat &kmat_, Vec &loads_, IterativeLinearSolveFunc<Mat, Vec> linear_solve_func_) {
+        assembler = assembler_, kmat = kmat_, loads = loads_, linear_solve_func = linear_solve_func_;
 
         // EW exponent
         omega = 0.5 * (1.0 + sqrt(5)); // golden ratio
         nvars = assembler.get_num_vars();
-        auto bsr_data = kmat.getBsrData();
-        block_dim = bsr_data.block_dim;
-        d_iperm = bsr_data.iperm;
-        d_perm = bsr_data.perm;
 
         // make res, soln, temp vecs
         res = assembler.createVarsVec();
@@ -75,14 +76,12 @@ public:
             // Ali has slight mistake here I think where he changes the atol not rtol in lin solve
             linSolveRtol = zeta_star < 0.1 ? zeta : max(zeta, zeta_star);
             linSolveRtol = std::clamp(linSolveRtol, 1e-12, 1e-2); // clip the rtol
-            linear_solver->set_rel_tol(linSolveRtol);
 
             // do an iterative linear solve here
             // ---------------------------------
             update.zeroValues();
-            res.permuteData(block_dim, d_iperm); // iperm and perm cause solvers operate in solver ordering
-            linear_solver->solve(res, update);
-            update.permuteData(block_dim, d_perm);
+            bool print = false, permute_inout = true; // no permute inout so still in solving order
+            this->linear_solve_func(kmat, res, update, linSolveRtol, linSolveAtol, print, permute_inout);
 
             // flip sign of update since rhs should have really been -res
             T a = -1.0;
@@ -96,11 +95,11 @@ public:
             CHECK_CUBLAS(cublasDaxpy(cublasHandle, nvars, &a, update.getPtr(), 1, vars.getPtr(), 1));
             assembler.set_variables(vars);       
 
-            T update_nrm;
-            CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, update.getPtr(), 1, &update_nrm));
-            T vars_nrm;
-            CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, vars.getPtr(), 1, &vars_nrm));
-            printf("\t\tupdate nrm %.8e, vars nrm %.8e\n", update_nrm, vars_nrm);
+            // T update_nrm;
+            // CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, update.getPtr(), 1, &update_nrm));
+            // T vars_nrm;
+            // CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, vars.getPtr(), 1, &vars_nrm));
+            // printf("\t\tupdate nrm %.8e, vars nrm %.8e\n", update_nrm, vars_nrm);
         }
 
         // now copy solution out
@@ -111,10 +110,20 @@ public:
 
     T computeResidual(T &lambda) {
         /* compute r(u) = fint(u) - lambda * loads */
-        assembler.add_residual_fast(res);
+        if constexpr (fast_assembly) {
+            assembler.add_residual_fast(res);
+        } else {
+            assembler.add_jacobian(res, kmat);
+            assembler.apply_bcs(kmat);
+        }
         T a = -lambda;
         CHECK_CUBLAS(cublasDaxpy(cublasHandle, nvars, &a, loads.getPtr(), 1, res.getPtr(), 1));
         assembler.apply_bcs(res);
+        
+
+        // flip sign of residual?, so then r = f - r(u)?
+        // a = -1.0;
+        // CHECK_CUBLAS(cublasDscal(cublasHandle, nvars, &a, res.getPtr(), 1));
 
         // then compute residual norm also
         T res_norm;
@@ -129,11 +138,13 @@ public:
 
     void updateJacobian() {
         // TODO : could add Ali's delay preconditioner here, not gonna do that yet, GPU assembly very fast
-        assembler.add_jacobian_fast(kmat);
+        if constexpr (fast_assembly) {
+            assembler.add_jacobian_fast(kmat);
+        } else {
+            // assembler.apply_bcs(kmat);
+            // return; // already assembled jacobian with 
+        }
         assembler.apply_bcs(kmat);
-
-        // then update solver if need be (such as ILU factoring or multigrid coarse grid assemblies)
-        linear_solver->update_after_assembly(vars);
     }
 
     int get_num_newton_steps() {
@@ -220,11 +231,11 @@ private:
     Assembler assembler;
     Mat kmat;
     Vec loads, res, soln, temp, vars, update;
-    Solver *linear_solver;
+    IterativeLinearSolveFunc<Mat, Vec> linear_solve_func;
     
     // helper states
     T omega;
-    int nvars, block_dim, *d_perm, *d_iperm;
+    int nvars;
     cublasHandle_t cublasHandle = NULL;
 
     int line_search_iters = 0;

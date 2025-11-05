@@ -4,10 +4,6 @@
 #include "mesh/TACSMeshLoader.h"
 #include "mesh/vtk_writer.h"
 
-// new nonlinear solvers
-#include "solvers/nonlinear_static/inexact_newton.h"
-#include "solvers/nonlinear_static/continuation.h"
-
 // shell imports
 #include "assembler.h"
 #include "element/shell/director/linear_rotation.h"
@@ -54,21 +50,8 @@ void to_lowercase(char *str) {
     }
 }
 
-template <typename T>
-T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
-    T *h_soln = d_soln.createHostVec().getPtr();
-    int nvars = d_soln.getSize();
-    int nnodes = nvars / 6;
-    T my_max = 0.0;
-    for (int inode = 0; inode < nnodes; inode++) {
-        T val = abs(h_soln[6 * inode + idof]);
-        if (val > my_max) my_max = val;
-    }
-    return my_max;
-}
-
 template <typename T, class Assembler>
-void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string cycle_type, T pressure = 5.0e7) {
+void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string cycle_type, T load_mag = 5.0e7) {
     // geometric multigrid method here..
     // need to make a number of grids..
     using Basis = typename Assembler::Basis;
@@ -81,10 +64,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
 
     // for K-cycles
-    // constexpr bool is_nonlinear = true;
-    constexpr bool is_nonlinear = false;
     using KrylovSolve = PCGSolver<T, GRID>;
-    using TwoLevelSolve = MultigridTwoLevelSolver<GRID, is_nonlinear>;
+    using TwoLevelSolve = MultigridTwoLevelSolver<GRID>;
     using KMG = MultilevelKcycleSolver<GRID, CoarseSolver, TwoLevelSolve, KrylovSolve>;
 
     CHECK_CUDA(cudaDeviceSynchronize());
@@ -107,11 +88,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         nxe_min = c_nxe;
     }
 
-    if (cycle_type != "K") {
-        printf("only does Kcycle mg in this example rn (just haven't adapted generally)\n");
-        return;
-    }
-
     // make each grid
     for (int c_nxe = nxe; c_nxe >= nxe_min; c_nxe /= 2) {
         // make the assembler
@@ -119,10 +95,12 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
         int nxe_per_comp = c_nxe / 4, nye_per_comp = c_nye/4; // for now (should have 25 grids)
         auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
-        double uniform_force = pressure * 1.0 * 1.0;
-        double nodal_loads = uniform_force / (c_nxe - 1) / (c_nye - 1);
-        nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-        T *my_loads = getPlateLoads<T, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
+        double Q = load_mag / (c_nxe+1) / (c_nye + 1);
+        Q *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
+        // T *my_loads = getPlatePointLoad<T, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+        T *my_loads = getPlateLoads<T, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+        // double in_plane_frac = 0.3;
+        // T *my_loads = getPlateNonlinearLoads<T, Physics>(c_nxe, c_nye, Lx, Ly, Q, in_plane_frac);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -189,8 +167,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     auto start1 = std::chrono::high_resolution_clock::now();
 
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
-    // bool print = true;
-    bool print = false;
+    bool print = true;
+    // bool print = false;
     T omega2 = 1.5;
     T atol = 1e-6, rtol = 1e-6;
     bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
@@ -204,20 +182,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     }
 
     std::vector<GRID>& grids = kmg->grids;
-
-    // fine grid states
-    auto& fine_assembler = grids[0].assembler;
-    auto fine_soln = fine_assembler.createVarsVec();
-    auto fine_res = fine_assembler.createVarsVec();
-    auto fine_rhs = fine_assembler.createVarsVec();
-    auto fine_loads = fine_assembler.createVarsVec();
-    auto fine_vars = fine_assembler.createVarsVec();
-    auto& fine_kmat = grids[0].Kmat;
-
-    // get fine loads from fine grid init rhs
-    bool perm_out = true;
-    grids[0].getDefect(fine_loads, perm_out);
-    fine_assembler.apply_bcs(fine_loads);
 
     // ---------------------------------------------------
     // 1) demo restrict fine to coarse soln
@@ -236,64 +200,132 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // auto h_soln1 = kmg->grids[1].d_soln.createPermuteVec(6, d_perm1).createHostVec();
     // printToVTK<Assembler,HostVec<T>>(kmg->grids[1].assembler, h_soln1, "out/plate_lin1.vtk");
 
-    // 1) do a linear solve here
-    // -------------------------------------------------------
-
-    kmg->solve();
-    int *d_perm = kmg->grids[0].d_perm;
-    auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_mg_lin.vtk");
-    T lin_max_disp = get_max_disp(kmg->grids[0].d_soln);
 
 
     // -----------------------------------------------------------
     // 2) actually try Newton-mg solve here (this is just V1, later versions may use FMG cycle so less extra work needs to be done on fine grids)
     //     i.e. you can do most of hte nonlinear solves to get in basin of attraction on coarser grids first.. (then nonlinear fine grid at end only, or some FMG cycle)
 
-    // new nonlinear solver
-    // ======================
+    int num_load_factors = 50, num_newton = 10;
+    T min_load_factor = 1.0 / (num_load_factors - 1), max_load_factor = 1.0, abs_tol = 1e-8,
+        rel_tol = 1e-8;
+    auto solve_func = CUSPARSE::direct_LU_solve<T>;
+    std::string outputPrefix = "out/plate_nl_mg_";
+    // bool write_vtk = true;
+    bool write_vtk = false; // make sure this is not on if timing it
 
-    // build the inexact newton + outer continuation solver
-    using Mat = BsrMat<DeviceVec<T>>;
-    using Vec = DeviceVec<T>;
-    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG>;
-    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
+    // fine grid states
+    auto& fine_assembler = grids[0].assembler;
+    auto fine_soln = fine_assembler.createVarsVec();
+    auto fine_res = fine_assembler.createVarsVec();
+    auto fine_rhs = fine_assembler.createVarsVec();
+    auto fine_loads = fine_assembler.createVarsVec();
+    auto fine_vars = fine_assembler.createVarsVec();
+    auto& fine_kmat = grids[0].Kmat;
 
-    auto inner_solver = INK(fine_assembler, fine_kmat, fine_loads, kmg);
-    auto nl_solver = NL(fine_assembler, inner_solver);
+    // get fine loads from fine grid init rhs
+    bool perm_out = true;
+    grids[0].getDefect(fine_loads, perm_out);
 
-    // now try calling it
-    T lambda0 = 0.2;
-    // T lambda0 = 0.05;
-    nl_solver.solve(fine_vars, lambda0);
-    T nl_max_disp = get_max_disp(fine_vars);
+    for (int iload = 0; iload < num_load_factors; iload++) {
+        T load_factor =
+            min_load_factor + (max_load_factor - min_load_factor) * iload / (num_load_factors - 1);
 
-    // print some of the data of host residual
-    auto h_vars = fine_vars.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(fine_assembler, h_vars, "out/plate_mg_nl.vtk");
+        T init_res = 1e50;
+        if (print) {
+            printf("load step %d / %d : load factor %.4e\n", iload, num_load_factors, load_factor);
+        }
 
-    // important to know reduction for how NL regime we are
-    T ratio = nl_max_disp / lin_max_disp;
-    printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
+        for (int inewton = 0; inewton < num_newton; inewton++) {
+
+            // update the fine grid stiffness matrix and residual
+            fine_assembler.set_variables(fine_vars);
+            fine_assembler.add_jacobian_fast(fine_kmat);
+            fine_assembler.add_residual_fast(fine_res);
+            fine_assembler.apply_bcs(fine_res);
+            fine_assembler.apply_bcs(fine_kmat);
+
+            // pass current states to coarse grids and update their assemblies
+            grids[0].setStateVars(fine_vars); // set vars into finest grid (so we can pass this down to coarser grids)
+            kmg->update_coarse_grid_states(); // restrict state variables to coarse grids
+            kmg->update_coarse_grid_jacobians(); // compute coarse grid NL stiffness matrices
+            kmg->update_after_assembly(); // updates any dependent matrices like Dinv
+
+            // if (iload == 1 && inewton == 1) {
+            //     // break;
+            //     // show the solution on the coarse grid
+            //     int *d_perm = kmg->grids[0].d_perm;
+            //     auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
+            //     printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_nl_debug0.vtk");
+
+            //     int *d_perm1 = kmg->grids[1].d_perm;
+            //     auto h_soln1 = kmg->grids[1].d_soln.createPermuteVec(6, d_perm1).createHostVec();
+            //     printToVTK<Assembler,HostVec<T>>(kmg->grids[1].assembler, h_soln1, "out/plate_nl_debug1.vtk");
+            // }
+
+            // compute the new RHS for load factor schemes (on fine grid)
+            fine_rhs.zeroValues();
+            CUBLAS::axpy(load_factor, fine_loads, fine_rhs);
+            CUBLAS::axpy(-1.0, fine_res, fine_rhs);
+            fine_assembler.apply_bcs(fine_rhs);
+            double rhs_norm = CUBLAS::get_vec_norm(fine_rhs);
+            grids[0].setDefect(fine_rhs, perm_out);
+            grids[0].zeroSolution();
+
+            // solve the linear system using GMG solver for soln = u - u0 (and update variables)
+            kmg->solve();
+            grids[0].getSolution(fine_soln, perm_out);
+            double soln_norm = CUBLAS::get_vec_norm(fine_soln);
+            CUBLAS::axpy(1.0, fine_soln, fine_vars);
+
+            // compute the residual (much cheaper computation on GPU)
+            fine_assembler.set_variables(fine_vars);
+            fine_assembler.add_residual_fast(fine_res);
+            fine_assembler.apply_bcs(fine_res);
+            fine_rhs.zeroValues();
+            CUBLAS::axpy(load_factor, fine_loads, fine_rhs);
+            CUBLAS::axpy(-1.0, fine_res, fine_rhs);
+            fine_assembler.apply_bcs(fine_rhs);
+            double full_resid_norm = CUBLAS::get_vec_norm(fine_rhs);
+
+            // check + report convergence metrics
+            if (inewton == 0) {
+                init_res = full_resid_norm;
+            }
+            // TODO : need residual check
+            if (print) {
+                printf("\tnewton step %d, rhs = %.4e, soln = %.4e\n", inewton, full_resid_norm,
+                       soln_norm);
+            }
+
+            if (abs(full_resid_norm) < (abs_tol + rel_tol * init_res)) {
+                break;
+            }
+        }  // end of newton loop
+
+        // write out solution
+        if (write_vtk) {
+            auto h_vars = fine_vars.createHostVec();
+            std::stringstream outputFile;
+            outputFile << outputPrefix << iload << ".vtk";
+            printToVTK<Assembler, HostVec<T>>(fine_assembler, h_vars, outputFile.str());
+        }
+
+    }  // end of load factor loop
 
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start1;
-    int ndof = fine_assembler.get_num_vars();
+    int ndof = cycle_type == "K" ? kmg->grids[0].N : mg->grids[0].N;
     double total = startup_time.count() + solve_time.count();
-    printf("nonlinear Newton-Raphson KMG solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), solve_time.count(), total);
-
-    // free and cleanup
-    // --------------------
-
-    // nl_solver.free();
-    kmg->free();
-    fine_assembler.free();
+    double mem_MB = is_kcycle ? kmg->get_memory_usage_mb() : mg->get_memory_usage_mb();
+    printf("nonlinear Newton-Raphson GMG solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
+    if (write_vtk) {
+        printf("\n--------------------\nWARNING : VTK writes could affect timing!\n--------------------\n");
+    }
 }
 
 template <typename T, class Assembler>
-void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
-
-    /* direct NL solve used to check that how NL the problem is and how */
+void solve_direct(int nxe, double SR, T load_mag = 5.0e7) {
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
@@ -302,7 +334,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     auto start0 = std::chrono::high_resolution_clock::now();
 
     int nye = nxe;
-    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 0.005, rho = 2500, ys = 350e6;
     int nxe_per_comp = nxe / 4, nye_per_comp = nye/4; // for now (should have 25 grids)
     auto assembler = createPlateAssembler<Assembler>(nxe, nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
 
@@ -315,11 +347,10 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     assembler.moveBsrDataToDevice();
 
     // get plate loads
-    double uniform_force = pressure * 1.0 * 1.0;
-    double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
-    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
+    double Q = load_mag / (nxe + 1) / (nxe + 1);
+    Q *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
     // T *my_loads = getPlatePointLoad<T, Physics>(c_nxe, c_nye, Lx, Ly, Q);
-    T *my_loads = getPlateLoads<T, Physics>(nxe, nye, Lx, Ly, nodal_loads);
+    T *my_loads = getPlateLoads<T, Physics>(nxe, nye, Lx, Ly, Q);
 
     // double Q = 1.0e5;
     // T *my_loads = getPlatePointLoad<T, Physics>(nxe, nye, Lx, Ly, Q);
@@ -341,73 +372,33 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     std::chrono::duration<double> startup_time = start1 - start0;
 
     // newton solve
-    // int num_load_factors = 50, num_newton = 10;
-    // T min_load_factor = 1.0 / (num_load_factors - 1), max_load_factor = 1.0, abs_tol = 1e-8,
-    //     rel_tol = 1e-8;
-    // auto solve_func = CUSPARSE::direct_LU_solve<T>;
-    // std::string outputPrefix = "out/plate_";
-    // // bool write_vtk = true;
-    // bool write_vtk = false;
-    // old slow nonlinear solve (less robust)
-    // const bool fast_assembly = true;
-    // // const bool fast_assembly = false;
-    // newton_solve<T, BsrMat<DeviceVec<T>>, DeviceVec<T>, Assembler, fast_assembly>(
-    //     solve_func, kmat, loads, soln, assembler, res, rhs, vars,
-    //     num_load_factors, min_load_factor, max_load_factor, num_newton, abs_tol,
-    //     rel_tol, outputPrefix, print, write_vtk);
+    int num_load_factors = 50, num_newton = 10;
+    T min_load_factor = 1.0 / (num_load_factors - 1), max_load_factor = 1.0, abs_tol = 1e-8,
+        rel_tol = 1e-8;
+    auto solve_func = CUSPARSE::direct_LU_solve<T>;
+    std::string outputPrefix = "out/plate_";
+    // bool write_vtk = true;
+    bool write_vtk = false;
 
-    // compare to pure linear solve (to see how nonlinear)
-    // ==================================
-
-    assembler.add_jacobian_fast(kmat);
-    assembler.apply_bcs(kmat);
-    CUSPARSE::direct_LU_solve(kmat, loads, soln);
-    T lin_max_disp = get_max_disp(soln);
-    auto h_soln = soln.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/plate_lin.vtk");
-    
-
-    // new nonlinear solver
-    // ======================
-
-    // build the inexact newton + outer continuation solver
-    constexpr bool fast_assembly = true;
-    // constexpr bool fast_assembly = false;
-    using Mat = BsrMat<DeviceVec<T>>;
-    using Vec = DeviceVec<T>;
-    using LinearSolver = CusparseMGDirectLU<T, Assembler>;
-    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, LinearSolver>;
-    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
-
-    LinearSolver *solver = new LinearSolver(assembler, kmat);
-    auto inner_solver = INK(assembler, kmat, loads, solver);
-    auto nl_solver = NL(assembler, inner_solver);
-
-    // now try calling it
-    T lambda0 = 0.2;
-    // T lambda0 = 0.05;
-    nl_solver.solve(vars, lambda0);
-    T nl_max_disp = get_max_disp(vars);
+    const bool fast_assembly = true;
+    // const bool fast_assembly = false;
+    newton_solve<T, BsrMat<DeviceVec<T>>, DeviceVec<T>, Assembler, fast_assembly>(
+        solve_func, kmat, loads, soln, assembler, res, rhs, vars,
+        num_load_factors, min_load_factor, max_load_factor, num_newton, abs_tol,
+        rel_tol, outputPrefix, print, write_vtk);
 
     // print some of the data of host residual
-    auto h_vars = vars.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/plate_nl.vtk");
-
-    // important to know reduction for how NL regime we are
-    T ratio = nl_max_disp / lin_max_disp;
-    printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
+    auto h_soln = soln.createHostVec();
+    printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/plate_nl.vtk");
 
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start1;
     int ndof = assembler.get_num_vars();
     double total = startup_time.count() + solve_time.count();
     printf("nonlinear Newton-Raphson Direct-LU solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), solve_time.count(), total);
-
-    // free and cleanup
-    // --------------------
-    
-    // nl_solver.free();
-    assembler.free();
+    if (write_vtk) {
+        printf("\n--------------------\nWARNING : VTK writes could affect timing!\n--------------------\n");
+    }
 }
 
 template <typename T, class Assembler>
@@ -422,15 +413,15 @@ void gatekeeper_method(bool is_multigrid, int nxe, double SR, int nsmooth, int n
 int main(int argc, char **argv) {
     // input ----------
     bool is_multigrid = true;
-    int nxe = 64; // default value (three grids)
+    int nxe = 128; // default value (three grids)
     double SR = 100.0; // default
     int n_vcycles = 50;
-    double pressure = 1.0e6;
+    double load_mag = 5.0e7;
 
     int nsmooth = 2; // typically faster right now
     int ninnercyc = 2; // inner V-cycles to precond K-cycle
     std::string cycle_type = "K"; // "V", "F", "W", "K"
-    std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+    std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -455,9 +446,9 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --SR\n";
                 return 1;
             }
-        } else if (strcmp(arg, "--pressure") == 0) {
+        } else if (strcmp(arg, "--load") == 0) {
             if (i + 1 < argc) {
-                pressure = std::atof(argv[++i]);
+                load_mag = std::atof(argv[++i]);
             } else {
                 std::cerr << "Missing value for --load\n";
                 return 1;
@@ -510,15 +501,15 @@ int main(int argc, char **argv) {
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 2>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, pressure);
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, load_mag);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, pressure);
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, load_mag);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, pressure);
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, load_mag);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }

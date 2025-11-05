@@ -145,6 +145,7 @@ template <typename T>
 __GLOBAL__ void add_mat_diag_kernel(int nnodes, int block_dim,
                                   const int *rowp, const int *cols, T *vals, T eta)
 {
+    /* this method just adds diag to overall matrix diag, next one (which is better adds to each 6x6 nodal block) */
     int this_thread_block_row = blockIdx.x * blockDim.x + threadIdx.x;
     int irow = this_thread_block_row;
     int block_dim2 = block_dim * block_dim;
@@ -155,7 +156,6 @@ __GLOBAL__ void add_mat_diag_kernel(int nnodes, int block_dim,
     {
         for (int jp = rowp[irow]; jp < rowp[irow + 1]; jp++)
         {
-            // TODO : could make this faster by pre-computing nonzero diag spots in vals, with int pointer
             int b_col = cols[jp]; // block col
             for (int inz = 0; inz < block_dim2; inz++)
             {
@@ -165,6 +165,30 @@ __GLOBAL__ void add_mat_diag_kernel(int nnodes, int block_dim,
                 vals[block_dim2 * jp + inz] += addition;
             }
         }
+    }
+}
+
+template <typename T>
+__GLOBAL__ void add_nodal_block_diag_kernel(int nnzb, int block_dim, T *vals, T eta)
+{
+    /* add diag nugget to each 6x6 (or whatever size) block nodal matrix (including nodal couplings off diag, important esp on bndry) */
+
+    int bind = blockIdx.x * blockDim.x + threadIdx.x; // 6x6 nodal block index
+    if (bind >= nnzb) return;
+    
+    int block_dim2 = block_dim * block_dim;
+    
+    // compute the trace abs (to help our diag nugget scale resp. to matrix)
+    T trace_abs = 0.0;
+    for (int i = 0; i < block_dim; i++) {
+        int ind = block_dim2 * bind + block_dim * i + i;
+        trace_abs += abs(vals[ind]);
+    }
+
+    // then add diag nugget scaled resp. to trace abs
+    for (int i = 0; i < block_dim; i++) {
+        int ind = block_dim2 * bind + block_dim * i + i;
+        vals[ind] += eta * trace_abs;
     }
 }
 

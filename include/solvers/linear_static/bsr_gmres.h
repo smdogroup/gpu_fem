@@ -18,7 +18,7 @@ template <typename T, bool right = true, bool modifiedGS = true, bool use_precon
 void GMRES_solve(BsrMat<DeviceVec<T>> &mat, DeviceVec<T> &rhs, DeviceVec<T> &soln,
                  int _n_iter = 100, int max_iter = 500, T abs_tol = 1e-8, T rel_tol = 1e-8,
                  bool can_print = false, bool debug = false, int print_freq = 10,
-                 bool permute_inout = true) {
+                 bool permute_inout = true, T eta = 0.0) {
     /* GMRES iterative solve using a BsrMat on GPU with CUDA / CuSparse
         only supports T = double right now, may add float at some point (but float won't
        converge as deeply the residual, only about 1e-7) */
@@ -71,6 +71,24 @@ void GMRES_solve(BsrMat<DeviceVec<T>> &mat, DeviceVec<T> &rhs, DeviceVec<T> &sol
     // ILU0 equiv to ILU(k) if sparsity pattern has ILU(k)
     CHECK_CUDA(
         cudaMemcpy(d_vals_ILU0, d_vals, mat.get_nnz() * sizeof(T), cudaMemcpyDeviceToDevice));
+
+    // try adding a diagonal nugget here..
+    // T eta = 1e-4;
+    // T eta = 1e-6;
+    // T eta = 1e-8;
+    if (eta != 0.0) {
+        printf("diag frac eta %.8e in use\n", eta);
+    #ifdef USE_GPU
+        dim3 block(32);
+        int nblocks = (nnzb + block.x - 1) / block.x;
+        dim3 grid(nblocks);
+
+        // adds eta * I to the diag where eta > 0 is a scalar
+        add_nodal_block_diag_kernel<T><<<grid, block>>>(nnzb, block_dim, d_vals_ILU0, eta);
+        CHECK_CUDA(cudaDeviceSynchronize());
+    #endif  // USE_GPU
+    }
+    
 
     // just add diagonal to precond only?, temp debug
     // int ndiag = mb * block_dim;

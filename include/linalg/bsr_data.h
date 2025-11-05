@@ -586,36 +586,39 @@ class BsrData {
         if (_new_perm) delete[] _new_perm;
     }
 
-    __HOST__ void qorder_reordering(double p_factor, int rcm_iters = 5, bool print = true) {
+    __HOST__ void qorder_reordering(double p_factor, bool print = true) {
         /*  qordering combines RCM reordering to reduce bandwidth with random reordering
                 to reduce chain lengths in ILU factorization for more stable ILU decomp numerically
                 this also should improve GMRES convergence
             #rows for random = 1/pfactor * bandwidth so lower pfactor is more random
         */
 
-        // keep orig rowp, cols
-        int *orig_rowp = new int[nnodes + 1];
-        int *orig_cols = new int[nnzb];
-        for (int i = 0; i < nnodes + 1; i++) {
-            orig_rowp[i] = rowp[i];
-        }
-        for (int i = 0; i < nnzb; i++) {
-            orig_cols[i] = cols[i];
-        }
+        // keep orig rowp, cols (when I was doing RCM reordering too)
+        // int *orig_rowp = new int[nnodes + 1];
+        // int *orig_cols = new int[nnzb];
+        // for (int i = 0; i < nnodes + 1; i++) {
+        //     orig_rowp[i] = rowp[i];
+        // }
+        // for (int i = 0; i < nnzb; i++) {
+        //     orig_cols[i] = cols[i];
+        // }
 
         // first we perform RCM reordering to lower bandwidth
-        int bandwidth_0 = getBandWidth(nnodes, nnzb, rowp, cols);
-        RCM_reordering(rcm_iters);
-        compute_nofill_pattern();
-        int bandwidth_1 = getBandWidth(nnodes, nnzb, rowp, cols);
-        if (print)
-            printf("prelim RCM reordering reduces bandwidth from %d to %d\n", bandwidth_0,
-                   bandwidth_1);
+        // int bandwidth_0 = getBandWidth(nnodes, nnzb, rowp, cols);
+        // RCM_reordering(rcm_iters);
+        // compute_nofill_pattern();
+        // int bandwidth_1 = getBandWidth(nnodes, nnzb, rowp, cols);
+        // if (print)
+        //     printf("prelim RCM reordering reduces bandwidth from %d to %d\n", bandwidth_0,
+        //            bandwidth_1);
+        // int bandwidth_1 = getBandWidth(nnodes, nnzb, rowp, cols);
+
+        int bandwidth = getBandWidth(nnodes, nnzb, rowp, cols);
 
         // then we perform random reordering to reduce chain lengths
-        int prune_width = (int)(1.0 / p_factor * bandwidth_1);
+        int prune_width = (int)(1.0 / p_factor * bandwidth);
         if (print)
-            printf("qordering with init bandwidth %d and prune width %d\n", bandwidth_1,
+            printf("qordering with init bandwidth %d and prune width %d\n", bandwidth,
                    prune_width);
         int num_prunes = (nnodes + prune_width - 1) / prune_width;
         std::random_device rd;  // random number generator
@@ -630,10 +633,10 @@ class BsrData {
 
         // also reset the rowp, cols to original (was changed after reordering computation to check
         // bandwidth)
-        if (rowp) delete[] rowp;
-        if (cols) delete[] cols;
-        rowp = orig_rowp;
-        cols = orig_cols;
+        // if (rowp) delete[] rowp;
+        // if (cols) delete[] cols;
+        // rowp = orig_rowp;
+        // cols = orig_cols;
 
         // update final permutation and iperm (deep copy)
         for (int i = 0; i < nnodes; i++) {
@@ -644,6 +647,31 @@ class BsrData {
             // iperm[i] = q_perm[i];
             // perm[q_perm[i]] = i;
         }
+    }
+
+    __HOST__ void random_reordering() {
+        /*  fully random reordering
+        */
+        std::random_device rd;  // random number generator
+        std::mt19937 g(rd());
+        // since iperm is used for sparsity change now, qperm modifies that
+        std::vector<int> q_perm(perm, perm + nnodes);
+        std::shuffle(q_perm.begin(), q_perm.begin() + nnodes, g);
+
+        // update final permutation and iperm (deep copy)
+        for (int i = 0; i < nnodes; i++) {
+            perm[i] = q_perm[i];
+            iperm[q_perm[i]] = i;
+
+            // try swapping perm, iperm
+            // iperm[i] = q_perm[i];
+            // perm[q_perm[i]] = i;
+        }
+
+        // printf("perm: ");
+        // printVec<int>(nnodes, perm);
+        // printf("iperm: ");
+        // printVec<int>(nnodes, iperm);
     }
 
     __HOST__ void _compute_symbolic_maps_for_gpu() {

@@ -31,10 +31,13 @@ public:
         factor_matrix();
     }
 
-    void update_after_assembly() {
+    void update_after_assembly(DeviceVec<T> &vars) {
+        // do a new LU factorization
         factor_matrix();
     }
 
+    // does nothing cause it's a directLU solve
+    void set_rel_tol(T rtol) {}
     void set_abs_tol(T atol) {}
 
     void factor_matrix() {

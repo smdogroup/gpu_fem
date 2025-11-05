@@ -6,8 +6,9 @@ public:
     BaseSolver() = default;
     virtual ~BaseSolver() = default; // must have virtual destructor?
     virtual void solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) = 0;
-    virtual void update_after_assembly() = 0;
+    virtual void update_after_assembly(DeviceVec<T> &vars) = 0;
     virtual void set_abs_tol(T atol) = 0;
+    virtual void set_rel_tol(T atol) = 0;
     // virtual void free();
 };
 

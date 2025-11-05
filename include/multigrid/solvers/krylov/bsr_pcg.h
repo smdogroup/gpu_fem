@@ -53,10 +53,13 @@ public:
     }
 
     // nothing
-    void update_after_assembly() {}
+    void update_after_assembly(DeviceVec<T> &vars) {}
 
     void set_abs_tol(T atol) {
         options.atol = atol;
+    }
+    void set_rel_tol(T rtol) {
+        options.rtol = rtol;
     }
 
     void solve(DeviceVec<T> rhs_in, DeviceVec<T> soln_out, bool check_conv = false) {

@@ -32,33 +32,35 @@ public:
         return total_mem;
     }
 
-    void set_design_variables(DeviceVec<T> dvs) {
-        for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
-            grids[ilevel].assembler.set_design_variables(dvs);
-        }
+    void solve(DeviceVec<T> rhs, DeviceVec<T> soln) {
+        bool check_conv = true; // only checks conv on outer solver
+        // bool check_conv = false;
+        // bool perm_in = false;
+        // grids[0].setDefect(rhs, perm_in);
+        // grids[0].zeroSolution();
+        outer_solver->solve(rhs, soln, check_conv);
     }
 
-    void update_coarse_grid_states() {
-        /* update all state variables from fine grid down to coarser grids (for nonlinear solutions) */
-        for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
-            grids[ilevel + 1].restrict_soln(grids[ilevel].d_vars);
-        }
-    }
+    void update_after_assembly(DeviceVec<T> &vars) {
 
-    void update_coarse_grid_jacobians() {
-        /* update all state variables from fine grid down to coarser grids (for nonlinear solutions) */
-        for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
-            grids[ilevel + 1].assembler.add_jacobian_fast(grids[ilevel + 1].Kmat);
-            grids[ilevel + 1].assembler.apply_bcs(grids[ilevel + 1].Kmat);
-        }
-    }
-
-    void update_after_assembly() {
+        // update states and do assemblies of coarse grids first
+        grids[0].setStateVars(vars); // set vars into finest grid (so we can pass this down to coarser grids)
+        _update_coarse_grid_states(); // restrict state variables to coarse grids
+        _update_coarse_grid_jacobians(); // compute coarse grid NL stiffness matrices
+        
         /* update matrices after new assembly */
         for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
             grids[ilevel].update_after_assembly();
         }
-        if (coarse_solver) coarse_solver->update_after_assembly();
+        if (coarse_solver) coarse_solver->update_after_assembly(vars);
+    }
+
+    void set_rel_tol(T rtol) { outer_solver->set_rel_tol(rtol); }
+
+    void set_design_variables(DeviceVec<T> dvs) {
+        for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
+            grids[ilevel].assembler.set_design_variables(dvs);
+        }
     }
 
     void init_outer_solver(int n_smooth, int n_cycles, int n_krylov, T omega = 1.0, T atol = 1e-6, T rtol = 1e-6, int print_freq = 1, bool print = true, bool double_smooth = false) {
@@ -132,11 +134,6 @@ public:
         }
     }
 
-    void solve(DeviceVec<T> rhs, DeviceVec<T> soln) {
-        bool check_conv = true; // only checks conv on outer solver
-        outer_solver->solve(rhs, soln, check_conv);
-    }
-
     void solve() {
         this->solve(grids[0].d_defect, grids[0].d_soln);
     }
@@ -153,4 +150,22 @@ public:
     BaseSolver *coarse_solver;
     std::vector<BaseSolver*> solvers; // stored coarse to fine 
     std::vector<GRID> grids; // stored fine to coarse
+
+
+private:
+    // helper methods for updating after jacobian update
+    void _update_coarse_grid_states() {
+        /* update all state variables from fine grid down to coarser grids (for nonlinear solutions) */
+        for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
+            grids[ilevel + 1].restrict_soln(grids[ilevel].d_vars);
+        }
+    }
+
+    void _update_coarse_grid_jacobians() {
+        /* update all state variables from fine grid down to coarser grids (for nonlinear solutions) */
+        for (int ilevel = 1; ilevel < getNumLevels(); ilevel++) {
+            grids[ilevel].assembler.add_jacobian_fast(grids[ilevel].Kmat);
+            grids[ilevel].assembler.apply_bcs(grids[ilevel].Kmat);
+        }
+    }
 };
