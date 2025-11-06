@@ -57,10 +57,11 @@ class InexactNewtonSolver {
 
             // res and convergence check
             T res_nrm = computeResidual(lambda);
-            int solver_iterations = linear_solver->get_num_iterations();
-            printf("\t inewton %d => resid %.5e, #l-search %d, #solve-iters %d\n", inewton, res_nrm,
-                   line_search_iters, solver_iterations);
             converged = checkConvergence(res_nrm, rtol, atol, init_res_nrm);
+            int _line_search_iters = inewton == 0 ? 0 : line_search_iters;
+            int solver_iterations = inewton == 0 ? 0 : linear_solver->get_num_iterations();
+            printf("\tinewton %d => resid %.5e, #l-search %d, #solve-iters %d\n", inewton, res_nrm,
+                   _line_search_iters, solver_iterations);
             if (converged) break;     // return success
             if (fatalFailure) break;  // return failure
 
@@ -79,12 +80,16 @@ class InexactNewtonSolver {
 
             // do an iterative linear solve here
             // ---------------------------------
+
+            // NOTE : res and update are held in VIS (visualization) order in this class,
+            // while the linear solver expects everything in solve perm/order (so we permute to and
+            // from that)
             update.zeroValues();
-            res.permuteData(block_dim,
-                            d_iperm);  // iperm and perm cause solvers operate in solver ordering
+            res.permuteData(block_dim, d_iperm);  // res from VIS => SOLVE order
             fatalFailure = linear_solver->solve(res, update);
-            // linear_solver->solve(res, update);
-            update.permuteData(block_dim, d_perm);
+            update.permuteData(block_dim, d_perm);  // update from SOLVE => VIS order
+
+            if (fatalFailure) continue;  // don't do line search update with this, skip to exit
 
             // flip sign of update since rhs should have really been -res
             T a = -1.0;
@@ -99,6 +104,9 @@ class InexactNewtonSolver {
                 cublasDaxpy(cublasHandle, nvars, &a, update.getPtr(), 1, vars.getPtr(), 1));
             assembler.set_variables(vars);
 
+            // DEBUG prints here
+            // ========================================
+            // printf("\t\tlinsolveRelTol %.6e, alpha %.4e\n", linSolveRtol, alpha);
             // T update_nrm;
             // CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, update.getPtr(), 1, &update_nrm));
             // T vars_nrm;
@@ -127,6 +135,9 @@ class InexactNewtonSolver {
     }
 
     bool checkConvergence(T resid_nrm, T rtol, T atol, T init_resid_nrm) {
+        // printf("\t\tresid nrm %.5e, rtol %.5e, atol %.5e, init_resid_nrm %.5e\n", resid_nrm,
+        // rtol,
+        //        atol, init_resid_nrm);
         return resid_nrm < (rtol * init_resid_nrm + atol);
     }
 
@@ -216,6 +227,33 @@ class InexactNewtonSolver {
         temp.copyValuesTo(vars);  // temp is holding u0 (see start of line search call)
         assembler.set_variables(temp);
         return objective;
+    }
+
+    void debug_solve(T lambda, T rtol, T atol, Vec &state, Vec &resOut) {  // , Vec &resOut
+        /* debug solve once we find a failed state (for debugging conv) */
+
+        // copy state from outer solver aka u0, and startup
+        state.copyValuesTo(vars);
+        assembler.set_variables(vars);
+        T res_nrm = computeResidual(lambda);
+        printf("DEBUG SOLVE at lambda %.6e, res_nrm %.6e\n", lambda, res_nrm);
+        updateJacobian();
+
+        // write residual to the output
+        res.copyValuesTo(resOut);
+
+        // check the states in each level of coarser grid
+        linear_solver->template debug_assembly<Assembler>();
+        // printf("DONE WITH DEBUG ASSEMBLY (DEBUG)\n");
+
+        // run linear solve (with debug flag on?)
+        printf("calling linear solver in DEBUG SOLVE\n");
+        update.zeroValues();
+        res.permuteData(block_dim,
+                        d_iperm);  // iperm and perm cause solvers operate in solver ordering
+        linear_solver->solve(res, update);
+        update.permuteData(block_dim, d_perm);
+        printf("\tdone calling linear solver in DEBUG SOLVE\n");
     }
 
    private:

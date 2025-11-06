@@ -82,9 +82,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
 
     // for K-cycles
     // constexpr bool is_nonlinear = true;
-    constexpr bool is_nonlinear = false;
+    constexpr bool full_approx_scheme = false;
     using KrylovSolve = PCGSolver<T, GRID>;
-    using TwoLevelSolve = MultigridTwoLevelSolver<GRID, is_nonlinear>;
+    using TwoLevelSolve = MultigridTwoLevelSolver<GRID, full_approx_scheme>;
     using KMG = MultilevelKcycleSolver<GRID, CoarseSolver, TwoLevelSolve, KrylovSolve>;
 
     // create cublas and cusparse handles (single one each)
@@ -228,23 +228,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     bool perm_out = true;
     grids[0].getDefect(fine_loads, perm_out);
     fine_assembler.apply_bcs(fine_loads);
-
-    // ---------------------------------------------------
-    // 0) demo restrict fine to coarse soln
-
-    // // first solve on fine grid (with initial linear defect)
-    // kmg->solve();
-
-    // // // now pass soln down to the coarse grid
-    // grids[1].restrict_soln(grids[0].d_soln);
-
-    // int *d_perm = kmg->grids[0].d_perm;
-    // auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
-    // printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_lin0.vtk");
-
-    // int *d_perm1 = kmg->grids[1].d_perm;
-    // auto h_soln1 = kmg->grids[1].d_soln.createPermuteVec(6, d_perm1).createHostVec();
-    // printToVTK<Assembler,HostVec<T>>(kmg->grids[1].assembler, h_soln1, "out/plate_lin1.vtk");
 
     // 1) do a linear solve here
     // -------------------------------------------------------

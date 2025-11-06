@@ -60,6 +60,7 @@ class PCGSolver : public BaseSolver {
     // nothing
     void update_after_assembly(DeviceVec<T> &vars) {}
 
+    void set_print(bool print) { options.print = print; }
     void set_abs_tol(T atol) { options.atol = atol; }
     void set_rel_tol(T rtol) { options.rtol = rtol; }
 

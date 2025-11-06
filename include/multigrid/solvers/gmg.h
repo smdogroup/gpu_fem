@@ -2,6 +2,7 @@
 
 // original multilevel Vcycle solver
 // V1 I should say..
+#include "string"
 
 template <class GRID, class CoarseSolver>
 class GeometricMultigridSolver {
@@ -16,9 +17,10 @@ class GeometricMultigridSolver {
         /* pass in coarse assembler data for each prolongation operator */
         // 0 is the finest grid, nlevels-1 is the coarsest grid here
         printf("create prolongation nz pattern\n");
-        for (int ilevel = 0; ilevel < getNumLevels()-1; ilevel++) {
-            grids[ilevel].prolongation->init_coarse_data(grids[ilevel+1].assembler);
-            grids[ilevel+1].restriction = grids[ilevel].prolongation; // copy prolong to restriction on coarser grid
+        for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
+            grids[ilevel].prolongation->init_coarse_data(grids[ilevel + 1].assembler);
+            grids[ilevel + 1].restriction =
+                grids[ilevel].prolongation;  // copy prolong to restriction on coarser grid
         }
     }
 
@@ -39,32 +41,22 @@ class GeometricMultigridSolver {
         }
     }
 
-    void update_coarse_grid_states() {
-        /* update all state variables from fine grid down to coarser grids (for nonlinear solutions) */
-        for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
-            grids[ilevel + 1].restrict_soln(grids[ilevel].d_soln);
-        }
-    }
+    void update_after_assembly(DeviceVec<T> &vars) {
+        // update states and do assemblies of coarse grids first
+        bool perm = true;
+        grids[0].setStateVars(vars, perm);  // set vars into fine grid & perm (VIS to SOLVE order)
+        _update_coarse_grid_states();       // restrict state vars to coarse grid+assemblers
+        _update_coarse_grid_jacobians();    // compute coarse grid NL stiffness matrices
 
-    void update_coarse_grid_jacobians() {
-        /* update all state variables from fine grid down to coarser grids (for nonlinear solutions) */
-        for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
-            grids[ilevel + 1].assembler.add_jacobian_fast(grids[ilevel + 1].Kmat);
-            grids[ilevel + 1].assembler.apply_bcs(grids[ilevel + 1].Kmat);
-        }
-    }
-
-    void update_after_assembly() {
         /* update matrices after new assembly */
-        int num_levels = getNumLevels();
-        for (int ilevel = 0; ilevel < num_levels; ilevel++) {
+        for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
             grids[ilevel].update_after_assembly();
         }
-        if (coarse_solver) coarse_solver->update_after_assembly();
+        if (coarse_solver) coarse_solver->update_after_assembly(vars);
     }
 
-    void vcycle_solve(int starting_level, int pre_smooth, int post_smooth, int n_vcycles = 100, bool print = false,
-                      T atol = 1e-6, T rtol = 1e-6, bool double_smooth = false,
+    void vcycle_solve(int starting_level, int pre_smooth, int post_smooth, int n_vcycles = 100,
+                      bool print = false, T atol = 1e-6, T rtol = 1e-6, bool double_smooth = false,
                       int print_freq = 1, bool time = false, bool debug = false) {
         // init defect nrm
         T init_defect_nrm = grids[0].getDefectNorm();
@@ -74,12 +66,10 @@ class GeometricMultigridSolver {
         int n_levels = getNumLevels();
 
         for (int i_vcycle = 0; i_vcycle < n_vcycles; i_vcycle++) {
-
             /* restrict + pre-smooth down to one before coarse level */
             // ----------------------------------------------------------------
 
             for (int i_level = starting_level; i_level < n_levels - 1; i_level++) {
-
                 if (time) CHECK_CUDA(cudaDeviceSynchronize());
                 auto pre_smooth_time = std::chrono::high_resolution_clock::now();
 
@@ -107,20 +97,19 @@ class GeometricMultigridSolver {
 
             /* coarse solve */
             // -----------------------------------------------------------
-            
-            if (debug) printf("\t--level %d full-solve\n", n_levels-1);
+
+            if (debug) printf("\t--level %d full-solve\n", n_levels - 1);
             if (time) CHECK_CUDA(cudaDeviceSynchronize());
             auto pre_direct_time = std::chrono::high_resolution_clock::now();
 
             // coarsest grid full solve
-            coarse_solver->solve(grids[n_levels-1].d_defect, grids[n_levels-1].d_soln);
+            coarse_solver->solve(grids[n_levels - 1].d_defect, grids[n_levels - 1].d_soln);
 
             if (time) {
                 CHECK_CUDA(cudaDeviceSynchronize());
                 auto post_direct_time = std::chrono::high_resolution_clock::now();
-                std::chrono::duration<double> direct_time =
-                    post_direct_time - pre_direct_time;
-                printf("\tdirect-solve[%d] in in %.2e sec\n", n_levels-1, direct_time.count());
+                std::chrono::duration<double> direct_time = post_direct_time - pre_direct_time;
+                printf("\tdirect-solve[%d] in in %.2e sec\n", n_levels - 1, direct_time.count());
             }
 
             /* prolongations + post-smooths back up the levels */
@@ -136,7 +125,8 @@ class GeometricMultigridSolver {
                 if (time) {
                     CHECK_CUDA(cudaDeviceSynchronize());
                     auto post_prolong_time = std::chrono::high_resolution_clock::now();
-                    std::chrono::duration<double> prolong_time = post_prolong_time - pre_prolong_time;
+                    std::chrono::duration<double> prolong_time =
+                        post_prolong_time - pre_prolong_time;
                     printf("\tprolong-soln[%d] up in in %.2e sec\n", i_level, prolong_time.count());
                 }
                 auto pre_smooth_up_time = std::chrono::high_resolution_clock::now();
@@ -148,8 +138,10 @@ class GeometricMultigridSolver {
                 if (time) {
                     CHECK_CUDA(cudaDeviceSynchronize());
                     auto post_smooth_up_time = std::chrono::high_resolution_clock::now();
-                    std::chrono::duration<double> smooth_up_time = post_smooth_up_time - pre_smooth_up_time;
-                    printf("\tpost-smooth[%d] up in in %.2e sec\n", i_level, smooth_up_time.count());
+                    std::chrono::duration<double> smooth_up_time =
+                        post_smooth_up_time - pre_smooth_up_time;
+                    printf("\tpost-smooth[%d] up in in %.2e sec\n", i_level,
+                           smooth_up_time.count());
                 }
             }
 
@@ -170,12 +162,15 @@ class GeometricMultigridSolver {
             }
         }
 
-        if (print) printf("done with v-cycle solve from start level %d, conv %.2e to %.2e ||defect|| in %d steps\n",
-               starting_level, init_defect_nrm, fin_defect_nrm, n_steps);
+        if (print)
+            printf(
+                "done with v-cycle solve from start level %d, conv %.2e to %.2e ||defect|| in %d "
+                "steps\n",
+                starting_level, init_defect_nrm, fin_defect_nrm, n_steps);
     }
 
-    void fcycle_solve(int starting_level, int pre_smooth, int post_smooth, int n_fcycles = 100, bool print = false,
-                      T atol = 1e-6, T rtol = 1e-6, bool double_smooth = false,
+    void fcycle_solve(int starting_level, int pre_smooth, int post_smooth, int n_fcycles = 100,
+                      bool print = false, T atol = 1e-6, T rtol = 1e-6, bool double_smooth = false,
                       int print_freq = 1, bool time = false, bool debug = false) {
         // init defect nrm
         T init_defect_nrm = grids[0].getDefectNorm();
@@ -186,7 +181,6 @@ class GeometricMultigridSolver {
         int i_level = starting_level;
 
         for (int i_cycle = 0; i_cycle < n_fcycles; i_cycle++) {
-
             // pre-smooth and restrict
             if (i_level < n_levels - 1) {
                 grids[i_level].smoothDefect(pre_smooth, debug, pre_smooth - 1);
@@ -198,15 +192,16 @@ class GeometricMultigridSolver {
                 int pre_smooth_l = double_smooth ? pre_smooth * 2 : pre_smooth;
                 int post_smooth_l = double_smooth ? post_smooth * 2 : post_smooth;
 
-                fcycle_solve(i_level + 1, pre_smooth_l, post_smooth_l, 1, false, atol, rtol, double_smooth);
+                fcycle_solve(i_level + 1, pre_smooth_l, post_smooth_l, 1, false, atol, rtol,
+                             double_smooth);
             } else {
-                coarse_solver->solve(grids[n_levels-1].d_defect, grids[n_levels-1].d_soln);
+                coarse_solver->solve(grids[n_levels - 1].d_defect, grids[n_levels - 1].d_soln);
             }
 
             // post-smooth and restrict
             if (i_level < n_levels - 1) {
                 grids[i_level].prolongate(grids[i_level + 1].d_soln);
-                grids[i_level].smoothDefect(post_smooth, debug, post_smooth-1);
+                grids[i_level].smoothDefect(post_smooth, debug, post_smooth - 1);
             }
 
             // then call V-cycle at this level (one iteration)
@@ -227,8 +222,11 @@ class GeometricMultigridSolver {
             }
         }
 
-        if (print) printf("done with F-cycle solve from start level %d, conv %.2e to %.2e ||defect|| in %d steps\n",
-               starting_level, init_defect_nrm, fin_defect_nrm, n_steps);
+        if (print)
+            printf(
+                "done with F-cycle solve from start level %d, conv %.2e to %.2e ||defect|| in %d "
+                "steps\n",
+                starting_level, init_defect_nrm, fin_defect_nrm, n_steps);
     }
 
     void wcycle_solve(int i_level, int pre_smooth, int post_smooth, int n_wcycles = 100,
@@ -292,13 +290,179 @@ class GeometricMultigridSolver {
     }  // end of wcycle_solve method
 
     void free() {
-        for (int ilevel = 0; ilevel < n_levels; ilevel++) {
+        for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
             grids[ilevel].free();
         }
     }
 
-    int nxe, n_levels;
+    int nxe;  //, n_levels;
     bool setup;
     std::vector<GRID> grids;
     CoarseSolver *coarse_solver;
+
+    template <class Assembler>
+    void _print_vtk_debug(int icycle, int ilevel, std::string quantity, std::string filename) {
+        std::stringstream outputFile;
+        outputFile << filename << "_level_" << ilevel << "_cycle" << icycle << ".vtk";
+        if (quantity == "soln") {
+            grids[ilevel].d_soln.permuteData(6, grids[ilevel].d_perm);
+            auto h_soln = grids[ilevel].d_soln.createHostVec();
+            grids[ilevel].d_soln.permuteData(6, grids[ilevel].d_iperm);
+            printToVTK<Assembler, HostVec<T>>(grids[ilevel].assembler, h_soln, outputFile.str());
+        } else if (quantity == "defect") {
+            grids[ilevel].d_defect.permuteData(6, grids[ilevel].d_perm);
+            auto h_defect = grids[ilevel].d_defect.createHostVec();
+            grids[ilevel].d_defect.permuteData(6, grids[ilevel].d_iperm);
+            printToVTK<Assembler, HostVec<T>>(grids[ilevel].assembler, h_defect, outputFile.str());
+        } else if (quantity == "ddefect") {
+            auto d_vec_temp2 = DeviceVec<T>(grids[ilevel].N, grids[ilevel].d_temp2);
+            T a = grids[ilevel].omega;  // what we're subtracting from current defect..
+            CHECK_CUBLAS(cublasDscal(grids[ilevel].cublasHandle, grids[ilevel].N, &a,
+                                     d_vec_temp2.getPtr(), 1));
+            d_vec_temp2.permuteData(6, grids[ilevel].d_perm);
+            auto h_ddefect = d_vec_temp2.createHostVec();
+            printToVTK<Assembler, HostVec<T>>(grids[ilevel].assembler, h_ddefect, outputFile.str());
+        }
+    }
+
+    template <class Assembler>
+    void debug_vcycle_solve(CoarseSolver *fine_solver, int starting_level, int pre_smooth,
+                            int post_smooth, int n_vcycles = 100, bool print = false, T atol = 1e-6,
+                            T rtol = 1e-6, bool double_smooth = false, int print_freq = 1) {
+        /* debug Vcycle solve to do VTK writing (esp to help debug NL problems) */
+
+        // make some temporary vecs
+        auto fine_soln = DeviceVec<T>(grids[0].N);
+
+        // init defect nrm
+        T init_defect_nrm = grids[0].getDefectNorm();
+        if (print) printf("V-cycles: ||init_defect|| = %.2e\n", init_defect_nrm);
+        T fin_defect_nrm = init_defect_nrm;
+        int n_steps = n_vcycles;
+        int n_levels = getNumLevels();
+        // std::string quantity, filename;
+        printf("MAKE SURE out/debug/ is a valid directory for DEBUG VCYCLE solve\n");
+
+        for (int i_vcycle = 0; i_vcycle < n_vcycles; i_vcycle++) {
+            /* restrict and pre-smooth */
+            // -----------------------------------------------------------
+
+            for (int i_level = starting_level; i_level < n_levels - 1; i_level++) {
+                _print_vtk_debug<Assembler>(i_vcycle, i_level, "soln", "out/debug/step1_soln");
+                _print_vtk_debug<Assembler>(i_vcycle, i_level, "defect", "out/debug/step2_def");
+
+                int inner_pre_smooth = pre_smooth * (double_smooth ? 1 << i_level : 1);
+                grids[i_level].smoothDefect(inner_pre_smooth, false, inner_pre_smooth - 1);
+
+                _print_vtk_debug<Assembler>(i_vcycle, i_level, "defect", "out/debug/step3_smdef");
+
+                // restrict defect
+                grids[i_level + 1].restrict_defect(grids[i_level].d_defect);
+
+                _print_vtk_debug<Assembler>(i_vcycle, i_level + 1, "defect",
+                                            "out/debug/step4_resdef");
+            }
+
+            /* coarse solve */
+            // -----------------------------------------------------------
+
+            coarse_solver->solve(grids[n_levels - 1].d_defect, grids[n_levels - 1].d_soln);
+            // _print_vtk_debug<Assembler>(i_vcycle, n_levels - 1, "defect",
+            // "out/debug/step4_crsrhs");
+            _print_vtk_debug<Assembler>(i_vcycle, n_levels - 1, "soln", "out/debug/step5_crssol");
+
+            /* prolongations + post-smooths back up the levels */
+            // ----------------------------------------------------------------------------
+
+            for (int i_level = n_levels - 2; i_level >= starting_level; i_level--) {
+                // compare exact solve of current defect to the coarse prolong update
+                // need to get exact solution of current defect, with direct solver (to compare with
+                // coarse-fine prediction)
+                if (i_level == 0) {
+                    fine_solver->solve(grids[i_level].d_defect, fine_soln);
+                }
+
+                // get coarse-fine correction from coarser grid to this grid
+                grids[i_level].prolongate(grids[i_level + 1].d_soln);
+                _print_vtk_debug<Assembler>(i_vcycle, i_level, "soln", "out/debug/step6_prosol");
+                printf("level %d, omega = %.6e\n", i_level, grids[i_level].omega);
+                _print_vtk_debug<Assembler>(i_vcycle, i_level, "ddefect",
+                                            "out/debug/step7_proddef");  // change in defect
+                _print_vtk_debug<Assembler>(i_vcycle, i_level, "defect", "out/debug/step8_prodef");
+
+                // now printout comparison of the coarse solve and fine solve exact
+                if (i_level == 0) {
+                    std::stringstream outputFile0, outputFile;
+
+                    outputFile0 << "out/debug/step9_cfsoln"
+                                << "_level_" << i_level << "_cycle" << i_vcycle << ".vtk";
+                    auto d_vec_temp = DeviceVec<T>(grids[i_level].N, grids[i_level].d_temp);
+                    T a = grids[i_level].omega;
+                    CHECK_CUBLAS(cublasDscal(grids[i_level].cublasHandle, grids[i_level].N, &a,
+                                             d_vec_temp.getPtr(), 1));
+                    d_vec_temp.permuteData(6, grids[i_level].d_perm);
+                    auto h_dtemp = d_vec_temp.createHostVec();
+                    printToVTK<Assembler, HostVec<T>>(grids[i_level].assembler, h_dtemp,
+                                                      outputFile0.str());
+
+                    outputFile << "out/debug/step10_LUsoln"
+                               << "_level_" << i_level << "_cycle" << i_vcycle << ".vtk";
+                    fine_soln.permuteData(6, grids[i_level].d_perm);
+                    auto h_soln = fine_soln.createHostVec();
+                    printToVTK<Assembler, HostVec<T>>(grids[i_level].assembler, h_soln,
+                                                      outputFile.str());
+                }
+
+                // post-smooth
+                int inner_post_smooth = post_smooth * (double_smooth ? 1 << i_level : 1);
+                grids[i_level].smoothDefect(inner_post_smooth, false, inner_post_smooth - 1);
+
+                // _print_vtk_debug<Assembler>(i_vcycle, i_level, "soln", "out/debug/step9_smsol");
+                _print_vtk_debug<Assembler>(i_vcycle, i_level, "defect", "out/debug/step11_smdef");
+            }
+
+            /* compute fine grid defect of V-cycle */
+            // -----------------------------------------------------
+
+            T defect_nrm = grids[starting_level].getDefectNorm();
+            fin_defect_nrm = defect_nrm;
+            if (i_vcycle % print_freq == 0 && print)
+                printf("DEBUG : v-cycle step %d, ||defect|| = %.3e\n", i_vcycle, defect_nrm);
+            if (time) CHECK_CUDA(cudaDeviceSynchronize());
+
+            if (defect_nrm < atol + rtol * init_defect_nrm && print) {
+                printf(
+                    "DEBUG :V-cycle GMG converged in %d steps to defect nrm %.2e from init_nrm "
+                    "%.2e\n",
+                    i_vcycle + 1, defect_nrm, init_defect_nrm);
+                n_steps = i_vcycle + 1;
+                break;
+            }
+        }
+
+        if (print)
+            printf(
+                "DEBUG :done with v-cycle solve from start level %d, conv %.2e to %.2e ||defect|| "
+                "in %d "
+                "steps\n",
+                starting_level, init_defect_nrm, fin_defect_nrm, n_steps);
+    }
+
+   private:
+    void _update_coarse_grid_states() {
+        /* update all state variables from fine grid down to coarser grids (for nonlinear solutions)
+         */
+        for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
+            grids[ilevel + 1].restrict_soln(grids[ilevel].d_vars);
+        }
+    }
+
+    void _update_coarse_grid_jacobians() {
+        /* update all state variables from fine grid down to coarser grids (for nonlinear solutions)
+         */
+        for (int ilevel = 1; ilevel < getNumLevels(); ilevel++) {
+            grids[ilevel].assembler.add_jacobian_fast(grids[ilevel].Kmat);
+            grids[ilevel].assembler.apply_bcs(grids[ilevel].Kmat);
+        }
+    }
 };

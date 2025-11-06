@@ -8,7 +8,8 @@ template <typename T, class Assembler>
 class CusparseMGDirectLU : public BaseSolver {
    public:
     CusparseMGDirectLU(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
-                       Assembler &assembler, BsrMat<DeviceVec<T>> &kmat) {
+                       Assembler &assembler, BsrMat<DeviceVec<T>> &kmat)
+        : cublasHandle(cublasHandle_), cusparseHandle(cusparseHandle_) {
         /* create the cusparse direct solver (for repeated solves) */
 
         BsrData bsr_data = kmat.getBsrData();
@@ -26,6 +27,12 @@ class CusparseMGDirectLU : public BaseSolver {
         d_vals_ILU0 = DeviceVec<T>(nnz).getPtr();
 
         cusparseHandle = cusparseHandle_;
+
+        // for checking residual with SpMV
+        descrK = 0;
+        CHECK_CUSPARSE(cusparseCreateMatDescr(&descrK));
+        CHECK_CUSPARSE(cusparseSetMatType(descrK, CUSPARSE_MATRIX_TYPE_GENERAL));
+        CHECK_CUSPARSE(cusparseSetMatIndexBase(descrK, CUSPARSE_INDEX_BASE_ZERO));
 
         // startup factorization steps
         // -----------------------------------
@@ -97,6 +104,7 @@ class CusparseMGDirectLU : public BaseSolver {
     }
 
     // does nothing cause it's a directLU solve
+    void set_print(bool print) {}
     void set_rel_tol(T rtol) {}
     void set_abs_tol(T atol) {}
     int get_num_iterations() { return 1; }
@@ -135,7 +143,34 @@ class CusparseMGDirectLU : public BaseSolver {
                                              descr_U, d_vals_ILU0, d_rowp, d_cols, block_dim,
                                              info_U, d_temp, soln.getPtr(), policy_U, pBuffer));
 
+        // TEMP debug
+        // bool coarse_fail = computeResidual(rhs, soln);
+        // return coarse_fail;
+
         return false;
+    }
+
+    bool computeResidual(DeviceVec<T> &rhs, DeviceVec<T> &soln) {
+        /* compute the residual of the direct solve */
+
+        // maybe just for debugging here
+
+        cudaMemcpy(d_temp, rhs.getPtr(), N * sizeof(T), cudaMemcpyDeviceToDevice);
+        T init_norm;
+        CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_temp, 1, &init_norm));
+
+        // subtract A*soln into temp which holds res
+        T a = -1.0, b = 1.0;
+        CHECK_CUSPARSE(cusparseDbsrmv(
+            cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb,
+            &a, descrK, d_vals, d_rowp, d_cols, block_dim, soln.getPtr(), &b, d_temp));
+
+        T fin_norm;
+        CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_temp, 1, &fin_norm));
+
+        T rel_conv = fin_norm / init_norm;
+        printf("coarse solver rel conv %.8e\n", rel_conv);
+        return rel_conv >= 1e-6;
     }
 
     void free() {
@@ -158,7 +193,8 @@ class CusparseMGDirectLU : public BaseSolver {
     T *d_temp, *d_vals, *d_vals_ILU0;
 
     // cusparse and cublas data
-    cusparseHandle_t cusparseHandle;
+    cublasHandle_t &cublasHandle;
+    cusparseHandle_t &cusparseHandle;
     cusparseMatDescr_t descr_L = 0, descr_U = 0;
     bsrsv2Info_t info_L = 0, info_U = 0;
     void *pBuffer = 0;
@@ -167,6 +203,8 @@ class CusparseMGDirectLU : public BaseSolver {
     const cusparseOperation_t trans_L = CUSPARSE_OPERATION_NON_TRANSPOSE,
                               trans_U = CUSPARSE_OPERATION_NON_TRANSPOSE;
     const cusparseDirection_t dir = CUSPARSE_DIRECTION_ROW;
+
+    cusparseMatDescr_t descrK;
 
     // factor utilities
     cusparseMatDescr_t descr_M = 0;

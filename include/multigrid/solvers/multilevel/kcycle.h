@@ -1,6 +1,10 @@
 // generic Kcycle solver
 #pragma once
 
+#include <iostream>
+#include <sstream>
+#include <string>
+
 #include "../solve_utils.h"
 
 template <class GRID, class CoarseSolver, class SubspaceSolver, class KrylovSolver>
@@ -42,16 +46,30 @@ class MultilevelKcycleSolver {
 
     void update_after_assembly(DeviceVec<T> &vars) {
         // update states and do assemblies of coarse grids first
-        grids[0].setStateVars(
-            vars);  // set vars into finest grid (so we can pass this down to coarser grids)
-        _update_coarse_grid_states();     // restrict state variables to coarse grids
-        _update_coarse_grid_jacobians();  // compute coarse grid NL stiffness matrices
+        bool perm = true;
+        grids[0].setStateVars(vars, perm);  // set vars into fine grid & perm (VIS to SOLVE order)
+        _update_coarse_grid_states();       // restrict state vars to coarse grid+assemblers
+        _update_coarse_grid_jacobians();    // compute coarse grid NL stiffness matrices
 
         /* update matrices after new assembly */
         for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
             grids[ilevel].update_after_assembly();
         }
         if (coarse_solver) coarse_solver->update_after_assembly(vars);
+    }
+
+    template <class Assembler>
+    void debug_assembly() {
+        /* debug and check that coarser grids, etc. have reasonable states */
+
+        for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
+            grids[ilevel].d_vars.permuteData(6, grids[ilevel].d_perm);  // from SOLVE to VIS order
+            auto h_vars = grids[ilevel].d_vars.createHostVec();
+            grids[ilevel].d_vars.permuteData(6, grids[ilevel].d_iperm);  // and undo perm
+            std::stringstream outputFile;
+            outputFile << "out/wing_debug_level_" << ilevel << ".vtk";
+            printToVTK<Assembler, HostVec<T>>(grids[ilevel].assembler, h_vars, outputFile.str());
+        }
     }
 
     void set_rel_tol(T rtol) { outer_solver->set_rel_tol(rtol); }
@@ -61,6 +79,8 @@ class MultilevelKcycleSolver {
             grids[ilevel].assembler.set_design_variables(dvs);
         }
     }
+
+    void set_print(bool print) { outer_solver->set_print(print); }
 
     void init_outer_solver(cublasHandle_t &cublasHandle, cusparseHandle_t &cusparseHandle,
                            int n_smooth, int n_cycles, int n_krylov, T omega = 1.0, T atol = 1e-6,
