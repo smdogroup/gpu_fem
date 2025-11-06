@@ -1,25 +1,26 @@
 #pragma once
 
 class BaseSolver {
-public:
+   public:
     using T = double;
     BaseSolver() = default;
-    virtual ~BaseSolver() = default; // must have virtual destructor?
-    virtual void solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) = 0;
+    virtual ~BaseSolver() = default;  // must have virtual destructor?
+    virtual bool solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) = 0;
     virtual void update_after_assembly(DeviceVec<T> &vars) = 0;
     virtual void set_abs_tol(T atol) = 0;
     virtual void set_rel_tol(T atol) = 0;
+    virtual int get_num_iterations() = 0;
     // virtual void free();
 };
 
 class SolverOptions {
-public:
+   public:
     using T = double;
     SolverOptions() = default;
 
-    SolverOptions(T omega_, int nsmooth_, int ncycles_, bool symmetric_ = false, 
-        T atol_ = 1e-6, T rtol_ = 1e-6, int print_freq_ = 1, bool debug_ = false,
-        bool print_ = false, bool inner_print_ = false) {
+    SolverOptions(T omega_, int nsmooth_, int ncycles_, bool symmetric_ = false, T atol_ = 1e-6,
+                  T rtol_ = 1e-6, int print_freq_ = 1, bool debug_ = false, bool print_ = false,
+                  bool inner_print_ = false) {
         omega = omega_;
         nsmooth = nsmooth_, ncycles = ncycles_;
         symmetric = symmetric_;

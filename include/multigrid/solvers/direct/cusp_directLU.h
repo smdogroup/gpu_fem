@@ -6,9 +6,9 @@
 
 template <typename T, class Assembler>
 class CusparseMGDirectLU : public BaseSolver {
-public:
-    CusparseMGDirectLU(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_, 
-        Assembler &assembler, BsrMat<DeviceVec<T>> &kmat) {
+   public:
+    CusparseMGDirectLU(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
+                       Assembler &assembler, BsrMat<DeviceVec<T>> &kmat) {
         /* create the cusparse direct solver (for repeated solves) */
 
         BsrData bsr_data = kmat.getBsrData();
@@ -53,32 +53,38 @@ public:
         cusparseCreateBsrsv2Info(&info_U);
 
         // symbolic and numeric factorizations
-        CHECK_CUSPARSE(cusparseDbsrilu02_bufferSize(cusparseHandle, dir, mb, nnzb, descr_M, d_vals, d_rowp, d_cols,
-                                                    block_dim, info_M, &pBufferSize_M));
-        CHECK_CUSPARSE(cusparseDbsrsv2_bufferSize(cusparseHandle, dir, trans_L, mb, nnzb, descr_L, d_vals, d_rowp,
-                                                d_cols, block_dim, info_L, &pBufferSize_L));
-        CHECK_CUSPARSE(cusparseDbsrsv2_bufferSize(cusparseHandle, dir, trans_U, mb, nnzb, descr_U, d_vals, d_rowp,
-                                                d_cols, block_dim, info_U, &pBufferSize_U));
+        CHECK_CUSPARSE(cusparseDbsrilu02_bufferSize(cusparseHandle, dir, mb, nnzb, descr_M, d_vals,
+                                                    d_rowp, d_cols, block_dim, info_M,
+                                                    &pBufferSize_M));
+        CHECK_CUSPARSE(cusparseDbsrsv2_bufferSize(cusparseHandle, dir, trans_L, mb, nnzb, descr_L,
+                                                  d_vals, d_rowp, d_cols, block_dim, info_L,
+                                                  &pBufferSize_L));
+        CHECK_CUSPARSE(cusparseDbsrsv2_bufferSize(cusparseHandle, dir, trans_U, mb, nnzb, descr_U,
+                                                  d_vals, d_rowp, d_cols, block_dim, info_U,
+                                                  &pBufferSize_U));
         pBufferSize = std::max({pBufferSize_M, pBufferSize_L, pBufferSize_U});
         // cudaMalloc((void **)&pBuffer, pBufferSize);
         cudaMalloc((void **)&pBuffer, pBufferSize);
 
         // perform ILU symbolic factorization on L
-        CHECK_CUSPARSE(cusparseDbsrilu02_analysis(cusparseHandle, dir, mb, nnzb, descr_M, d_vals, d_rowp, d_cols,
-                                                block_dim, info_M, policy_M, pBuffer));
+        CHECK_CUSPARSE(cusparseDbsrilu02_analysis(cusparseHandle, dir, mb, nnzb, descr_M, d_vals,
+                                                  d_rowp, d_cols, block_dim, info_M, policy_M,
+                                                  pBuffer));
         status = cusparseXbsrilu02_zeroPivot(cusparseHandle, info_M, &structural_zero);
         if (CUSPARSE_STATUS_ZERO_PIVOT == status) {
             printf("A(%d,%d) is missing\n", structural_zero, structural_zero);
         }
 
         // analyze sparsity patern of L for efficient triangular solves
-        CHECK_CUSPARSE(cusparseDbsrsv2_analysis(cusparseHandle, dir, trans_L, mb, nnzb, descr_L, d_vals, d_rowp,
-                                                d_cols, block_dim, info_L, policy_L, pBuffer));
+        CHECK_CUSPARSE(cusparseDbsrsv2_analysis(cusparseHandle, dir, trans_L, mb, nnzb, descr_L,
+                                                d_vals, d_rowp, d_cols, block_dim, info_L, policy_L,
+                                                pBuffer));
         CHECK_CUDA(cudaDeviceSynchronize());
 
         // analyze sparsity pattern of U for efficient triangular solves
-        CHECK_CUSPARSE(cusparseDbsrsv2_analysis(cusparseHandle, dir, trans_U, mb, nnzb, descr_U, d_vals, d_rowp,
-                                                d_cols, block_dim, info_U, policy_U, pBuffer));
+        CHECK_CUSPARSE(cusparseDbsrsv2_analysis(cusparseHandle, dir, trans_U, mb, nnzb, descr_U,
+                                                d_vals, d_rowp, d_cols, block_dim, info_U, policy_U,
+                                                pBuffer));
         CHECK_CUDA(cudaDeviceSynchronize());
 
         // first time, then factor the matrix
@@ -93,19 +99,19 @@ public:
     // does nothing cause it's a directLU solve
     void set_rel_tol(T rtol) {}
     void set_abs_tol(T atol) {}
+    int get_num_iterations() { return 1; }
 
     void factor_matrix() {
         // copy the data from the original matrix to new place for factor
-        CHECK_CUDA(
-        cudaMemcpy(d_vals_ILU0, d_vals, nnz * sizeof(T), cudaMemcpyDeviceToDevice));
+        CHECK_CUDA(cudaMemcpy(d_vals_ILU0, d_vals, nnz * sizeof(T), cudaMemcpyDeviceToDevice));
 
         // do factor (without object recreation here)
 
-        // temp objects for the factorization      
+        // temp objects for the factorization
 
         // perform ILU numeric factorization (with M policy)
-        CHECK_CUSPARSE(cusparseDbsrilu02(cusparseHandle, dir, mb, nnzb, descr_M, d_vals_ILU0, d_rowp, d_cols, block_dim,
-                                        info_M, policy_M, pBuffer));
+        CHECK_CUSPARSE(cusparseDbsrilu02(cusparseHandle, dir, mb, nnzb, descr_M, d_vals_ILU0,
+                                         d_rowp, d_cols, block_dim, info_M, policy_M, pBuffer));
         status = cusparseXbsrilu02_zeroPivot(cusparseHandle, info_M, &numerical_zero);
         if (CUSPARSE_STATUS_ZERO_PIVOT == status) {
             printf("block U(%d,%d) is not invertible\n", numerical_zero, numerical_zero);
@@ -114,23 +120,23 @@ public:
         CHECK_CUDA(cudaDeviceSynchronize());
     }
 
-    void solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) {
+    bool solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) {
         /* assume here the rhs and soln are in solver permutations / orderings */
 
         // coarse grid directLU solve
         // triangular solve L*z = x
         const double alpha = 1.0;
-        CHECK_CUSPARSE(cusparseDbsrsv2_solve(cusparseHandle, dir, trans_L, mb, nnzb, &alpha, descr_L,
-                                            d_vals_ILU0, d_rowp, d_cols, block_dim, info_L, rhs.getPtr(),
-                                            d_temp, policy_L, pBuffer));
+        CHECK_CUSPARSE(cusparseDbsrsv2_solve(cusparseHandle, dir, trans_L, mb, nnzb, &alpha,
+                                             descr_L, d_vals_ILU0, d_rowp, d_cols, block_dim,
+                                             info_L, rhs.getPtr(), d_temp, policy_L, pBuffer));
 
         // triangular solve U*y = z
-        CHECK_CUSPARSE(cusparseDbsrsv2_solve(cusparseHandle, dir, trans_U, mb, nnzb, &alpha, descr_U,
-                                            d_vals_ILU0, d_rowp, d_cols, block_dim, info_U, d_temp,
-                                            soln.getPtr(), policy_U, pBuffer));
-    }
+        CHECK_CUSPARSE(cusparseDbsrsv2_solve(cusparseHandle, dir, trans_U, mb, nnzb, &alpha,
+                                             descr_U, d_vals_ILU0, d_rowp, d_cols, block_dim,
+                                             info_U, d_temp, soln.getPtr(), policy_U, pBuffer));
 
-    
+        return false;
+    }
 
     void free() {
         cudaFree(pBuffer);
@@ -145,7 +151,7 @@ public:
         cusparseDestroyMatDescr(descr_M);
     }
 
-private:
+   private:
     // solver data
     int mb, N, nnzb, nnz, block_dim, *d_rowp, *d_cols;
     DeviceVec<T> temp_vec;

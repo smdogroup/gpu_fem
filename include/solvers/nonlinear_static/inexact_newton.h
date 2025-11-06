@@ -49,7 +49,7 @@ class InexactNewtonSolver {
         T linSolveAtol = 1e-12;
 
         bool converged = false;
-        // printf("inner solver with lambda = %.4e\n", lambda);
+        bool fatalFailure = false;
 
         // for (int inewton = 0; inewton < 5; inewton++) {
         for (int inewton = 0; inewton < 40; inewton++) {
@@ -57,10 +57,12 @@ class InexactNewtonSolver {
 
             // res and convergence check
             T res_nrm = computeResidual(lambda);
-            printf("\t inewton %d => resid %.8e, #line-srch %d\n", inewton, res_nrm,
-                   line_search_iters);
+            int solver_iterations = linear_solver->get_num_iterations();
+            printf("\t inewton %d => resid %.5e, #l-search %d, #solve-iters %d\n", inewton, res_nrm,
+                   line_search_iters, solver_iterations);
             converged = checkConvergence(res_nrm, rtol, atol, init_res_nrm);
-            if (converged) break;  // return success
+            if (converged) break;     // return success
+            if (fatalFailure) break;  // return failure
 
             // update jacobian, TODO : could add Ali's delay redo pc here, not doing that in my work
             // though
@@ -80,7 +82,8 @@ class InexactNewtonSolver {
             update.zeroValues();
             res.permuteData(block_dim,
                             d_iperm);  // iperm and perm cause solvers operate in solver ordering
-            linear_solver->solve(res, update);
+            fatalFailure = linear_solver->solve(res, update);
+            // linear_solver->solve(res, update);
             update.permuteData(block_dim, d_perm);
 
             // flip sign of update since rhs should have really been -res

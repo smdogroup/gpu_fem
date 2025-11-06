@@ -91,8 +91,10 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
 
     // for K-cycles
+    // constexpr bool is_nonlinear = true;
+    constexpr bool is_nonlinear = false; // causes weird nonlinear adjustment here
     using KrylovSolve = PCGSolver<T, GRID>;
-    using TwoLevelSolve = MultigridTwoLevelSolver<GRID>;
+    using TwoLevelSolve = MultigridTwoLevelSolver<GRID, is_nonlinear>;
     using KMG = MultilevelKcycleSolver<GRID, CoarseSolver, TwoLevelSolve, KrylovSolve>;
 
     // create cublas and cusparse handles (single one each)
@@ -237,8 +239,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     printf("starting %s cycle solve\n", cycle_type.c_str());
     int pre_smooth = nsmooth, post_smooth = nsmooth;
     // best was V(4,4) before
-    // bool print = false;
-    bool print = true;
+    bool print = false;
+    // bool print = true;
     T atol = 1e-9, rtol = 1e-9;
     T omega2 = 1.5; // really is set up there
     int n_cycles = SR >= 100.0 ? 1000 : 200;
@@ -250,7 +252,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     bool double_smooth = true; // true tends to be slightly faster sometimes
 
     if (is_kcycle) {
-        int n_krylov = 500;
+        // int n_krylov = 500;
+        int n_krylov = 20;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, 
             n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
     }
@@ -504,8 +507,10 @@ int main(int argc, char **argv) {
     int nsmooth = 4; // may need more here (esp for MITC elements, but CFI can use less)
     int ninnercyc = 2; // inner V-cycles to precond K-cycle
     std::string cycle_type = "K"; // "V", "F", "W", "K"
-    // std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
-    std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+
+    // probably need more locking / multigrid friendly element than either of these (CFI4 is locking, while MITC4 has bad GMG performance)
+    std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
+    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {

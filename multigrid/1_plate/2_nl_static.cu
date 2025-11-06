@@ -204,11 +204,12 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     T atol = 1e-6, rtol = 1e-6;
     bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
 
-    int n_cycles = 500; // max # cycles
+    // int n_cycles = 500; // max # cycles
     int print_freq = 3;
 
     if (is_kcycle) {
-        int n_krylov = 500;
+        // int n_krylov = 500;
+        int n_krylov = 10;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
     }
 
@@ -437,7 +438,7 @@ int main(int argc, char **argv) {
     int nxe = 256; // default value (three grids)
     double SR = 100.0; // default
     int n_vcycles = 50;
-    double pressure = 3.0e6;
+    double pressure = 8.0e6;
 
     int nsmooth = 2; // typically faster right now
     int ninnercyc = 2; // inner V-cycles to precond K-cycle

@@ -63,7 +63,7 @@ class PCGSolver : public BaseSolver {
     void set_abs_tol(T atol) { options.atol = atol; }
     void set_rel_tol(T rtol) { options.rtol = rtol; }
 
-    void solve(DeviceVec<T> rhs_in, DeviceVec<T> soln_out, bool check_conv = false) {
+    bool solve(DeviceVec<T> rhs_in, DeviceVec<T> soln_out, bool check_conv = false) {
         // assumes rhs_in and soln_out are in permutation for solve (not natural order)
         // performs full K-cycle with left-precond flexible PCG (note this shows true resid even
         // though it is left precond, unlike GMRES)!
@@ -82,10 +82,11 @@ class PCGSolver : public BaseSolver {
 
         // compute |r_0|
         T init_resid_norm;
-        if (check_conv || options.print) {
+        if (check_conv) {
             CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_resid, 1, &init_resid_norm));
-            if (ilevel == 0) printf("L0-PCG init_resid = %.8e\n", init_resid_norm);
-            if (ilevel != 0) printf("\tL%d-PCG init_resid %.2e\n", ilevel, init_resid_norm);
+            if (options.print && ilevel == 0) printf("L0-PCG init_resid = %.8e\n", init_resid_norm);
+            if (options.print && ilevel != 0)
+                printf("\tL%d-PCG init_resid %.2e\n", ilevel, init_resid_norm);
         }
 
         T rho_prev, rho;  // coefficients that we need to remember
@@ -96,6 +97,8 @@ class PCGSolver : public BaseSolver {
             /* inner 1) solve Mz = r for z (precond) */
             // ----------------------------------------
             pc->solve(d_resid_vec, d_z_vec);
+
+            n_steps = j + 1;  // record the num steps
 
             /* 2) compute dot products, and p vec */
             // -------------------------------------
@@ -148,22 +151,21 @@ class PCGSolver : public BaseSolver {
             // cudaMemcpy(d_zprev, d_z, N * sizeof(T), cudaMemcpyDeviceToDevice);
 
             // check for convergence
-            if (check_conv || options.print) {
+            if (check_conv) {
                 T resid_norm;
                 CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_resid, 1, &resid_norm));
 
-                if (j % options.print_freq == 0) {
+                if (j % options.print_freq == 0 && options.print) {
                     if (ilevel == 0) printf("L0-PCG [%d] = %.8e\n", j, resid_norm);
                     if (ilevel != 0) printf("\tL%d-PCG [%d] = %.8e\n", ilevel, j, resid_norm);
                 }
 
-                if (check_conv &&
-                    abs(resid_norm) < (options.atol + init_resid_norm * options.rtol)) {
+                if (abs(resid_norm) < (options.atol + init_resid_norm * options.rtol)) {
                     converged = true;
-                    printf("init resid %.8e, rtol %.8e, atol %.8e, resid_norm %.8e\n",
-                           init_resid_norm, options.rtol, options.atol, resid_norm);
-                    printf("\nL0-PCG converged in %d iterations to %.9e resid\n", j + 1,
-                           resid_norm);
+                    if (options.print) {
+                        printf("\nL0-PCG converged in %d iterations to %.9e resid\n", j + 1,
+                               resid_norm);
+                    }
                     break;
                 }
             }
@@ -190,7 +192,14 @@ class PCGSolver : public BaseSolver {
 
         // copy internal soln to external solution of the solve method
         cudaMemcpy(soln_out.getPtr(), d_x, N * sizeof(T), cudaMemcpyDeviceToDevice);
+
+        // DEBUG
+        // printf("\t\t#solve-iters %d, fail %d\n", n_steps, !converged);
+
+        return !converged;
     }
+
+    int get_num_iterations() { return n_steps; }
 
     void free() {
         // TODO
@@ -211,6 +220,7 @@ class PCGSolver : public BaseSolver {
     T *d_vals;
     T *d_rhs, *d_x, *d_resid;
     DeviceVec<T> d_resid_vec;
+    int n_steps = 0;
 
     // cusparse and cublas handles
     cusparseHandle_t &cusparseHandle;

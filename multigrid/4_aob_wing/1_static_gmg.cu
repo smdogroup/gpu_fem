@@ -79,6 +79,13 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
 
     auto start0 = std::chrono::high_resolution_clock::now();
 
+    // create cublas and cusparse handles (single one each)
+    // -----------------------------------------------------
+    cublasHandle_t cublasHandle = NULL;
+    CHECK_CUBLAS(cublasCreate(&cublasHandle));
+    cusparseHandle_t cusparseHandle = NULL;
+    CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+
     // hopefully this doesn't construct the object?
     MG *mg;
     KMG *kmg;
@@ -168,17 +175,18 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
 
         // build smoother and prolongations
         T omega = 1.5; // for GS-SOR
-        auto smoother = new Smoother(assembler, kmat, h_color_rowp, omega);
+        auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omega);
         int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
         // int ELEM_MAX = 4;
-        auto prolongation = new Prolongation(assembler, ELEM_MAX);
-        auto grid = GRID(assembler, prolongation, smoother, kmat, loads);
+        auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
+        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
 
         if (is_kcycle) {
             kmg->grids.push_back(grid);
         } else {
             mg->grids.push_back(grid);
-            if (coarsest_grid) mg->coarse_solver = new CoarseSolver(assembler, kmat);
+            if (coarsest_grid) mg->coarse_solver = new CoarseSolver(cublasHandle, cusparseHandle, 
+                assembler, kmat);
         }
     }
 
@@ -213,7 +221,8 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
 
     if (is_kcycle) {
         int n_krylov = 500;
-        kmg->init_outer_solver(nsmooth, ninnercyc, n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
+        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, 
+            n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
     }
 
     // fastest is K-cycle usually
