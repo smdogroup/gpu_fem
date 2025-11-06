@@ -249,8 +249,10 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
 
     if (is_kcycle) {
         // int n_krylov = 500;
-        int n_krylov = 20;
+        // int n_krylov = 20;
+        // int n_krylov = 30;
         // int n_krylov = 50;
+        int n_krylov = 100;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, 
             n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
     }
@@ -290,7 +292,7 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
     // bool use_predictor = true;
-    bool use_predictor = false;
+    bool use_predictor = false; // need to do something else to the predictor like smooth it for NL MG case.
 
     INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg);
     NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver, use_predictor);
@@ -299,7 +301,7 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     T lambda0 = 0.2;
     // T lambda0 = 0.1;
     // T lambda0 = 0.05;
-    T inner_atol = 1e-3;
+    T inner_atol = 1e-2;
     // T inner_atol = 1e-8;
     nl_solver->solve(fine_vars, lambda0, inner_atol);
     T nl_max_disp = get_max_disp(fine_vars);
@@ -484,9 +486,12 @@ void solve_nonlinear_direct(MPI_Comm &comm, int level, double SR, double total_f
     using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, LinearSolver>;
     using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
+    bool use_predictor = true;
+    // bool use_predictor = false;
+
     LinearSolver *solver = new LinearSolver(cublasHandle, cusparseHandle, assembler, kmat);
     INK *inner_solver = new INK(cublasHandle, assembler, kmat, loads, solver);
-    NL *nl_solver = new NL(cublasHandle, assembler, inner_solver);
+    NL *nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor);
 
     // now try calling it
     T lambda0 = 0.2;
@@ -534,7 +539,8 @@ int main(int argc, char **argv) {
     MPI_Comm comm = MPI_COMM_WORLD;
 
     // DEFAULTS
-    int level = 1; // level mesh to solve.. level 4 also a good starting setting (big case)
+    // int level = 1; // for debug
+    int level = 3; // level mesh to solve.. level 4 also a good starting setting (big case)
     bool is_multigrid = true;
     // bool is_debug = false;
     
@@ -543,16 +549,16 @@ int main(int argc, char **argv) {
     // double SR = 100.0; // so that uses optimal design from AOB paper
 
     // less slender harder to buckle and can step into NL better (SR depends on wing length too, uCRM can be a bit more slender maybe because of the better narrower design, less likely to buckle, like beam)
-    double force = 2e7;
-    double SR = 20.0; // so that uses optimal design from AOB paper
+    double force = 2e7; // go up to 4e7 if want deeper NL response
+    double SR = 10.0; // so that uses optimal design from AOB paper
 
     int nsmooth = 4; // may need more here (esp for MITC elements, but CFI can use less)
     int ninnercyc = 2; // inner V-cycles to precond K-cycle
     std::string cycle_type = "K"; // "V", "F", "W", "K"
 
     // probably need more locking / multigrid friendly element than either of these (CFI4 is locking, while MITC4 has bad GMG performance)
-    std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
-    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+    // std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
+    std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {

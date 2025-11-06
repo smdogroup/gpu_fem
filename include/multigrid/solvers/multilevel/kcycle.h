@@ -72,6 +72,7 @@ class MultilevelKcycleSolver {
         }
     }
 
+    void set_abs_tol(T rtol) { outer_solver->set_abs_tol(rtol); }
     void set_rel_tol(T rtol) { outer_solver->set_rel_tol(rtol); }
 
     void set_design_variables(DeviceVec<T> dvs) {

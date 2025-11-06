@@ -46,7 +46,9 @@ class InexactNewtonSolver {
         T prev_res_nrm = init_res_nrm;
 
         T linSolveRtol = 0.01;
-        T linSolveAtol = 1e-12;
+        T linSolveAtol = atol * 1e-2;  // high load case.. depends
+        // T linSolveAtol = 1e-12;
+        linear_solver->set_abs_tol(linSolveAtol);
 
         bool converged = false;
         bool fatalFailure = false;
@@ -60,8 +62,8 @@ class InexactNewtonSolver {
             converged = checkConvergence(res_nrm, rtol, atol, init_res_nrm);
             int _line_search_iters = inewton == 0 ? 0 : line_search_iters;
             int solver_iterations = inewton == 0 ? 0 : linear_solver->get_num_iterations();
-            printf("\tinewton %d => resid %.5e, #l-search %d, #solve-iters %d\n", inewton, res_nrm,
-                   _line_search_iters, solver_iterations);
+            printf("\tinewton %d => resid %.5e, #l-search %d, #solve-iters %d, lrtol %.4e\n",
+                   inewton, res_nrm, _line_search_iters, solver_iterations, linSolveRtol);
             if (converged) break;     // return success
             if (fatalFailure) break;  // return failure
 
@@ -72,24 +74,41 @@ class InexactNewtonSolver {
             // Eisenstat-Walker method to update linear solve atol (to prevent over-solving)
             // ------------------------------------------------------------
             T zeta = std::pow(res_nrm / prev_res_nrm, omega);
-            T zeta_star = std::pow(prev_res_nrm, omega);
+            T zeta_star = std::pow(linSolveRtol, omega);
             // Ali has slight mistake here I think where he changes the atol not rtol in lin solve
             linSolveRtol = zeta_star < 0.1 ? zeta : max(zeta, zeta_star);
             linSolveRtol = std::clamp(linSolveRtol, 1e-12, 1e-2);  // clip the rtol
+
+            // double check that linSolveRtol not way smaller than init resid * rtol
+            // if (linSolveRtol * res_nrm <= rtol * init_res_nrm * 1e-2) {
+            //     linSolveRtol =
+            // }
+
+            // if (lambda == 1.0 && linSolveRtol == 1e-2) {
+            //     printf(
+            //         "warning EW is driving lin solve rtol to only 1e-2 with prev_res_nrm %.4e =>
+            //         " "res_nrm %.4e\n", prev_res_nrm, res_nrm);
+            // }
+            // linSolveRtol = std::clamp(linSolveRtol, 1e-12,
+            //   1e-3);  // clip the rtol (new slightly stricter rtol)
             linear_solver->set_rel_tol(linSolveRtol);
 
             // do an iterative linear solve here
             // ---------------------------------
 
-            // NOTE : res and update are held in VIS (visualization) order in this class,
-            // while the linear solver expects everything in solve perm/order (so we permute to and
-            // from that)
+            // NOTE : res and update are held in VIS (visualization) order
+            // in this class, while the linear solver expects everything
+            // in solve perm/order (so we permute to and from that)
             update.zeroValues();
-            res.permuteData(block_dim, d_iperm);  // res from VIS => SOLVE order
+            res.permuteData(block_dim,
+                            d_iperm);  // res from VIS => SOLVE order
             fatalFailure = linear_solver->solve(res, update);
-            update.permuteData(block_dim, d_perm);  // update from SOLVE => VIS order
+            update.permuteData(block_dim,
+                               d_perm);  // update from SOLVE => VIS order
 
-            if (fatalFailure) continue;  // don't do line search update with this, skip to exit
+            if (fatalFailure)
+                continue;  // don't do line search update with this, skip
+                           // to exit
 
             // flip sign of update since rhs should have really been -res
             T a = -1.0;
@@ -106,12 +125,13 @@ class InexactNewtonSolver {
 
             // DEBUG prints here
             // ========================================
-            // printf("\t\tlinsolveRelTol %.6e, alpha %.4e\n", linSolveRtol, alpha);
-            // T update_nrm;
-            // CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, update.getPtr(), 1, &update_nrm));
-            // T vars_nrm;
-            // CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, vars.getPtr(), 1, &vars_nrm));
-            // printf("\t\tupdate nrm %.8e, vars nrm %.8e\n", update_nrm, vars_nrm);
+            // printf("\t\tlinsolveRelTol %.6e, alpha %.4e\n",
+            // linSolveRtol, alpha); T update_nrm;
+            // CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars,
+            // update.getPtr(), 1, &update_nrm)); T vars_nrm;
+            // CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars,
+            // vars.getPtr(), 1, &vars_nrm)); printf("\t\tupdate nrm %.8e,
+            // vars nrm %.8e\n", update_nrm, vars_nrm);
         }
 
         // now copy solution out

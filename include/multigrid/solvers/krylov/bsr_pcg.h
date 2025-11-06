@@ -76,10 +76,12 @@ class PCGSolver : public BaseSolver {
 
         // compute r_0 = b - Ax
         CHECK_CUDA(cudaMemcpy(d_resid, d_rhs, N * sizeof(T), cudaMemcpyDeviceToDevice));
-        T a = -1.0, b = 1.0;
-        CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
-                                      CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb, &a, descrK,
-                                      d_vals, d_rowp, d_cols, block_dim, d_x, &b, d_resid));
+        // T a = -1.0, b = 1.0;
+        // CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
+        //                               CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb, &a, descrK,
+        //                               d_vals, d_rowp, d_cols, block_dim, d_x, &b, d_resid));
+
+        n_steps = 0;
 
         // compute |r_0|
         T init_resid_norm;

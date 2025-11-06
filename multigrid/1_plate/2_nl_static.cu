@@ -109,7 +109,10 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     }
 
     // get nxe_min for not exactly power of 2 case
-    int pre_nxe_min = nxe > 32 ? 32 : 4;
+    // int pre_nxe_min = nxe > 16 ? 16 : 4; // 2x slower with this setting (takes more V-cycles)
+    int pre_nxe_min = nxe > 32 ? 32 : 4; // but on higher nxe, this one is more robust somehow
+    // int pre_nxe_min = nxe > 64 ? 64 : 4; // solved about 33% faster with this as coarsest grid (for nxe = 256, but prob need faster direct solver on GPU)
+
     int nxe_min = pre_nxe_min;
     for (int c_nxe = nxe; c_nxe >= pre_nxe_min; c_nxe /= 2) {
         nxe_min = c_nxe;
@@ -209,7 +212,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
 
     if (is_kcycle) {
         // int n_krylov = 500;
-        int n_krylov = 10;
+        // int n_krylov = 10;
+        int n_krylov = 20;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
     }
 
@@ -419,14 +423,15 @@ int main(int argc, char **argv) {
     // input ----------
     bool is_multigrid = true;
     int nxe = 256; // default value (three grids)
-    double SR = 100.0; // default
+    double SR = 100.0; // default, the less slender it is, solves much faster
     int n_vcycles = 50;
     double pressure = 8.0e6;
 
     int nsmooth = 2; // typically faster right now
     int ninnercyc = 2; // inner V-cycles to precond K-cycle
     std::string cycle_type = "K"; // "V", "F", "W", "K"
-    std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+    std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
