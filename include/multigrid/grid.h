@@ -270,7 +270,17 @@ class SingleGrid {
     }
 
     void free() {
-        // TBD::
+        if (is_free) return;
+        is_free = true;  // now it's freed
+
+        d_rhs.free();
+        d_defect.free();
+        d_soln.free();
+        d_temp_vec.free();
+        d_vars.free();
+        if (d_temp2) cudaFree(d_temp2);
+        if (d_temp) cudaFree(d_temp);
+        if (d_resid) cudaFree(d_resid);
     }
 
     // public data
@@ -291,6 +301,8 @@ class SingleGrid {
 
    private:
     T *d_resid;
+
+    bool is_free = false;
 
     // private data
     cusparseMatDescr_t descrKmat = 0, descrDinvMat = 0;

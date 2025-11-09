@@ -205,8 +205,18 @@ class PCGSolver : public BaseSolver {
     int get_num_iterations() { return n_steps; }
 
     void free() {
-        // TODO
-        return;
+        if (is_free) return;
+        is_free = true;  // now it's freed
+
+        if (grid) grid->free();
+        d_resid_vec.free();
+        if (d_x) cudaFree(d_x);
+        if (d_rhs) cudaFree(d_rhs);
+        if (d_tmp) cudaFree(d_tmp);
+        if (d_p) cudaFree(d_p);
+        if (d_w) cudaFree(d_w);
+        if (d_z) cudaFree(d_z);
+        d_z_vec.free();
     }
 
     GRID *grid;
@@ -224,6 +234,8 @@ class PCGSolver : public BaseSolver {
     T *d_rhs, *d_x, *d_resid;
     DeviceVec<T> d_resid_vec;
     int n_steps = 0;
+
+    bool is_free = false;
 
     // cusparse and cublas handles
     cusparseHandle_t &cusparseHandle;

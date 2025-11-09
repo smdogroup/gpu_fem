@@ -251,8 +251,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
         // int n_krylov = 500;
         // int n_krylov = 20;
         // int n_krylov = 30;
-        // int n_krylov = 50;
-        int n_krylov = 100;
+        int n_krylov = 50;
+        // int n_krylov = 100;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, 
             n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
     }
@@ -294,15 +294,26 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     // bool use_predictor = true;
     bool use_predictor = false; // need to do something else to the predictor like smooth it for NL MG case.
 
-    INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg);
-    NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver, use_predictor);
+    T initLinSolveRtol = 1e-1; // defualt (start undersolving, then over-solve later)
+    T linSolveAtol = 1e-2; // lower atol for this case
+
+    bool debug = true;
+    // bool debug = false;
+
+    INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg, initLinSolveRtol, linSolveAtol);
+    NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver, use_predictor, debug);
 
     // now try calling it
     T lambda0 = 0.2;
     // T lambda0 = 0.1;
     // T lambda0 = 0.05;
-    T inner_atol = 1e-2;
+
+    T inner_atol = 1e0;
+    // T inner_atol = 1e-2;
     // T inner_atol = 1e-8;
+
+    
+
     nl_solver->solve(fine_vars, lambda0, inner_atol);
     T nl_max_disp = get_max_disp(fine_vars);
     // printf("done with continuation solve - DEBUG PRINT\n");
@@ -314,6 +325,79 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     // important to know reduction for how NL regime we are
     T ratio = nl_max_disp / lin_max_disp;
     printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
+
+    // // DEBUG (after exiting at failed state) (put in NL MG code)
+    // ==================================================
+
+    
+    if (debug) {
+        printf("\n======================================\nBEGIN DEBUG\n");
+        auto h_vars0 = fine_vars.createHostVec();
+        printToVTK<Assembler,HostVec<T>>(fine_assembler, h_vars0, "out/wing_failed_state.vtk");
+
+        // compute residual
+        kmg->set_print(true); // turn on print for the outer solver
+        T lambda = nl_solver->get_last_lambda();
+        inner_solver->debug_solve(lambda, 1e-3, 1e-8, fine_vars, fine_res);
+        printf("done with inner solver debug solve - DEBUG PRINT\n");
+
+        // add grids and coarse solver from the kmg to gmg V-cycle solver
+        mg = new MG();
+        for (int i = 0; i < grids.size(); i++) {
+            mg->grids.push_back(grids[i]);
+        }
+        printf("pushed back grids\n");
+        mg->coarse_solver = static_cast<CoarseSolver*>(kmg->coarse_solver);
+
+        // make also a fine grid direct solver..
+        // need new fine mat though with different sparsity pattern though (full fillin)
+        // need to make the fine assembler again (otherwise it's failing)
+        std::string fname = "meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+        TACSMeshLoader mesh_loader2{comm};
+        mesh_loader2.scanBDFFile(fname.c_str());
+        double E = 70e9, nu = 0.3, thick = 2.0 / SR; 
+        printf("making assembler+GMG for mesh '%s'\n", fname.c_str());
+        auto fine_assembler2 = Assembler::createFromBDF(mesh_loader2, Data(E, nu, thick));
+        auto &bsr_data2 = fine_assembler2.getBsrData();
+        bsr_data2.AMD_reordering();
+        bsr_data2.compute_full_LU_pattern(10.0, false);
+        fine_assembler2.moveBsrDataToDevice();
+
+        auto fine_LU_kmat = createBsrMat<Assembler, VecType<T>>(fine_assembler2);
+        fine_assembler2.set_variables(fine_vars); // set variables of NL state into it
+        fine_assembler2.add_jacobian_fast(fine_LU_kmat);
+        fine_assembler2.apply_bcs(fine_LU_kmat);
+        
+        
+        auto fine_solver = new CoarseSolver(cublasHandle, cusparseHandle, 
+                fine_assembler2, fine_LU_kmat);
+
+        // test the fine solver out first on the residual (to make sure it works reasonably well..)
+        auto h_res = fine_res.createHostVec();
+        printToVTK<Assembler,HostVec<T>>(fine_assembler, h_res, "out/debug/wing_fine_res.vtk");
+        
+        fine_res.permuteData(6, bsr_data2.iperm); // VIS to full LU solve order
+        fine_solver->solve(fine_res, fine_soln);
+        fine_soln.permuteData(6, bsr_data2.perm); // full LU solve to VIS order
+        auto h_solnf = fine_soln.createHostVec();
+        printToVTK<Assembler,HostVec<T>>(fine_assembler, h_solnf, "out/debug/wing_fine_exact_soln.vtk");
+        fine_res.permuteData(6, bsr_data2.perm); // LU solve to VIS order
+
+        // can either run with previous defect sitting in fine grid
+        // AND not setDefect
+
+        // OR reset the defect to the fine residual.. you pick
+        grids[0].setDefect(fine_res);
+        grids[0].d_soln.zeroValues();
+
+        // now try solving V-cycles manually
+        printf("BEGIN V-cycle solve\n");
+        mg->template debug_vcycle_solve<Assembler>(fine_solver, bsr_data2, 0, 4, 4, 10, true, 1e-8, 1e-8, true, 5);
+        printf("\n======================================\nEND DEBUG\n");
+    }
+
+    // ==================================================
+
 
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start1;
@@ -330,56 +414,7 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
 }
 
 
-// // DEBUG (after exiting at failed state) (put in NL MG code)
-// // ==================================================
 
-// bool debug = true;
-// if (debug) {
-//     auto h_vars0 = fine_vars.createHostVec();
-//     printToVTK<Assembler,HostVec<T>>(fine_assembler, h_vars0, "out/wing_failed_state.vtk");
-
-//     // compute residual
-//     kmg->set_print(true); // turn on print for the outer solver
-//     T lambda = nl_solver->get_last_lambda();
-//     inner_solver->debug_solve(lambda, 1e-3, 1e-8, fine_vars, fine_res);
-//     printf("done with inner solver debug solve - DEBUG PRINT\n");
-
-//     // add grids and coarse solver from the kmg to gmg V-cycle solver
-//     mg = new MG();
-//     for (int i = 0; i < grids.size(); i++) {
-//         mg->grids.push_back(grids[i]);
-//     }
-//     printf("pushed back grids\n");
-//     mg->coarse_solver = static_cast<CoarseSolver*>(kmg->coarse_solver);
-
-//     // make also a fine grid direct solver..
-//     auto fine_solver = new CoarseSolver(cublasHandle, cusparseHandle, 
-//             grids[0].assembler, grids[0].Kmat);
-
-//     // test the fine solver out first on the residual (to make sure it works reasonably well..)
-//     auto h_res = fine_res.createHostVec();
-//     printToVTK<Assembler,HostVec<T>>(fine_assembler, h_res, "out/debug/wing_fine_res.vtk");
-    
-//     fine_res.permuteData(6, grids[0].d_iperm);
-//     fine_solver->solve(fine_res, fine_soln);
-//     fine_soln.permuteData(6, grids[0].d_perm);
-//     auto h_solnf = fine_soln.createHostVec();
-//     printToVTK<Assembler,HostVec<T>>(fine_assembler, h_solnf, "out/debug/wing_fine_exact_soln.vtk");
-//     fine_res.permuteData(6, grids[0].d_perm);
-
-//     // can either run with previous defect sitting in fine grid
-//     // AND not setDefect
-
-//     // OR reset the defect to the fine residual.. you pick
-//     grids[0].setDefect(fine_res);
-//     grids[0].d_soln.zeroValues();
-
-//     // now try solving V-cycles manually
-//     printf("BEGIN V-cycle solve\n");
-//     mg->template debug_vcycle_solve<Assembler>(fine_solver, 0, 4, 4, 10, true, 1e-8, 1e-8, true, 5);
-// }
-
-// ==================================================
 
 
 template <typename T, class Assembler>

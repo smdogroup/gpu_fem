@@ -11,7 +11,7 @@ class BaseSolver {
     virtual void set_rel_tol(T atol) = 0;
     virtual int get_num_iterations() = 0;
     virtual void set_print(bool print) = 0;
-    // virtual void free();
+    virtual void free() = 0;
 };
 
 class SolverOptions {

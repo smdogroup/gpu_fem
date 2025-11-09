@@ -177,11 +177,15 @@ class MultilevelKcycleSolver {
     void solve() { this->solve(grids[0].d_defect, grids[0].d_soln); }
 
     void free() {
+        if (is_free) return;
+        is_free = true;  // now it's freed
+
         int n_levels = getNumLevels();
         for (int ilevel = 0; ilevel < n_levels; ilevel++) {
             grids[ilevel].free();
-            // solvers[ilevel]->free();
+            solvers[ilevel]->free();
         }
+        outer_solver->free();
     }
 
     // private:
@@ -191,6 +195,8 @@ class MultilevelKcycleSolver {
     std::vector<GRID> grids;            // stored fine to coarse
 
    private:
+    bool is_free = false;
+
     // helper methods for updating after jacobian update
     void _update_coarse_grid_states() {
         /* update all state variables from fine grid down to coarser grids (for nonlinear solutions)

@@ -174,14 +174,16 @@ class CusparseMGDirectLU : public BaseSolver {
     }
 
     void free() {
+        if (is_free) return;
+        is_free = true;  // now it's freed
+
         cudaFree(pBuffer);
-        cudaFree(d_vals_ILU0);
-        cudaFree(d_temp);
+        if (d_vals_ILU0) cudaFree(d_vals_ILU0);
+        if (d_temp) cudaFree(d_temp);
         cusparseDestroyMatDescr(descr_L);
         cusparseDestroyMatDescr(descr_U);
         cusparseDestroyBsrsv2Info(info_L);
         cusparseDestroyBsrsv2Info(info_U);
-        cusparseDestroy(cusparseHandle);
         cusparseDestroyBsrilu02Info(info_M);
         cusparseDestroyMatDescr(descr_M);
     }
@@ -191,6 +193,8 @@ class CusparseMGDirectLU : public BaseSolver {
     int mb, N, nnzb, nnz, block_dim, *d_rowp, *d_cols;
     DeviceVec<T> temp_vec;
     T *d_temp, *d_vals, *d_vals_ILU0;
+
+    bool is_free = false;
 
     // cusparse and cublas data
     cublasHandle_t &cublasHandle;

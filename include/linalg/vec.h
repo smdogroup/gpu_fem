@@ -405,12 +405,18 @@ class DeviceVec : public BaseVec<T> {
     }
 
     void free() {
+        if (is_free) return;
+        is_free = true;  // now it's freed
+
         if (this->data) {
             cudaFree(this->data);
         }
     }
 #endif  // USE_GPU
-};      // end of DeviceVec
+
+   private:
+    bool is_free = false;
+};  // end of DeviceVec
 
 template <typename T>
 class HostVec : public BaseVec<T> {
@@ -503,10 +509,15 @@ class HostVec : public BaseVec<T> {
     __HOST__ HostVec<T> createHostVec() { return *this; }
 
     void free() {
+        if (is_free) return;
+        is_free = true;  // now it's freed
         if (this->data) {
             delete[] this->data;
         }
     }
+
+   private:
+    bool is_free = false;
 };  // end of HostVec
 
 /*

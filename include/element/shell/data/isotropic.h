@@ -5,6 +5,7 @@
 struct ShellConstants {
     static constexpr double transverseShearCorrectionFactor = 5.0 / 6.0;
     static constexpr double drillingRegularization = 10.0;
+    // static constexpr double drillingRegularization = 50.0;
 };
 
 // could be an internal class for each type of physics

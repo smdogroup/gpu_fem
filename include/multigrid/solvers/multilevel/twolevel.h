@@ -84,8 +84,9 @@ class MultigridTwoLevelSolver : public BaseSolver {
     }
 
     void free() {
-        // TODO
-        return;
+        if (fine_grid) fine_grid->free();
+        if (coarse_grid) coarse_grid->free();
+        if (coarse_solver) coarse_solver->free();
     }
 
     SolverOptions options;

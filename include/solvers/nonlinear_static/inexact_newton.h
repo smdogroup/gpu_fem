@@ -14,7 +14,8 @@ template <typename T, class Mat, class Vec, class Assembler, class Solver>
 class InexactNewtonSolver {
    public:
     InexactNewtonSolver(cublasHandle_t &cublasHandle_, Assembler &assembler_, Mat &kmat_,
-                        Vec &loads_, Solver *linear_solver_)
+                        Vec &loads_, Solver *linear_solver_, T initLinSolveRtol_ = 1e-1,
+                        T linSolveAtol_ = 1e-8)
         : assembler(assembler_),
           kmat(kmat_),
           loads(loads_),
@@ -27,6 +28,11 @@ class InexactNewtonSolver {
         block_dim = bsr_data.block_dim;
         d_iperm = bsr_data.iperm;
         d_perm = bsr_data.perm;
+
+        linear_solver->set_abs_tol(linSolveAtol);
+
+        initLinSolveRtol = initLinSolveRtol_;
+        linSolveAtol = linSolveAtol_;
 
         // make res, soln, temp vecs
         res = assembler.createVarsVec();
@@ -45,10 +51,7 @@ class InexactNewtonSolver {
         T init_res_nrm = computeResidual(lambda);
         T prev_res_nrm = init_res_nrm;
 
-        T linSolveRtol = 0.01;
-        T linSolveAtol = atol * 1e-2;  // high load case.. depends
-        // T linSolveAtol = 1e-12;
-        linear_solver->set_abs_tol(linSolveAtol);
+        T linSolveRtol = initLinSolveRtol;
 
         bool converged = false;
         bool fatalFailure = false;
@@ -60,10 +63,14 @@ class InexactNewtonSolver {
             // res and convergence check
             T res_nrm = computeResidual(lambda);
             converged = checkConvergence(res_nrm, rtol, atol, init_res_nrm);
-            int _line_search_iters = inewton == 0 ? 0 : line_search_iters;
-            int solver_iterations = inewton == 0 ? 0 : linear_solver->get_num_iterations();
-            printf("\tinewton %d => resid %.5e, #l-search %d, #solve-iters %d, lrtol %.4e\n",
-                   inewton, res_nrm, _line_search_iters, solver_iterations, linSolveRtol);
+            int solver_iterations = linear_solver->get_num_iterations();
+            if (inewton == 0) {
+                printf("\tinewton 0 => resid %.5e\n", res_nrm);
+            } else {
+                printf("\tinewton %d => resid %.5e, #l-search %d, #solve-iters %d, lrtol %.2e\n",
+                       inewton, res_nrm, line_search_iters, solver_iterations, linSolveRtol);
+            }
+
             if (converged) break;     // return success
             if (fatalFailure) break;  // return failure
 
@@ -73,25 +80,15 @@ class InexactNewtonSolver {
 
             // Eisenstat-Walker method to update linear solve atol (to prevent over-solving)
             // ------------------------------------------------------------
-            T zeta = std::pow(res_nrm / prev_res_nrm, omega);
-            T zeta_star = std::pow(linSolveRtol, omega);
-            // Ali has slight mistake here I think where he changes the atol not rtol in lin solve
-            linSolveRtol = zeta_star < 0.1 ? zeta : max(zeta, zeta_star);
-            linSolveRtol = std::clamp(linSolveRtol, 1e-12, 1e-2);  // clip the rtol
-
-            // double check that linSolveRtol not way smaller than init resid * rtol
-            // if (linSolveRtol * res_nrm <= rtol * init_res_nrm * 1e-2) {
-            //     linSolveRtol =
-            // }
-
-            // if (lambda == 1.0 && linSolveRtol == 1e-2) {
-            //     printf(
-            //         "warning EW is driving lin solve rtol to only 1e-2 with prev_res_nrm %.4e =>
-            //         " "res_nrm %.4e\n", prev_res_nrm, res_nrm);
-            // }
-            // linSolveRtol = std::clamp(linSolveRtol, 1e-12,
-            //   1e-3);  // clip the rtol (new slightly stricter rtol)
-            linear_solver->set_rel_tol(linSolveRtol);
+            if (inewton > 0) {
+                T zeta = std::pow(res_nrm / prev_res_nrm, omega);
+                T zeta_star = std::pow(linSolveRtol, omega);
+                // Ali has slight mistake here I think where he changes the atol not rtol in lin
+                // solve
+                linSolveRtol = zeta_star < 0.1 ? zeta : max(zeta, zeta_star);
+                linSolveRtol = std::clamp(linSolveRtol, 1e-12, 0.5);  // clip the rtol
+                linear_solver->set_rel_tol(linSolveRtol);
+            }
 
             // do an iterative linear solve here
             // ---------------------------------
@@ -106,9 +103,10 @@ class InexactNewtonSolver {
             update.permuteData(block_dim,
                                d_perm);  // update from SOLVE => VIS order
 
-            if (fatalFailure)
-                continue;  // don't do line search update with this, skip
-                           // to exit
+            if (fatalFailure) {
+                failedRtol = linSolveRtol;
+                continue;
+            }
 
             // flip sign of update since rhs should have really been -res
             T a = -1.0;
@@ -122,6 +120,8 @@ class InexactNewtonSolver {
             CHECK_CUBLAS(
                 cublasDaxpy(cublasHandle, nvars, &a, update.getPtr(), 1, vars.getPtr(), 1));
             assembler.set_variables(vars);
+
+            prev_res_nrm = res_nrm;
 
             // DEBUG prints here
             // ========================================
@@ -152,6 +152,13 @@ class InexactNewtonSolver {
         CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, res.getPtr(), 1, &res_norm));
         // printf("resid nrm %.8e\n", res_norm);
         return res_norm;
+    }
+
+    T getResidual(T &lambda, DeviceVec<T> d_res_out) {
+        /* get residual vector and norm */
+        T res_nrm = computeResidual(lambda);
+        res.copyValuesTo(d_res_out);  // in vis order
+        return res_nrm;
     }
 
     bool checkConvergence(T resid_nrm, T rtol, T atol, T init_resid_nrm) {
@@ -266,6 +273,9 @@ class InexactNewtonSolver {
         linear_solver->template debug_assembly<Assembler>();
         // printf("DONE WITH DEBUG ASSEMBLY (DEBUG)\n");
 
+        linear_solver->set_rel_tol(failedRtol);  // set to same as what failed here
+        printf("setting lin solve to failed rtol %.4e\n", failedRtol);
+
         // run linear solve (with debug flag on?)
         printf("calling linear solver in DEBUG SOLVE\n");
         update.zeroValues();
@@ -276,12 +286,24 @@ class InexactNewtonSolver {
         printf("\tdone calling linear solver in DEBUG SOLVE\n");
     }
 
+    void free() {
+        loads.free();
+        res.free();
+        soln.free();
+        temp.free();
+        vars.free();
+        update.free();
+    }
+
    private:
     // main / most important states
     Assembler assembler;
     Mat kmat;
     Vec loads, res, soln, temp, vars, update;
     Solver *linear_solver;
+
+    T initLinSolveRtol, linSolveAtol;
+    T failedRtol;
 
     // helper states
     T omega;

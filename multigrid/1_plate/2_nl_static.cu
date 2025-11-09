@@ -257,7 +257,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
     INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg);
-    NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver);
+    bool use_predictor = true, debug = false;
+    NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver, use_predictor, debug);
 
     // now try calling it
     T lambda0 = 0.2;

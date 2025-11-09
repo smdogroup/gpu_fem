@@ -293,12 +293,16 @@ class GeometricMultigridSolver {
         for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
             grids[ilevel].free();
         }
+        if (coarse_solver) coarse_solver->free();
     }
 
     int nxe;  //, n_levels;
     bool setup;
     std::vector<GRID> grids;
     CoarseSolver *coarse_solver;
+
+    // TEMPORARY DEBUG ROUTINES
+    // =======================================================
 
     template <class Assembler>
     void _print_vtk_debug(int icycle, int ilevel, std::string quantity, std::string filename) {
@@ -325,10 +329,85 @@ class GeometricMultigridSolver {
         }
     }
 
+    void getCoarseFineStep(int starting_level, int pre_smooth, int post_smooth,
+                           DeviceVec<T> &i_defect, DeviceVec<T> &ism_defect, DeviceVec<T> &cf_soln,
+                           DeviceVec<T> &ch_defect, DeviceVec<T> &fsm_defect, bool smooth = true,
+                           bool double_smooth = true) {
+        /* run a single coarse-fine step, getting the orig defect, disp and proposed defect update
+         * for debugging */
+
+        // assumes fine grid defect already been set (or continuation of previous step)
+        auto fine_soln = DeviceVec<T>(grids[0].N);
+
+        // init defect nrm
+        T init_defect_nrm = grids[0].getDefectNorm();
+        int n_levels = getNumLevels();
+
+        /* restrict and pre-smooth */
+        // -----------------------------------------------------------
+
+        // copy out current defect
+        grids[starting_level].d_defect.copyValuesTo(i_defect);
+        i_defect.permuteData(6, grids[starting_level].d_perm);
+
+        for (int i_level = starting_level; i_level < n_levels - 1; i_level++) {
+            if (smooth) {
+                int inner_pre_smooth = pre_smooth * (double_smooth ? 1 << i_level : 1);
+                grids[i_level].smoothDefect(inner_pre_smooth, false, inner_pre_smooth - 1);
+            }
+
+            // copy out pre-smoothed defect
+            if (i_level == starting_level) {
+                grids[starting_level].d_defect.copyValuesTo(ism_defect);
+                ism_defect.permuteData(6, grids[starting_level].d_perm);
+            }
+
+            // restrict defect
+            grids[i_level + 1].restrict_defect(grids[i_level].d_defect);
+        }
+
+        /* coarse solve */
+        // -----------------------------------------------------------
+
+        coarse_solver->solve(grids[n_levels - 1].d_defect, grids[n_levels - 1].d_soln);
+
+        /* prolongations + post-smooths back up the levels */
+        // ----------------------------------------------------------------------------
+
+        for (int i_level = n_levels - 2; i_level >= starting_level; i_level--) {
+            // get coarse-fine correction from coarser grid to this grid
+            grids[i_level].prolongate(grids[i_level + 1].d_soln);
+
+            // copy out cf soln, and proposed change in defect
+            if (i_level == starting_level) {
+                printf("level %d cf, omega = %.6e\n", i_level, grids[i_level].omega);
+                grids[starting_level].d_soln.copyValuesTo(cf_soln);
+                cf_soln.permuteData(6, grids[starting_level].d_perm);
+
+                cudaMemcpy(ch_defect.getPtr(), grids[starting_level].d_temp2,
+                           grids[starting_level].N * sizeof(T), cudaMemcpyDeviceToDevice);
+                T a = grids[starting_level].omega;  // what we're subtracting from current defect..
+                CHECK_CUBLAS(cublasDscal(grids[starting_level].cublasHandle,
+                                         grids[starting_level].N, &a, ch_defect.getPtr(), 1));
+
+                ch_defect.permuteData(6, grids[starting_level].d_perm);
+            }
+
+            // post-smooth
+            int inner_post_smooth = post_smooth * (double_smooth ? 1 << i_level : 1);
+            grids[i_level].smoothDefect(inner_post_smooth, false, inner_post_smooth - 1);
+        }
+
+        // copy out final post-smoothed defect
+        grids[starting_level].d_defect.copyValuesTo(fsm_defect);
+        fsm_defect.permuteData(6, grids[starting_level].d_perm);
+    }
+
     template <class Assembler>
-    void debug_vcycle_solve(CoarseSolver *fine_solver, int starting_level, int pre_smooth,
-                            int post_smooth, int n_vcycles = 100, bool print = false, T atol = 1e-6,
-                            T rtol = 1e-6, bool double_smooth = false, int print_freq = 1) {
+    void debug_vcycle_solve(CoarseSolver *fine_LU_solver, BsrData &fine_LU_bsr_data,
+                            int starting_level, int pre_smooth, int post_smooth,
+                            int n_vcycles = 100, bool print = false, T atol = 1e-6, T rtol = 1e-6,
+                            bool double_smooth = false, int print_freq = 1) {
         /* debug Vcycle solve to do VTK writing (esp to help debug NL problems) */
 
         // make some temporary vecs
@@ -379,7 +458,17 @@ class GeometricMultigridSolver {
                 // need to get exact solution of current defect, with direct solver (to compare with
                 // coarse-fine prediction)
                 if (i_level == 0) {
-                    fine_solver->solve(grids[i_level].d_defect, fine_soln);
+                    // need to do several perms here
+                    grids[i_level].d_defect.permuteData(
+                        6, grids[i_level].d_perm);  // MC solve to VIS order
+                    grids[i_level].d_defect.permuteData(
+                        6, fine_LU_bsr_data.iperm);  // VIS to LU solve order
+                    fine_LU_solver->solve(grids[i_level].d_defect, fine_soln);
+                    grids[i_level].d_defect.permuteData(
+                        6, fine_LU_bsr_data.perm);  // LU solve to VIS order
+                    grids[i_level].d_defect.permuteData(
+                        6, grids[i_level].d_iperm);                   // VIS to MC solve order
+                    fine_soln.permuteData(6, fine_LU_bsr_data.perm);  // LU solve to VIS order
                 }
 
                 // get coarse-fine correction from coarser grid to this grid
@@ -407,7 +496,6 @@ class GeometricMultigridSolver {
 
                     outputFile << "out/debug/step10_LUsoln"
                                << "_level_" << i_level << "_cycle" << i_vcycle << ".vtk";
-                    fine_soln.permuteData(6, grids[i_level].d_perm);
                     auto h_soln = fine_soln.createHostVec();
                     printToVTK<Assembler, HostVec<T>>(grids[i_level].assembler, h_soln,
                                                       outputFile.str());

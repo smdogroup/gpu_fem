@@ -88,7 +88,8 @@ class BsrMat {
     }
 
     __HOST__ void add_diag_to_each_block(T eta = 1e-4) {
-        /* add diag nugget to each 6x6 (or whatever size) block nodal matrix, helps stabilize ILU factors in CuSparse */
+        /* add diag nugget to each 6x6 (or whatever size) block nodal matrix, helps stabilize ILU
+         * factors in CuSparse */
         int nnzb = bsr_data.nnzb;
         int block_dim = bsr_data.block_dim;
         T *vals = values.getPtr();
@@ -234,6 +235,8 @@ class BsrMat {
     }
 
     void free() {
+        if (is_free) return;
+        is_free = true;  // now it's freed
         // use free not destructor as no pass by ref allowed in kernels and often leads to
         // unintended destructor calls cannot free bsr_data
         values.free();
@@ -248,6 +251,7 @@ class BsrMat {
    private:
     BsrData bsr_data;  // was const before
     Vec values;
+    bool is_free = false;
 };
 
 template <class Assembler, class Vec>

@@ -5,7 +5,8 @@ template <typename T, class Vec, class Assembler, class InnerSolver>
 class NonlinearContinuationSolver {
    public:
     NonlinearContinuationSolver(cublasHandle_t &cublasHandle_, Assembler &assembler_,
-                                InnerSolver *inner_solver_, bool use_predictor_ = true)
+                                InnerSolver *inner_solver_, bool use_predictor_ = true,
+                                bool debug_ = false)
         : cublasHandle(cublasHandle_) {
         inner_solver = inner_solver_, assembler = assembler_;  //, cublasHandle = cublasHandle_;
 
@@ -13,6 +14,7 @@ class NonlinearContinuationSolver {
         state = assembler.createVarsVec();
         nvars = assembler.get_num_vars();
         use_predictor = use_predictor_;
+        debug = debug_;
 
         // circular storage of predictor history
         if (use_predictor) {
@@ -24,7 +26,7 @@ class NonlinearContinuationSolver {
 
     // need func to set new RHS sometimes?
 
-    bool solve(Vec &u_inout, T lambda0 = 0.2, T inner_atol = 1e-8) {
+    bool solve(Vec &u_inout, T lambda0 = 0.2, T inner_atol = 1e-8, T lambdaf = 1.0) {
         u_inout.copyValuesTo(state);  // totally permuted
 
         // TBD add energy min restart and other options
@@ -49,28 +51,31 @@ class NonlinearContinuationSolver {
             predictNextState(lambda, state);
 
             // call inner solver
-            bool final_step = lambda == 1.0;
+            bool final_step = lambda == lambdaf;
             T inner_rtol = final_step ? 1e-8 : 1e-3;
             // T inner_atol = 1e-8;
             bool inner_conv = inner_solver->solve(lambda, inner_rtol, inner_atol, state);
 
             // DEBUG
             // ======================
-            // if (!inner_conv) {
-            //     // prev_state.copyValuesTo(state); // don't reset this
-            //     break;
-            // }
+            if (debug && !inner_conv) {
+                printf(
+                    "DEBUG in continuation => newton solver failed, so exit early without state "
+                    "change\n");
+                break;
+            }
             // ======================
 
             // update load factors adaptively and reset state if needed
             if (!inner_conv) {
                 resetPredictor();
+                printf("reset the state, lin solve failed\n");
                 prev_state.copyValuesTo(state);  // reset state
                 lambda -= dlambda;               // go back to prev lambda
                 dlambda *= 0.5;                  // reduce step size
             } else {
                 // inner solve passed
-                if (lambda == 1.0) {
+                if (lambda == lambdaf) {
                     // we succeeded the whole solve, break and exit
                     fail = false;
                     break;
@@ -88,7 +93,7 @@ class NonlinearContinuationSolver {
             }
 
             // clip load step size then update load factor
-            dlambda = std::clamp(dlambda, 1e-4, 1.0 - lambda);
+            dlambda = std::clamp(dlambda, 1e-4, lambdaf - lambda);
             lambda += dlambda;
         }
 
@@ -99,6 +104,11 @@ class NonlinearContinuationSolver {
     }
 
     T get_last_lambda() { return lambda; }
+
+    void free() {
+        prev_state.free();
+        state.free();
+    }
 
    private:
     void energy_min_restart() {
@@ -163,7 +173,7 @@ class NonlinearContinuationSolver {
     InnerSolver *inner_solver;
     Assembler assembler;
     int nvars;
-    bool use_predictor;
+    bool use_predictor, debug;
 
     cublasHandle_t &cublasHandle;
 
