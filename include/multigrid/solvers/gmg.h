@@ -337,7 +337,6 @@ class GeometricMultigridSolver {
          * for debugging */
 
         // assumes fine grid defect already been set (or continuation of previous step)
-        auto fine_soln = DeviceVec<T>(grids[0].N);
 
         // init defect nrm
         T init_defect_nrm = grids[0].getDefectNorm();

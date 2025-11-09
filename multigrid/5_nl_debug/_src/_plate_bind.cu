@@ -66,10 +66,10 @@ PYBIND11_MODULE(nlplategpu, m) {
         .def("setGridDefect",
              [](NonlinearPlateGPUSolver &s,
                 py::array_t<double> u,
-                double lambda) {
-                 s.setGridDefect(u.data(), lambda);
+                double lambda, bool set_fine_LU = false) {
+                 s.setGridDefect(u.data(), lambda, set_fine_LU);
              },
-             py::arg("u"), py::arg("lambda"))
+             py::arg("u"), py::arg("lambda"), py::arg("set_fine_LU") = false)
 
         .def("getCoarseFineStep",
              [](NonlinearPlateGPUSolver &s,

@@ -8,9 +8,12 @@ template <typename T, class Assembler>
 class CusparseMGDirectLU : public BaseSolver {
    public:
     CusparseMGDirectLU(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
-                       Assembler &assembler, BsrMat<DeviceVec<T>> &kmat)
+                       Assembler &assembler_, BsrMat<DeviceVec<T>> &kmat_)
         : cublasHandle(cublasHandle_), cusparseHandle(cusparseHandle_) {
         /* create the cusparse direct solver (for repeated solves) */
+
+        assembler = assembler_;
+        kmat = kmat_;
 
         BsrData bsr_data = kmat.getBsrData();
         N = assembler.get_num_vars();
@@ -109,6 +112,12 @@ class CusparseMGDirectLU : public BaseSolver {
     void set_abs_tol(T atol) {}
     int get_num_iterations() { return 1; }
 
+    void assemble_matrix(DeviceVec<T> &vars) {
+        assembler.set_variables(vars);
+        assembler.add_jacobian_fast(kmat);
+        assembler.apply_bcs(kmat);
+    }
+
     void factor_matrix() {
         // copy the data from the original matrix to new place for factor
         CHECK_CUDA(cudaMemcpy(d_vals_ILU0, d_vals, nnz * sizeof(T), cudaMemcpyDeviceToDevice));
@@ -186,6 +195,9 @@ class CusparseMGDirectLU : public BaseSolver {
         cusparseDestroyBsrsv2Info(info_U);
         cusparseDestroyBsrilu02Info(info_M);
         cusparseDestroyMatDescr(descr_M);
+
+        assembler.free();
+        kmat.free();
     }
 
    private:
@@ -195,6 +207,8 @@ class CusparseMGDirectLU : public BaseSolver {
     T *d_temp, *d_vals, *d_vals_ILU0;
 
     bool is_free = false;
+    Assembler assembler;
+    BsrMat<DeviceVec<T>> kmat;
 
     // cusparse and cublas data
     cublasHandle_t &cublasHandle;

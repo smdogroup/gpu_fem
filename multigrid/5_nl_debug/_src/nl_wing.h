@@ -4,6 +4,8 @@
 #include "chrono"
 #include "coupled/_coupled.h"
 #include "linalg/_linalg.h"
+#include "mesh/TACSMeshLoader.h"
+#include "mesh/vtk_writer.h"
 #include "solvers/_solvers.h"
 
 // new nonlinear solvers
@@ -23,6 +25,10 @@
 #include "multigrid/smoothers/mc_smooth1.h"
 #include "multigrid/solvers/gmg.h"
 #include "multigrid/utils/fea.h"
+
+// wing prolongation
+#include "multigrid/prolongation/unstructured.h"
+#include "multigrid/smoothers/_wingbox_coloring.h"
 
 // new multigrid imports for K-cycles, etc.
 #include "multigrid/interface.h"

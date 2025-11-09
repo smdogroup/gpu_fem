@@ -87,6 +87,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     // const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
     using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>; // scales by one each time
+    // wondering if NONE may help the Vcycle in hard NL case
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
 
@@ -103,6 +105,10 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     CHECK_CUBLAS(cublasCreate(&cublasHandle));
     cusparseHandle_t cusparseHandle = NULL;
     CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+
+    // T omega = 1.5;
+    // T omega = 1.0;
+    T omega = 0.7;  // (lower omega may be more stable in hard-conv cases)
 
     auto start0 = std::chrono::high_resolution_clock::now();
 
@@ -202,7 +208,6 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
         // build smoother and prolongations
-        T omega = 1.5; // for GS-SOR
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omega);
         int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
         // int ELEM_MAX = 4;
@@ -238,7 +243,6 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     bool print = false;
     // bool print = true;
     T atol = 1e-9, rtol = 1e-9;
-    T omega2 = 1.5; // really is set up there
     int n_cycles = SR >= 100.0 ? 1000 : 200;
     // bool time = false;
     bool time = true;
@@ -254,7 +258,7 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
         int n_krylov = 50;
         // int n_krylov = 100;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, 
-            n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
+            n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
 
     std::vector<GRID>& grids = is_kcycle ? kmg->grids : mg->grids;
@@ -295,7 +299,10 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     bool use_predictor = false; // need to do something else to the predictor like smooth it for NL MG case.
 
     T initLinSolveRtol = 1e-1; // defualt (start undersolving, then over-solve later)
-    T linSolveAtol = 1e-2; // lower atol for this case
+    // T initLinSolveRtol = 5e-1;
+
+    // T linSolveAtol = 1e-2; // lower atol for this case
+    T linSolveAtol = 1e-4; // lower atol for this case
 
     bool debug = true;
     // bool debug = false;
@@ -308,13 +315,11 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     // T lambda0 = 0.1;
     // T lambda0 = 0.05;
 
-    T inner_atol = 1e0;
-    // T inner_atol = 1e-2;
+    // T inner_atol = 1e0;
+    T inner_atol = 1e-2;
     // T inner_atol = 1e-8;
 
-    
-
-    nl_solver->solve(fine_vars, lambda0, inner_atol);
+    bool nl_fail = nl_solver->solve(fine_vars, lambda0, inner_atol);
     T nl_max_disp = get_max_disp(fine_vars);
     // printf("done with continuation solve - DEBUG PRINT\n");
 
@@ -329,9 +334,11 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     // // DEBUG (after exiting at failed state) (put in NL MG code)
     // ==================================================
 
-    
-    if (debug) {
-        printf("\n======================================\nBEGIN DEBUG\n");
+    if (!nl_fail && debug) {
+        printf("continuation solve converged! no debug\n");
+        
+    } else if (debug && nl_fail) {
+        printf("\n======================================\nBEGIN DEBUG, cont solve failed\n");
         auto h_vars0 = fine_vars.createHostVec();
         printToVTK<Assembler,HostVec<T>>(fine_assembler, h_vars0, "out/wing_failed_state.vtk");
 
@@ -575,7 +582,8 @@ int main(int argc, char **argv) {
 
     // DEFAULTS
     // int level = 1; // for debug
-    int level = 3; // level mesh to solve.. level 4 also a good starting setting (big case)
+    int level = 2;
+    // int level = 3; // level mesh to solve.. level 4 also a good starting setting (big case)
     bool is_multigrid = true;
     // bool is_debug = false;
     
@@ -584,7 +592,8 @@ int main(int argc, char **argv) {
     // double SR = 100.0; // so that uses optimal design from AOB paper
 
     // less slender harder to buckle and can step into NL better (SR depends on wing length too, uCRM can be a bit more slender maybe because of the better narrower design, less likely to buckle, like beam)
-    double force = 2e7; // go up to 4e7 if want deeper NL response
+    // double force = 2e7; // go up to 4e7 if want deeper NL response
+    double force = 4e7;
     double SR = 10.0; // so that uses optimal design from AOB paper
 
     int nsmooth = 4; // may need more here (esp for MITC elements, but CFI can use less)

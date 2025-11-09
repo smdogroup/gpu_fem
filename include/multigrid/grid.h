@@ -198,6 +198,9 @@ class SingleGrid {
             T sT_Ks;
             CHECK_CUBLAS(cublasDdot(cublasHandle, N, d_temp2, 1, d_temp, 1, &sT_Ks));
             omega = sT_defect / sT_Ks;
+
+            // clip omega between some min & max values here (to not degrade perf too much)
+            omega = std::clamp(omega, 0.5, 2.0);  // could tune these cutoffs
         }
 
         // now add coarse-fine dx into soln and update defect (with u = u0 + omega * d_temp)
