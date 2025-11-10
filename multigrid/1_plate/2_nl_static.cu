@@ -108,6 +108,15 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         mg = new MG();
     }
 
+    // some important settings
+    // T omegaMC = 1.5; // for GS-SOR
+    // T omegaMC = 0.75;
+    T omegaMC = 0.7;
+
+    // T omegaLS_min = 0.1, omegaLS_max = 2.0;
+    T omegaLS_min = 0.25, omegaLS_max = 2.0;
+    // T omegaLS_min = 0.5, omegaLS_max = 2.0;
+
     // get nxe_min for not exactly power of 2 case
     // int pre_nxe_min = nxe > 16 ? 16 : 4; // 2x slower with this setting (takes more V-cycles)
     int pre_nxe_min = nxe > 32 ? 32 : 4; // but on higher nxe, this one is more robust somehow
@@ -170,11 +179,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
         // build smoother and prolongations..
-        T omega = 1.5; // for GS-SOR
-        // T omega = 0.7; // under-relaxed for better NL conv?
-        auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omega);
+        auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC);
         auto prolongation = new Prolongation(assembler);
-        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
+        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, omegaLS_min, omegaLS_max);
         
         if (is_kcycle) {
             kmg->grids.push_back(grid);
@@ -203,7 +210,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
     // bool print = true;
     bool print = false;
-    T omega2 = 1.5;
     T atol = 1e-6, rtol = 1e-6;
     bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
 
@@ -214,7 +220,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         // int n_krylov = 500;
         // int n_krylov = 10;
         int n_krylov = 20;
-        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
+        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omegaMC, atol, rtol, print_freq, print, double_smooth);    
     }
 
     std::vector<GRID>& grids = kmg->grids;
@@ -257,13 +263,18 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
     INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg);
-    bool use_predictor = true, debug = false;
+    // bool use_predictor = true, debug = false;
+    bool use_predictor = false, debug = false;
     NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver, use_predictor, debug);
 
     // now try calling it
     T lambda0 = 0.2;
     // T lambda0 = 0.05;
-    nl_solver->solve(fine_vars, lambda0);
+    // T inner_atol = 1e-2;
+    // T inner_atol = 1e-4;
+    // T inner_atol = 1e-4;
+    T inner_atol = 1e-6;
+    nl_solver->solve(fine_vars, lambda0, inner_atol);
     T nl_max_disp = get_max_disp(fine_vars);
 
     // print some of the data of host residual

@@ -112,6 +112,7 @@ class UnstructuredProlongation {
 
     template <bool normalize = false>
     void restrict_vec(DeviceVec<T> fine_vec_in, DeviceVec<T> coarse_vec_out) {
+        // printf("restrict vec inner - try PT mmult\n");
         if constexpr (is_bsr) {
             T a = 1.0, b = 0.0;
             int mb = PT_bsr_data.mb, nb = PT_bsr_data.nb;
@@ -128,12 +129,13 @@ class UnstructuredProlongation {
 
         // NORMALIZE section, only for restricting the solution (not defects)
         if constexpr (normalize) {
-            int *d_perm1 = coarse_assembler.getBsrData().iperm;
-            auto h_c_weights = DeviceVec<T>(N_coarse, d_coarse_weights)
-                                   .createPermuteVec(6, d_perm1)
-                                   .createHostVec();
-            printToVTK<Assembler, HostVec<T>>(coarse_assembler, h_c_weights,
-                                              "out/coarse_weights.vtk");
+            // printf("restrict vec inner - try PT mmult\n");
+            // int *d_perm1 = coarse_assembler.getBsrData().iperm;
+            // auto h_c_weights = DeviceVec<T>(N_coarse, d_coarse_weights)
+            //                        .createPermuteVec(6, d_perm1)
+            //                        .createHostVec();
+            // printToVTK<Assembler, HostVec<T>>(coarse_assembler, h_c_weights,
+            //                                   "out/coarse_weights.vtk");
 
             // now divide the coarse vec by coarse weights to normalize
             dim3 block(32);

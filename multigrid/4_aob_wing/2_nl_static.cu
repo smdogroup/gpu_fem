@@ -110,6 +110,11 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     // T omega = 1.0;
     T omega = 0.7;  // (lower omega may be more stable in hard-conv cases)
 
+    // choose the bounds for GMG lin solve line searches
+    T omega_min = 0.5, omega_max = 2.0; // default
+    // T omega_min = 0.8, omega_max = 2.0;
+    // T omega_min = 0.25, omega_max = 2.0;
+
     auto start0 = std::chrono::high_resolution_clock::now();
 
     // hopefully this doesn't construct the object?
@@ -212,7 +217,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
         int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
         // int ELEM_MAX = 4;
         auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
-        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
+        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, 
+            cublasHandle, cusparseHandle, omega_min, omega_max);
 
         if (is_kcycle) {
             kmg->grids.push_back(grid);
@@ -241,9 +247,9 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     int pre_smooth = nsmooth, post_smooth = nsmooth;
     // best was V(4,4) before
     bool print = false;
-    // bool print = true;
-    T atol = 1e-9, rtol = 1e-9;
-    int n_cycles = SR >= 100.0 ? 1000 : 200;
+    // bool print = true; // turns on print for the k-cycle
+    // T atol = 1e-9, rtol = 1e-9;
+    T atol = 1e-6, rtol = 1e-6;
     // bool time = false;
     bool time = true;
     int print_freq = 5;
@@ -292,11 +298,13 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     // build the inexact newton + outer continuation solver
     using Mat = BsrMat<DeviceVec<T>>;
     using Vec = DeviceVec<T>;
-    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG>;
+    constexpr bool DO_LINE_SEARCH = true;
+    // constexpr bool DO_LINE_SEARCH = false;
+    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG, DO_LINE_SEARCH>;
     using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
-    // bool use_predictor = true;
-    bool use_predictor = false; // need to do something else to the predictor like smooth it for NL MG case.
+    bool use_predictor = true; // sometimes works on wing and sometimes not
+    // bool use_predictor = false; // need to do something else to the predictor like smooth it for NL MG case.
 
     T initLinSolveRtol = 1e-1; // defualt (start undersolving, then over-solve later)
     // T initLinSolveRtol = 5e-1;
@@ -304,7 +312,7 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     // T linSolveAtol = 1e-2; // lower atol for this case
     T linSolveAtol = 1e-4; // lower atol for this case
 
-    bool debug = true;
+    bool debug = true; // debug means it will exit on linear solve failure (instead of dropping lambda and trying to keep going)
     // bool debug = false;
 
     INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg, initLinSolveRtol, linSolveAtol);
@@ -601,8 +609,8 @@ int main(int argc, char **argv) {
     std::string cycle_type = "K"; // "V", "F", "W", "K"
 
     // probably need more locking / multigrid friendly element than either of these (CFI4 is locking, while MITC4 has bad GMG performance)
-    // std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
-    std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+    std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
+    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {

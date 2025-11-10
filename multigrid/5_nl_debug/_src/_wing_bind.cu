@@ -2,25 +2,30 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>  // for py::array_t
 #include <pybind11/stl.h>  // for std::vector
-#include "nl_plate.h"         // your solver class header
+#include "nl_wing.h"         // your solver class header
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(nlplategpu, m) {
-    py::class_<NonlinearPlateGPUSolver>(m, "NonlinearPlateGPUSolver")
-        .def(py::init<double, double, int, double, bool, bool, bool, bool>(),
-             py::arg("pressure")    = 8.0e6,
-             py::arg("omega") = 0.7,
-             py::arg("nxe") = 128,
-             py::arg("SR") = 100.0,
+PYBIND11_MODULE(nlwinggpu, m) {
+    py::class_<NonlinearWingGPUSolver>(m, "NonlinearWingGPUSolver")
+        .def(py::init<int, double, double, double, bool, bool, bool, bool, int, int, int, double, double>(),
+             py::arg("level") = 2,
+             py::arg("force") = 4.0e7,
+             py::arg("omegaMC") = 0.7,
+             py::arg("SR") = 10.0,
              py::arg("use_predictor") = true,
              py::arg("kmg_print") = false,
              py::arg("nl_debug") = false,
-             py::arg("debug_gmg") = false)
+             py::arg("debug_gmg") = false,
+             py::arg("nsmooth") = 4,
+             py::arg("ninnercyc") = 2,
+             py::arg("n_krylov") = 50,
+             py::arg("omegaLS_min") = 0.5,
+             py::arg("omegaLS_max") = 2.0)
 
         // ---- core nonlinear solvers ----
         .def("continuationSolve",
-             [](NonlinearPlateGPUSolver &s,
+             [](NonlinearWingGPUSolver &s,
                 py::array_t<double> u0,
                 double lambda0 = 0.2,
                 double lambdaf = 1.0,
@@ -33,7 +38,7 @@ PYBIND11_MODULE(nlplategpu, m) {
              py::arg("lambdaf") = 1.0, py::arg("inner_atol") = 1e-8)
 
         .def("vcycleSolve",
-             [](NonlinearPlateGPUSolver &s,
+             [](NonlinearWingGPUSolver &s,
                 py::array_t<double> u,
                 double lambda,
                 int n_cycles = 40) {
@@ -45,7 +50,7 @@ PYBIND11_MODULE(nlplategpu, m) {
              py::arg("n_cycles") = 40)
 
         .def("kcycleSolve",
-             [](NonlinearPlateGPUSolver &s,
+             [](NonlinearWingGPUSolver &s,
                 py::array_t<double> u,
                 double lambda) {
                  py::array_t<double> du(u.size());
@@ -55,7 +60,7 @@ PYBIND11_MODULE(nlplategpu, m) {
              py::arg("u"), py::arg("lambda"))
 
         .def("getResidual",
-             [](NonlinearPlateGPUSolver &s,
+             [](NonlinearWingGPUSolver &s,
                 py::array_t<double> u,
                 double lambda) {
                  py::array_t<double> res(u.size());
@@ -65,7 +70,7 @@ PYBIND11_MODULE(nlplategpu, m) {
              py::arg("u"), py::arg("lambda"))
 
         .def("setGridDefect",
-             [](NonlinearPlateGPUSolver &s,
+             [](NonlinearWingGPUSolver &s,
                 py::array_t<double> u,
                 double lambda, bool set_fine_LU = false) {
                  s.setGridDefect(u.data(), lambda, set_fine_LU);
@@ -73,7 +78,7 @@ PYBIND11_MODULE(nlplategpu, m) {
              py::arg("u"), py::arg("lambda"), py::arg("set_fine_LU") = false)
 
         .def("getCoarseFineStep",
-             [](NonlinearPlateGPUSolver &s,
+             [](NonlinearWingGPUSolver &s,
                 py::array_t<double> i_defect,
                 py::array_t<double> ism_defect,
                 py::array_t<double> cf_soln,
@@ -95,7 +100,7 @@ PYBIND11_MODULE(nlplategpu, m) {
              py::arg("smooth") = true)
 
         .def("writeSolution",
-             [](NonlinearPlateGPUSolver &s,
+             [](NonlinearWingGPUSolver &s,
                 const std::string &filename,
                 py::array_t<double> u) {
                  s.writeSolution(filename, u.mutable_data());
@@ -103,6 +108,6 @@ PYBIND11_MODULE(nlplategpu, m) {
              py::arg("filename"), py::arg("u"))
 
         // ---- getters ----
-        .def("get_num_vars", &NonlinearPlateGPUSolver::get_num_vars)
-        .def("free", &NonlinearPlateGPUSolver::free);
+        .def("get_num_vars", &NonlinearWingGPUSolver::get_num_vars)
+        .def("free", &NonlinearWingGPUSolver::free);
 }

@@ -29,7 +29,7 @@ class SingleGrid {
 
     SingleGrid(Assembler &assembler_, Prolongation *prolongation_, Smoother *smoother_,
                BsrMat<DeviceVec<T>> Kmat_, DeviceVec<T> d_rhs_, cublasHandle_t &cublasHandle_,
-               cusparseHandle_t &cusparseHandle_)
+               cusparseHandle_t &cusparseHandle_, T omega_min_ = 0.5, T omega_max_ = 2.0)
         : assembler(assembler_),
           prolongation(prolongation_),
           smoother(smoother_),
@@ -40,6 +40,9 @@ class SingleGrid {
         N = assembler.get_num_vars();
         block_dim = 6;
         nnodes = N / 6;
+
+        omega_min = omega_min_;
+        omega_max = omega_max_;
 
         // get data out of kmat
         auto d_kmat_bsr_data = Kmat.getBsrData();
@@ -200,7 +203,9 @@ class SingleGrid {
             omega = sT_defect / sT_Ks;
 
             // clip omega between some min & max values here (to not degrade perf too much)
-            omega = std::clamp(omega, 0.5, 2.0);  // could tune these cutoffs
+            omega = std::clamp(omega, omega_min, omega_max);  // could tune these cutoffs
+
+            // printf("Vcycle GMG line search omega = %.4e\n", omega);
         }
 
         // now add coarse-fine dx into soln and update defect (with u = u0 + omega * d_temp)
@@ -210,7 +215,7 @@ class SingleGrid {
         CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_temp2, 1, d_defect.getPtr(), 1));
     }
 
-    void restrict_defect(DeviceVec<T> fine_defect_in) {
+    void restrict_defect(DeviceVec<T> &fine_defect_in) {
         /* transfer defect from a finer mesh to THIS coarse mesh */
 
         // zero this coarse defect + restrict the finer defect to this coarse grid
@@ -227,7 +232,7 @@ class SingleGrid {
         cudaMemset(d_soln.getPtr(), 0.0, N * sizeof(T));
     }
 
-    void restrict_loads(DeviceVec<T> fine_loads_in) {
+    void restrict_loads(DeviceVec<T> &fine_loads_in) {
         /* transfer total loads from a finer mesh to THIS coarse mesh and then compute defect */
 
         // zero this coarse defect + restrict the finer defect to this coarse grid
@@ -252,13 +257,14 @@ class SingleGrid {
         cudaMemset(d_soln.getPtr(), 0.0, N * sizeof(T));
     }
 
-    void restrict_soln(DeviceVec<T> fine_vars_in) {
+    void restrict_soln(DeviceVec<T> &fine_vars_in) {
         /* transfer soln (du) from a finer mesh to THIS coarse mesh */
 
         // zero this coarse defect + restrict the finer defect to this coarse grid
         cudaMemset(d_vars.getPtr(), 0.0, N * sizeof(T));  // reset defect
         const bool normalize = true;                      // need to normalize
         restriction->template restrict_vec<normalize>(fine_vars_in, d_vars);
+        CHECK_CUDA(cudaDeviceSynchronize());
 
         // apply bcs to the defect again (cause it will accumulate on the boundary by backprop)
         // apply bcs is on un-permuted data
@@ -304,6 +310,7 @@ class SingleGrid {
 
    private:
     T *d_resid;
+    T omega_min, omega_max;
 
     bool is_free = false;
 

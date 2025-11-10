@@ -72,6 +72,15 @@ void multigrid_plate_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::
     MG *mg;
     KMG *kmg;
 
+    // some important settings
+    T omegaMC = 1.5; // for GS-SOR
+    T omegaLS_min = 0.25, omegaLS_max = 2.0;
+
+    cublasHandle_t cublasHandle = NULL;
+    CHECK_CUBLAS(cublasCreate(&cublasHandle));
+    cusparseHandle_t cusparseHandle = NULL;
+    CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+
     bool is_kcycle = cycle_type == "K";
     if (is_kcycle) {
         kmg = new KMG();
@@ -130,16 +139,15 @@ void multigrid_plate_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
         // build smoother and prolongations..
-        T omega = 1.5; // for GS-SOR
-        auto smoother = new Smoother(assembler, kmat, h_color_rowp, omega);
+        auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC);
         auto prolongation = new Prolongation(assembler);
-        auto grid = GRID(assembler, prolongation, smoother, kmat, loads);
+        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, omegaLS_min, omegaLS_max);
         
         if (is_kcycle) {
             kmg->grids.push_back(grid);
         } else {
             mg->grids.push_back(grid);
-            if (full_LU) mg->coarse_solver = new CoarseSolver(assembler, kmat);
+            if (full_LU) mg->coarse_solver = new CoarseSolver(cublasHandle, cusparseHandle, assembler, kmat);
         }
     }
 
@@ -161,8 +169,7 @@ void multigrid_plate_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::
 
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
     bool print = true;
-    // bool print = false;
-    T omega2 = 1.5;
+    // bool print = false;omegaLS_min
     T atol = 1e-6, rtol = 1e-6;
     bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
 
@@ -171,7 +178,7 @@ void multigrid_plate_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::
 
     if (is_kcycle) {
         int n_krylov = 500;
-        kmg->init_outer_solver(nsmooth, ninnercyc, n_krylov, omega2, atol, rtol, print_freq, print, double_smooth);    
+        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omegaMC, atol, rtol, print_freq, print, double_smooth);    
     }
 
     // fastest is K-cycle usually

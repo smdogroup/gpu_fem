@@ -1,6 +1,6 @@
 import sys
-sys.path.append("_src/") # contains nlplategpu
-import nlplategpu # the so file created by pybind11
+sys.path.append("_src/") # contains nlwinggpu
+import nlwinggpu # the so file created by pybind11
 
 # standard python imports
 import numpy as np
@@ -9,24 +9,31 @@ import time
 import os
 import argparse
 
+# RUN NOTES
+# ==================
 
+# L2 mesh => use CFI4 + predictor + omegaLS_min = 0.5 and omegaMC = 0.7 for best results (about 14 sec runtime)
+# L3 mesh => haven't got it working yet, suspect need lower omegaLS_min bounds rn (or higher?) 
 
 # setup GPU solver for nl plate
-solver = nlplategpu.NonlinearPlateGPUSolver(
-    pressure=8e6,
-    # pressure=8e5,
-    # omega=1.5,
-    # omega=1.0,
-    omega=0.75,
-    # nxe=128,
-    nxe=256,
-    SR=100.0,
-    # use_predictor=True, # sometimes works on plate, somtimes not
-    use_predictor=False, 
+solver = nlwinggpu.NonlinearWingGPUSolver(
+    # level=1,
+    level=2,
+    # level=3,
+    force=4e7,
+    SR=10.0,
+    use_predictor=True,
+    # use_predictor=False, # works well on NL wing now!
     # kmg_print=True,
     kmg_print=False,
-    nl_debug=False, # whether to exit on failed state (for another script)
-    debug_gmg=False, # whether to also make Vcycle solver and fine direct-LU solver to debug CF + vcycles (in another script set to True)
+    # nl_debug=True, # if debug is on, it will exit on a failure and return the failed state
+    nl_debug=False,
+    omegaMC=0.7,
+    # omegaMC=1.0,
+    # omegaMC=1.5,
+    # omegaLS_min=0.25,
+    omegaLS_min=0.5, 
+    debug_gmg=False
 )
 
 nvars = solver.get_num_vars()
@@ -37,20 +44,22 @@ u0 = np.zeros(nvars)
 # =====================
 
 start_solve = time.time()
-lam0, lamf, inner_atol = 0.2, 1.0, 1e-6
+lam0, lamf, inner_atol = 0.2, 1.0, 1e-2
 u_nl = solver.continuationSolve(u0, lam0, lamf, inner_atol)
 solve_dt = time.time() - start_solve
 print(f"continuation solve in {solve_dt=:.4e} sec")
-solver.writeSolution("out/plate_nl.vtk", u_nl)
-print("done write vtk")
+solver.writeSolution("out/wing_nl.vtk", u_nl)
+
 
 # LINEAR solve
 # =======================
 
 lam = 1.0 # full loading
+print("doing linear kcycle solve\n")
 u_lin = solver.kcycleSolve(u0, lam)
-print("done kcycle lin solve")
-solver.writeSolution("out/plate_lin.vtk", u_lin)
+print("done with kcycle solve\n")
+solver.writeSolution("out/wing_lin.vtk", u_lin)
+print("done with wing linear solve\n")
 
 
 # NONLINEAR load factor plot vs linear
@@ -72,7 +81,7 @@ if RUN_PLOT_NL_LOAD_FACTOR:
     for i, lam in enumerate(LOAD_FACTORS):
         _lam0 = 0.5
         lam0 = _lam0 * prev_lam + (1.0-_lam0) * lam
-        print(f"try another continuation solve at {lam=}")
+        print(f"begin continuation solve in load factor loop")
         _soln = solver.continuationSolve(_soln, lam0, lam, inner_atol)
         prev_lam = lam
 
@@ -101,7 +110,7 @@ if RUN_PLOT_NL_LOAD_FACTOR:
     plt.plot(LOAD_FACTORS, W_NL*factor, 'o-', color=colors[4], label="nl", linewidth=2)
     plt.xlabel(r"$\lambda$" + ", load factor")
     plt.ylabel("Center Disp w" + r"$\ \times \ 1000$")
-    plt.savefig("out/plate_lams.svg")
+    plt.savefig("out/wing_lams.svg")
 
 
 # FREE memory on GPU

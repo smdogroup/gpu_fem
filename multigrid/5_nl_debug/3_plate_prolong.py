@@ -28,15 +28,16 @@ solver = nlplategpu.NonlinearPlateGPUSolver(
     # omega=1.5,
     # omega=1.0, # omega = 1 actually more robust for the nonlinear case
     omega=0.75,
-    nxe=128,
-    # nxe=256,
+    # nxe=128,
+    nxe=256,
     SR=100.0,
-    # use_predictor=True,
-    use_predictor=False, # better for the NL plate case for some reason
+    # use_predictor=True, # sometimes works on plate, sometimes not
+    use_predictor=False,
     # kmg_print=True,
     kmg_print=False,
     # nl_debug=True, # if debug is on, it will exit on a failure and return the failed state
     nl_debug=False,
+    debug_gmg=True,
 )
 
 nvars = solver.get_num_vars()

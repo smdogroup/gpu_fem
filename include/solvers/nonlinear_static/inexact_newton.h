@@ -10,7 +10,8 @@
 #include "newton.h"
 #include "solvers/linear_static/_utils.h"
 
-template <typename T, class Mat, class Vec, class Assembler, class Solver>
+template <typename T, class Mat, class Vec, class Assembler, class Solver,
+          bool DO_LINE_SEARCH = true>
 class InexactNewtonSolver {
    public:
     InexactNewtonSolver(cublasHandle_t &cublasHandle_, Assembler &assembler_, Mat &kmat_,
@@ -114,13 +115,13 @@ class InexactNewtonSolver {
 
             // do energy line search and apply update
             // ---------------------------------------
-            T alpha = energyLineSearch(lambda);
-            // T alpha = 1.0; // try no line search for a second..
-            a = alpha;
+            T alpha = 1.0;
+            if constexpr (DO_LINE_SEARCH) {
+                alpha = energyLineSearch(lambda);
+            }
             CHECK_CUBLAS(
-                cublasDaxpy(cublasHandle, nvars, &a, update.getPtr(), 1, vars.getPtr(), 1));
+                cublasDaxpy(cublasHandle, nvars, &alpha, update.getPtr(), 1, vars.getPtr(), 1));
             assembler.set_variables(vars);
-
             prev_res_nrm = res_nrm;
 
             // DEBUG prints here

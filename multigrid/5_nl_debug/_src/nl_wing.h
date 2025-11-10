@@ -14,10 +14,16 @@
 
 // shell imports
 #include "assembler.h"
-#include "element/shell/basis/lagrange_basis.h"
 #include "element/shell/director/linear_rotation.h"
-#include "element/shell/mitc_shell.h"
 #include "element/shell/physics/isotropic_shell.h"
+
+// lagrange MITC element
+#include "element/shell/basis/lagrange_basis.h"
+#include "element/shell/mitc_shell.h"
+
+// chebyshev element
+#include "element/shell/basis/chebyshev_basis.h"
+#include "element/shell/fint_shell.h"
 
 // multigrid imports
 #include "multigrid/grid.h"
@@ -37,22 +43,30 @@
 #include "multigrid/solvers/multilevel/kcycle.h"
 #include "multigrid/solvers/multilevel/twolevel.h"
 
-class NonlinearPlateGPUSolver {
+class NonlinearWingGPUSolver {
    public:
     using T = double;
     // FEM typedefs
     using Quad = QuadLinearQuadrature<T>;
     using Director = LinearizedRotation<T>;
-    using Basis = LagrangeQuadBasis<T, Quad, 2>;
     using Data = ShellIsotropicData<T, false>;
     using Physics = IsotropicShell<T, Data, true>;
-    using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
+
+    // if want MITC basis
+    // using Basis = LagrangeQuadBasis<T, Quad, 2>;
+    // using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
+
+    // if want chebyshev basis
+    using Basis = ChebyshevQuadBasis<T, Quad, 1>;
+    using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+
+    // begin solvers
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using LUsolver = CoarseSolver;
 
     // multigrid objects
     using Smoother = MulticolorGSSmoother_V1<Assembler>;
-    using Prolongation = StructuredProlongation<Assembler, PLATE>;
+    using Prolongation = UnstructuredProlongation<Assembler, Basis, true>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;  // old V-cycle solver
 
@@ -67,10 +81,20 @@ class NonlinearPlateGPUSolver {
     using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG>;
     using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
-    NonlinearPlateGPUSolver(double pressure = 100.0, double omega = 1.5, int nxe = 100,
-                            double SR = 50.0, bool use_predictor = true, bool kmg_print = false,
-                            bool nl_debug = false) {
+    NonlinearWingGPUSolver(int level = 2, double force = 4e7, double omegaMC = 1.5,
+                           double SR = 10.0, bool use_predictor = true, bool kmg_print = false,
+                           bool nl_debug = false, bool debug_gmg_ = false, int nsmooth = 4,
+                           int ninnercyc = 2, int n_krylov = 20, double omegaLS_min = 0.5,
+                           double omegaLS_max = 2.0) {
         // 1) Build mesh & assembler
+
+        MPI_Init(NULL, NULL);
+        MPI_Comm comm = MPI_COMM_WORLD;
+
+        debug_gmg = debug_gmg_;
+        mg = nullptr;
+        fine_LU_solver = nullptr;
+        fine_LU_assembler = nullptr;
 
         // create cublas and cusparse handles (single one each)
         // -----------------------------------------------------
@@ -81,34 +105,37 @@ class NonlinearPlateGPUSolver {
 
         // start building multigrid objects
         kmg = new KMG();
-        mg = new MG();
+        if (debug_gmg) mg = new MG();
 
-        // get nxe_min for not exactly power of 2 case
-        int pre_nxe_min = nxe > 32 ? 32 : 4;
-        int nxe_min = pre_nxe_min;
-        for (int c_nxe = nxe; c_nxe >= pre_nxe_min; c_nxe /= 2) {
-            nxe_min = c_nxe;
-        }
+        for (int i = level; i >= 0; i--) {
+            // read the ESP/CAPS => nastran mesh for TACS
+            TACSMeshLoader mesh_loader{comm};
 
-        // make each grid
-        int nx_comp = 1;
-        for (int c_nxe = nxe; c_nxe >= nxe_min; c_nxe /= 2) {
-            // make the assembler
-            int c_nye = c_nxe;
-            double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
-            int nxe_per_comp = c_nxe / nx_comp, nye_per_comp = c_nye / nx_comp;
-            auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick,
-                                                             rho, ys, nxe_per_comp, nye_per_comp);
-            double uniform_force = pressure * 1.0 * 1.0;
-            double nodal_loads = uniform_force / (c_nxe - 1) / (c_nye - 1);
-            nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-            T *my_loads = getPlateLoads<T, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
-            printf("making grid with nxe %d\n", c_nxe);
+            std::string fname = "../4_aob_wing/meshes/aob_wing_L" + std::to_string(i) + ".bdf";
 
-            if (c_nxe == nxe) {
+            mesh_loader.scanBDFFile(fname.c_str());
+            double E = 70e9, nu = 0.3,
+                   thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+            // TODO : run optimized design from AOB case
+            printf("making assembler+GMG for mesh '%s'\n", fname.c_str());
+
+            // create the TACS Assembler from the mesh loader
+            auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
+
+            // create the loads (really only needed on finer mesh.. TBD how to setup nonlinear
+            // case..)
+            int nvars = assembler.get_num_vars();
+            int nnodes = assembler.get_num_nodes();
+            HostVec<T> h_loads(nvars);
+            double load_mag = force / nnodes;  // estimate for nodal load mag
+            double *my_loads = h_loads.getPtr();
+            for (int inode = 0; inode < nnodes; inode++) {
+                my_loads[6 * inode + 2] = load_mag;
+            }
+
+            if (i == level && debug_gmg) {
                 // make also the fine LU assembler (with different full LU pattern)
-                auto _fine_LU_assemb = createPlateAssembler<Assembler>(
-                    c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+                auto _fine_LU_assemb = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
                 fine_LU_assembler = &_fine_LU_assemb;
                 auto h_LU_bsr_data = &(fine_LU_assembler->getBsrData());
                 h_LU_bsr_data->AMD_reordering();
@@ -124,67 +151,70 @@ class NonlinearPlateGPUSolver {
                     new LUsolver(cublasHandle, cusparseHandle, *fine_LU_assembler, fine_LU_kmat);
             }
 
+            // do multicolor junction reordering
             auto &bsr_data = assembler.getBsrData();
             int num_colors, *_color_rowp;
 
-            // make the grid
-            bool full_LU = c_nxe == nxe_min;
-            if (full_LU) {
+            bool coarsest_grid = i == 0;
+            if (!coarsest_grid) {
+                WingboxMultiColoring<Assembler>::apply_coloring(assembler, bsr_data, num_colors,
+                                                                _color_rowp);
+                bsr_data.compute_nofill_pattern();
+            } else {
+                // full LU pattern for coarsest grid
                 bsr_data.AMD_reordering();
                 bsr_data.compute_full_LU_pattern(10.0, false);
-            } else {
-                bsr_data.multicolor_reordering(num_colors, _color_rowp);
-                bsr_data.compute_nofill_pattern();
+                num_colors = 0;
+                _color_rowp = new int[2];
+                _color_rowp[0] = 0, _color_rowp[1] = nnodes;
             }
-            // auto grid = *GRID::buildFromAssembler(assembler, my_loads, full_LU, reorder);
             auto h_color_rowp = HostVec<int>(num_colors + 1, _color_rowp);
-
             assembler.moveBsrDataToDevice();
+
+            // now compute loads, bcs and assemble kmat
             auto loads = assembler.createVarsVec(my_loads);
             assembler.apply_bcs(loads);
             auto kmat = createBsrMat<Assembler, VecType<T>>(assembler);
+            auto vars = assembler.createVarsVec();
+            assembler.set_variables(vars);
             auto res = assembler.createVarsVec();
-            int N = res.getSize();
-            if (c_nxe == nxe) {
+            assembler.template add_jacobian_fast<1>(kmat);
+            assembler.apply_bcs(kmat);
+
+            if (i == level) {
                 nvars = res.getSize();
             }
 
-            // assemble the kmat
-            auto start0 = std::chrono::high_resolution_clock::now();
-            assembler.add_jacobian_fast(kmat);
-            assembler.apply_bcs(kmat);
-            CHECK_CUDA(cudaDeviceSynchronize());
-            auto end0 = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> assembly_time = end0 - start0;
-            printf("\tassemble kmat time %.2e\n", assembly_time.count());
-
-            // build smoother and prolongations..
+            // build smoother and prolongations
             auto smoother =
-                new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omega);
-            auto prolongation = new Prolongation(assembler);
-            auto grid =
-                GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
+                new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC);
+            int ELEM_MAX = 10;  // num nearby elements of each fine node for nz pattern construction
+            auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
+            auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle,
+                             cusparseHandle, omegaLS_min, omegaLS_max);
 
             kmg->grids.push_back(grid);
-            mg->grids.push_back(grid);
-            if (full_LU)
-                mg->coarse_solver = new CoarseSolver(cublasHandle, cusparseHandle, assembler, kmat);
+            if (debug_gmg) {
+                mg->grids.push_back(grid);
+                if (coarsest_grid)
+                    mg->coarse_solver =
+                        new CoarseSolver(cublasHandle, cusparseHandle, assembler, kmat);
+            }
         }
 
         printf("done with grid creation\n");
 
         kmg->template init_prolongations<Basis>();
-        mg->template init_prolongations<Basis>();
-        // end of startup
+        if (debug_gmg) mg->template init_prolongations<Basis>();
 
         bool double_smooth = true;
-        int nsmooth = 2, ninnercyc = 2, print_freq = 3;
-        int n_krylov = 20;
+        int print_freq = 3;
         T atol = 1e-6, rtol = 1e-6;
 
-        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega,
+        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omegaMC,
                                atol, rtol, print_freq, kmg_print, double_smooth);
         // grids = &kmg->grids;
+        // end of startup
 
         // fine grid states
         fine_assembler = &kmg->grids[0].assembler;
@@ -212,7 +242,8 @@ class NonlinearPlateGPUSolver {
         // printf("done with most of constructor 1\n");
 
         // build the inexact newton + outer continuation solver
-        inner_solver = new INK(cublasHandle, *fine_assembler, fine_kmat, fine_loads, kmg);
+        inner_solver =
+            new INK(cublasHandle, *fine_assembler, fine_kmat, fine_loads, kmg, 1e-1, 1e-4);
         nl_solver = new NL(cublasHandle, *fine_assembler, inner_solver, use_predictor, nl_debug);
 
         // printf("done with most of constructor 2\n");
@@ -228,6 +259,12 @@ class NonlinearPlateGPUSolver {
 
     void vcycleSolve(const T *u, const T lambda, T *du, int n_cycles = 40) {
         /* run V-cycle solve at current nonlinear state, with prints */
+        if (!debug_gmg) {
+            printf(
+                "debug_gmg not active => so didn't make Vcycle GMG solver, can't do Vcycle "
+                "solve\n");
+            return;
+        }
 
         setGridDefect(u, lambda);
         mg->vcycle_solve(0, 2, 2, n_cycles, true, 1e-6, 1e-6, true, 3);
@@ -260,15 +297,15 @@ class NonlinearPlateGPUSolver {
         set_variables(u);  // sets into fine assembler
         fine_assembler->add_jacobian_fast(fine_kmat);
         fine_assembler->apply_bcs(fine_kmat);
-        mg->update_after_assembly(fine_vars);
+        if (debug_gmg) mg->update_after_assembly(fine_vars);
         kmg->update_after_assembly(fine_vars);
 
         // compute and set the residual into the fine grid for GMG
         inner_solver->getResidual(lambda, fine_res);
-        mg->grids[0].setDefect(fine_res);
+        kmg->grids[0].setDefect(fine_res);
 
         // also set into the fine LU solver and asembler too
-        if (set_fine_LU) {
+        if (set_fine_LU && debug_gmg) {
             printf("factoring full LU fine grid again\n");
             // fine_LU_assembler->set_variables(fine_vars); // fine_LU_assembler doesn't work on
             // second step here fine_LU_assembler->add_jacobian_fast(fine_LU_kmat);
@@ -281,8 +318,16 @@ class NonlinearPlateGPUSolver {
 
     void getCoarseFineStep(T *i_defect, T *ism_defect, T *cf_soln, T *ch_defect, T *fsm_defect,
                            T *lu_soln, bool smooth = true) {
-        /* goal here is to run one V-cycle (can repeat this process), getting the current cf disp
-         * and its original defect for comparison to fine LU solve */
+        /* goal here is to run one V-cycle (can repeat this process), getting the current cf
+         * disp and its original defect for comparison to fine LU solve */
+
+        if (!debug_gmg) {
+            printf(
+                "debug_gmg not turned on, so getCoarseFineStep can't run => Vcycle gmg and "
+                "fineLU "
+                "solver were not created\n");
+            return;
+        }
 
         // 1) i_defect is init defect, 2) ism_defect is init smooth defect, 3) cf_soln is coarse
         // fine delta soln, 4) ch_defect is prolong change in defect, 5) fsm_defect is final
@@ -386,6 +431,8 @@ class NonlinearPlateGPUSolver {
         memcpy(h_out, h_temp_vec.getPtr(), nvars * sizeof(T));
     }
 
+    // MPI_Comm comm;
+
     KMG *kmg;  // multigrid object
     MG *mg;
     INK *inner_solver;  // nonlinear solvers
@@ -401,6 +448,8 @@ class NonlinearPlateGPUSolver {
     HostVec<T> h_temp_vec;
     Vec fine_soln, fine_res, fine_rhs, fine_loads, fine_vars;
     Mat fine_kmat;
+
+    bool debug_gmg;
 
     Vec temp1, temp2, temp3, temp4, temp5, temp6;
 
