@@ -315,7 +315,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     bool debug = true; // debug means it will exit on linear solve failure (instead of dropping lambda and trying to keep going)
     // bool debug = false;
 
-    T minLinSolveTol = 1e-2;
+    // T minLinSolveTol = 1e-2;
+    T minLinSolveTol = 1e-3;
     // T minLinSolveTol = 1e-4;
     // T maxLinSolveTol = 0.5; // this helps undersolve it a lot.. much faster sometimes
     T maxLinSolveTol = 0.3;
@@ -332,7 +333,13 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     T inner_atol = 1e-2;
     // T inner_atol = 1e-8;
 
-    bool nl_fail = nl_solver->solve(fine_vars, lambda0, inner_atol);
+    T lambdaf = 1.0;
+    // if use predictor res norms startout about 1e3, 1e4 higher (may need deeper solves?)
+    // T inner_crtol = 1e-3;
+    T inner_crtol = use_predictor ? 1e-5 : 1e-3; // may need deeper solves when using predictor?
+    T inner_frtol = use_predictor ? 1e-9 : 1e-8;
+
+    bool nl_fail = nl_solver->solve(fine_vars, lambda0, inner_atol, lambdaf, inner_crtol, inner_frtol);
     T nl_max_disp = get_max_disp(fine_vars);
     // printf("done with continuation solve - DEBUG PRINT\n");
 

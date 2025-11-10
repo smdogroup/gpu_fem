@@ -26,7 +26,8 @@ class NonlinearContinuationSolver {
 
     // need func to set new RHS sometimes?
 
-    bool solve(Vec &u_inout, T lambda0 = 0.2, T inner_atol = 1e-8, T lambdaf = 1.0) {
+    bool solve(Vec &u_inout, T lambda0 = 0.2, T inner_atol = 1e-8, T lambdaf = 1.0,
+               T inner_crtol = 1e-3, T inner_frtol = 1e-8) {
         u_inout.copyValuesTo(state);  // totally permuted
 
         // TBD add energy min restart and other options
@@ -52,7 +53,7 @@ class NonlinearContinuationSolver {
 
             // call inner solver
             bool final_step = lambda == lambdaf;
-            T inner_rtol = final_step ? 1e-8 : 1e-3;
+            T inner_rtol = final_step ? inner_frtol : inner_crtol;
             // T inner_atol = 1e-8;
             bool inner_conv = inner_solver->solve(lambda, inner_rtol, inner_atol, state);
 
