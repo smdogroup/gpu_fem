@@ -133,9 +133,12 @@ class NonlinearContinuationSolver {
         if (!use_predictor) return;
         vec.zeroValues();
 
-        int nuse = std::min(n_hist, 3);  // seems to work better with this
+        // int MIN = 3;
+        int MIN = 2;
+
+        int nuse = std::min(n_hist, MIN);  // seems to work better with this
         // int nuse = n_hist;
-        if (nuse < 3) return;  // need at least three points to capture curvature effects!
+        // if (nuse < MIN) return;  // need at least three points to capture curvature effects!
         // printf("use predictor\n");
 
         // indices of last nuse points in λ order

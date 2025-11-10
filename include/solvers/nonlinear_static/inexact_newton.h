@@ -16,7 +16,7 @@ class InexactNewtonSolver {
    public:
     InexactNewtonSolver(cublasHandle_t &cublasHandle_, Assembler &assembler_, Mat &kmat_,
                         Vec &loads_, Solver *linear_solver_, T initLinSolveRtol_ = 1e-1,
-                        T linSolveAtol_ = 1e-8)
+                        T linSolveAtol_ = 1e-8, T minLinSolveTol_ = 1e-6, T maxLinSolveTol_ = 0.25)
         : assembler(assembler_),
           kmat(kmat_),
           loads(loads_),
@@ -34,6 +34,8 @@ class InexactNewtonSolver {
 
         initLinSolveRtol = initLinSolveRtol_;
         linSolveAtol = linSolveAtol_;
+        minLinSolveTol = minLinSolveTol_;
+        maxLinSolveTol = maxLinSolveTol_;
 
         // make res, soln, temp vecs
         res = assembler.createVarsVec();
@@ -81,15 +83,20 @@ class InexactNewtonSolver {
 
             // Eisenstat-Walker method to update linear solve atol (to prevent over-solving)
             // ------------------------------------------------------------
+
+            // except with predictor, doesn't always dec so keep inewton > 0 condition instead
             if (inewton > 0) {
+                // don't check immediately, it almost always inc on first newton step so don't adapt
+                // if (inewton > 1) {
                 T zeta = std::pow(res_nrm / prev_res_nrm, omega);
                 T zeta_star = std::pow(linSolveRtol, omega);
                 // Ali has slight mistake here I think where he changes the atol not rtol in lin
                 // solve
                 linSolveRtol = zeta_star < 0.1 ? zeta : max(zeta, zeta_star);
-                linSolveRtol = std::clamp(linSolveRtol, 1e-12, 0.5);  // clip the rtol
-                linear_solver->set_rel_tol(linSolveRtol);
+                linSolveRtol =
+                    std::clamp(linSolveRtol, minLinSolveTol, maxLinSolveTol);  // clip the rtol
             }
+            linear_solver->set_rel_tol(linSolveRtol);
 
             // do an iterative linear solve here
             // ---------------------------------
@@ -305,6 +312,7 @@ class InexactNewtonSolver {
 
     T initLinSolveRtol, linSolveAtol;
     T failedRtol;
+    T minLinSolveTol, maxLinSolveTol;
 
     // helper states
     T omega;

@@ -111,6 +111,7 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     T omega = 0.7;  // (lower omega may be more stable in hard-conv cases)
 
     // choose the bounds for GMG lin solve line searches
+    // T omega_min = 0.5, omega_max = 4.0; // default
     T omega_min = 0.5, omega_max = 2.0; // default
     // T omega_min = 0.8, omega_max = 2.0;
     // T omega_min = 0.25, omega_max = 2.0;
@@ -258,11 +259,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     bool double_smooth = true; // true tends to be slightly faster sometimes
 
     if (is_kcycle) {
-        // int n_krylov = 500;
-        // int n_krylov = 20;
-        // int n_krylov = 30;
+        // int n_krylov = 10; // set lower to force failure on L2 mesh (temp debug)
         int n_krylov = 50;
-        // int n_krylov = 100;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, 
             n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
@@ -306,16 +304,23 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     bool use_predictor = true; // sometimes works on wing and sometimes not
     // bool use_predictor = false; // need to do something else to the predictor like smooth it for NL MG case.
 
-    T initLinSolveRtol = 1e-1; // defualt (start undersolving, then over-solve later)
+    // T initLinSolveRtol = 1e-2;
+    T initLinSolveRtol = 5e-2; 
+    // T initLinSolveRtol = 1e-1; // defualt (start undersolving, then over-solve later)
     // T initLinSolveRtol = 5e-1;
 
-    // T linSolveAtol = 1e-2; // lower atol for this case
-    T linSolveAtol = 1e-4; // lower atol for this case
+    T linSolveAtol = 1e-2; // lower atol for this case
+    // T linSolveAtol = 1e-4; // lower atol for this case
 
     bool debug = true; // debug means it will exit on linear solve failure (instead of dropping lambda and trying to keep going)
     // bool debug = false;
 
-    INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg, initLinSolveRtol, linSolveAtol);
+    T minLinSolveTol = 1e-2;
+    // T minLinSolveTol = 1e-4;
+    // T maxLinSolveTol = 0.5; // this helps undersolve it a lot.. much faster sometimes
+    T maxLinSolveTol = 0.3;
+
+    INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg, initLinSolveRtol, linSolveAtol, minLinSolveTol, maxLinSolveTol);
     NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver, use_predictor, debug);
 
     // now try calling it
@@ -341,6 +346,9 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
 
     // // DEBUG (after exiting at failed state) (put in NL MG code)
     // ==================================================
+
+    // temp debug (pretend it failed so we can see CF vs fineLU exact of a passing case)
+    // nl_fail = true;
 
     if (!nl_fail && debug) {
         printf("continuation solve converged! no debug\n");

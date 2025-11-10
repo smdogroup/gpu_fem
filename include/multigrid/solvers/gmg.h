@@ -341,6 +341,7 @@ class GeometricMultigridSolver {
         // init defect nrm
         T init_defect_nrm = grids[0].getDefectNorm();
         int n_levels = getNumLevels();
+        printf("inside getCFstep\n");
 
         /* restrict and pre-smooth */
         // -----------------------------------------------------------
@@ -350,6 +351,7 @@ class GeometricMultigridSolver {
         i_defect.permuteData(6, grids[starting_level].d_perm);
 
         for (int i_level = starting_level; i_level < n_levels - 1; i_level++) {
+            printf("level %d pre-smooth\n", i_level);
             if (smooth) {
                 int inner_pre_smooth = pre_smooth * (double_smooth ? 1 << i_level : 1);
                 grids[i_level].smoothDefect(inner_pre_smooth, false, inner_pre_smooth - 1);
@@ -362,12 +364,14 @@ class GeometricMultigridSolver {
             }
 
             // restrict defect
+            printf("level %d restr-defect\n", i_level);
             grids[i_level + 1].restrict_defect(grids[i_level].d_defect);
         }
 
         /* coarse solve */
         // -----------------------------------------------------------
 
+        printf("coarse solve\n");
         coarse_solver->solve(grids[n_levels - 1].d_defect, grids[n_levels - 1].d_soln);
 
         /* prolongations + post-smooths back up the levels */
@@ -375,6 +379,7 @@ class GeometricMultigridSolver {
 
         for (int i_level = n_levels - 2; i_level >= starting_level; i_level--) {
             // get coarse-fine correction from coarser grid to this grid
+            printf("level %d prolongate\n", i_level);
             grids[i_level].prolongate(grids[i_level + 1].d_soln);
 
             // copy out cf soln, and proposed change in defect
@@ -393,11 +398,13 @@ class GeometricMultigridSolver {
             }
 
             // post-smooth
+            printf("level %d post-smooth\n", i_level);
             int inner_post_smooth = post_smooth * (double_smooth ? 1 << i_level : 1);
             grids[i_level].smoothDefect(inner_post_smooth, false, inner_post_smooth - 1);
         }
 
         // copy out final post-smoothed defect
+        printf("final copy out defect from getCFStep\n");
         grids[starting_level].d_defect.copyValuesTo(fsm_defect);
         fsm_defect.permuteData(6, grids[starting_level].d_perm);
     }

@@ -134,8 +134,11 @@ class NonlinearWingGPUSolver {
             }
 
             if (i == level && debug_gmg) {
+                TACSMeshLoader mesh_loader2{comm};
+                mesh_loader2.scanBDFFile(fname.c_str());
+
                 // make also the fine LU assembler (with different full LU pattern)
-                auto _fine_LU_assemb = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
+                auto _fine_LU_assemb = Assembler::createFromBDF(mesh_loader2, Data(E, nu, thick));
                 fine_LU_assembler = &_fine_LU_assemb;
                 auto h_LU_bsr_data = &(fine_LU_assembler->getBsrData());
                 h_LU_bsr_data->AMD_reordering();
