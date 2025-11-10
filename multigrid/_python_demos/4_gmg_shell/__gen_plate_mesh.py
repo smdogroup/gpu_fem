@@ -10,6 +10,7 @@ def write_80(line):
 parser = argparse.ArgumentParser()
 parser.add_argument("--lx", type=float, default=1.0, help="Beam length")
 parser.add_argument("--ly", type=float, default=1.0, help="Beam width")
+parser.add_argument("--bcs", type=int, default=1, help="apply bcs")
 parser.add_argument("--nxe", type=int, default=10, help="# elements along length (and each direc)")
 parser.add_argument("--name", type=str, default="plate")
 args = parser.parse_args()
@@ -52,7 +53,8 @@ for i in range(ny):
         
         count += 1
 
-print(f"{bcnodes=}")
+if args.bcs:
+    print(f"{bcnodes=}")
 
 # Connectivity
 nex = nx - 1
@@ -124,28 +126,29 @@ with open(output_file, "w") as fout:
             write_bulk_line("CQUAD4", element)
 
     # Write boundary conditions
-    for node in bcnodes:
-        ix = (node-1) % nx
-        iy = (node-1) // nx
-        interior = 0 < ix and ix < nx-1 and 0 < iy and iy < ny-1
-        x_bndry = ix == 0 or ix == nx-1 and not(interior)
-        y_bndry = iy == 0 or iy == ny-1 and not(interior)
+    if args.bcs:
+        for node in bcnodes:
+            ix = (node-1) % nx
+            iy = (node-1) // nx
+            interior = 0 < ix and ix < nx-1 and 0 < iy and iy < ny-1
+            x_bndry = ix == 0 or ix == nx-1 and not(interior)
+            y_bndry = iy == 0 or iy == ny-1 and not(interior)
 
-        if node == 1:
-            bc = "123456"
-        elif x_bndry and not y_bndry:
-            # bc = "35"
-            bc = "34" # NOTE : changed to this cause 'x_bndry' is really the y axis and want thx constr on y axis actually (vice versa for y_bndry)
-        elif y_bndry and not x_bndry:
-            # bc = "34"
-            bc = "35"
-        elif x_bndry and y_bndry:
-            bc = "345" # all rot constrained
-        else:
-            bc = "3"
+            if node == 1:
+                bc = "123456"
+            elif x_bndry and not y_bndry:
+                # bc = "35"
+                bc = "34" # NOTE : changed to this cause 'x_bndry' is really the y axis and want thx constr on y axis actually (vice versa for y_bndry)
+            elif y_bndry and not x_bndry:
+                # bc = "34"
+                bc = "35"
+            elif x_bndry and y_bndry:
+                bc = "345" # all rot constrained
+            else:
+                bc = "3"
 
-        # print(F"{node=} {nx=} {bc=}")
+            # print(F"{node=} {nx=} {bc=}")
 
-        write_bulk_line("SPC", [1, node, bc, 0.0])
+            write_bulk_line("SPC", [1, node, bc, 0.0])
 
     write_80("ENDDATA")
