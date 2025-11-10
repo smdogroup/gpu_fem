@@ -12,28 +12,22 @@ import argparse
 # RUN NOTES
 # ==================
 
-# L2 mesh => use CFI4 + predictor + omegaLS_min = 0.5 and omegaMC = 0.7 for best results (about 14 sec runtime)
-# L3 mesh => haven't got it working yet, suspect need lower omegaLS_min bounds rn (or higher?) 
+# # WORKING L2 mesh case, omegaMC can't be too high, omegaLS_min has to be reasonable too
+level=2; force, SR, omegaMC, omegaLS_min = 4e7, 10.0, 0.7, 0.5; use_predictor=True #(also CFI4 elems)
+
+# # try faster L2 mesh
+# level=2; force, SR, omegaMC, omegaLS_min = 4e7, 10.0, 1.0, 0.5; use_predictor=True #(also CFI4 elems)
+
+# inprog L3 mesh => haven't got it working yet, suspect need lower omegaLS_min bounds rn (or higher?) 
+# or may need to turn predictor off for this one (still working on L3 case)
+# level=3; force, SR = 4e7, 10.0; use_predictor=False #(also CFI4 elems)
+# omegaMC = 0.6; omegaLS_min=0.4
 
 # setup GPU solver for nl plate
 solver = nlwinggpu.NonlinearWingGPUSolver(
-    # level=1,
-    level=2,
-    # level=3,
-    force=4e7,
-    SR=10.0,
-    use_predictor=True,
-    # use_predictor=False, # works well on NL wing now!
-    # kmg_print=True,
-    kmg_print=False,
-    # nl_debug=True, # if debug is on, it will exit on a failure and return the failed state
-    nl_debug=False,
-    omegaMC=0.7,
-    # omegaMC=1.0,
-    # omegaMC=1.5,
-    # omegaLS_min=0.25,
-    omegaLS_min=0.5, 
-    debug_gmg=False
+    level=level, force=force, SR=SR, use_predictor=use_predictor,
+    omegaMC=omegaMC, omegaLS_min=omegaLS_min,
+    kmg_print=False, nl_debug=False, debug_gmg=False,
 )
 
 nvars = solver.get_num_vars()
