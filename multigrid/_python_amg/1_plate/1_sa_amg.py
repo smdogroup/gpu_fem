@@ -106,6 +106,11 @@ for i in range(n_levels-1):
         lhs = tacs_bsr_mat_list[i]
         print(f"{lhs.shape=}")
 
+        lhs_dense = lhs.toarray()
+        LplusD_dense = np.tril(lhs_dense)
+        U_dense = lhs_dense - LplusD_dense
+        NZ = (P != 0).toarray()
+
         # get the coarse rigid body modes from xpts
         print(f"get rigid body modes\n")
         B = get_rigid_body_modes(xpts_list[i+1], bcs_list[i+1], th=1.0) # as bsr style vector
@@ -116,28 +121,39 @@ for i in range(n_levels-1):
 
             # compute K * P (defect matrix)
             KP = lhs @ P
-            P2 = KP.multiply(P != 0)  # mask to preserve fillin for P
+            # P2 = KP.multiply(P != 0)  # mask to preserve fillin for P
             # maybe keep one level of fillin?
-            # P2 = KP.copy()
+            P2 = KP.copy()
             # print(f"{P2.shape=}")
 
             # apply GS smoother 
             print("do smoothing step\n")
-            P3 = bgs_bsr_smoother(lhs, P2, 
-                                #   num_iter=2,
-                                # num_iter=3,
-                                  num_iter=1,
-                                omega=1e-2)#PU @ UTU_inv @ U.T
+            # P3 = bgs_bsr_smoother(lhs, P2, 
+            #                     #   num_iter=2,
+            #                     # num_iter=3,
+            #                       num_iter=1,
+            #                     omega=1e-2)#PU @ UTU_inv @ U.T
 
-            # print(f"{P3.shape=}")
-            # exit()
+            # the above sparse smoother didn't work, so trying dense instead
+            # P_defect = P2 - lhs @ P2
+            # P_defect = P_defect.multiply(P != 0)
+
+            # dP = np.linalg.solve(LplusD_dense, P_defect.toarray())
+            # dP = bsr_matrix(dP, blocksize=(6,6))
+
+            # omega = 0.5
+            # P3 = P2 + dP * omega
+
+            UP2 = U_dense @ P2
+            UP2 = UP2 * NZ
+            P3 = np.linalg.solve(LplusD_dense, P2 - UP2)
+            P3 = bsr_matrix(P3, blocksize=(6,6))
+            P = P3
 
             # apply orthogonal projector (it definitely seemed to help)
             print("run orthogonal projector\n")
             P4 = orthog_nullspace_projector(P3, B, bcs_list[i])
             P = P4
-
-            # P = P3
 
 
         Icf_list += [P.toarray()]
