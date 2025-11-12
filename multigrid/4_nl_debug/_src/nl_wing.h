@@ -111,7 +111,7 @@ class NonlinearWingGPUSolver {
             // read the ESP/CAPS => nastran mesh for TACS
             TACSMeshLoader mesh_loader{comm};
 
-            std::string fname = "../4_aob_wing/meshes/aob_wing_L" + std::to_string(i) + ".bdf";
+            std::string fname = "../3_aob_wing/meshes/aob_wing_L" + std::to_string(i) + ".bdf";
 
             mesh_loader.scanBDFFile(fname.c_str());
             double E = 70e9, nu = 0.3,
