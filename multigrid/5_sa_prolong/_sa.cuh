@@ -65,9 +65,8 @@ __global__ void k_compute_Dinv_P_mmprod(int nnzb_prod, int block_dim,
     __syncthreads();
 
     // now zero this block (since we'll be adding into it in a sec)
-    for (int iprod = threadIdx.x; iprod < block_dim2; iprod += blockDim.x) {
-        int ix = iprod / block_dim, iy = iprod % block_dim;
-        PF[block_dim * ix + iy] = 0.0;
+    for (int i = threadIdx.x; i < block_dim2; i += blockDim.x) {
+        PF[i] = 0.0;
     }
     __syncthreads();
 
@@ -85,11 +84,12 @@ __global__ void k_add_colored_submat_PFP(int color_nnzb, int block_dim, T omegaM
     /* add colored rows of Dinv*PF=>PF previous step into P matrix as color smoother update */
     
     // P and PF both have K*P filled-in sparsity
-    int iblock = blockIdx.x;
-    if (iblock >= color_nnzb) return;
+    int tid = blockIdx.x;
+    if (tid >= color_nnzb) return;
     int block_dim2 = block_dim * block_dim;
-    const T *PF = &d_PF_vals[block_dim2 * start_block];
-    T *P = &d_P_vals[block_dim2 * end_block];
+    int iblock = tid + start_block;
+    const T *PF = &d_PF_vals[block_dim2 * iblock];
+    T *P = &d_P_vals[block_dim2 * iblock];
 
     for (int ii = threadIdx.x; ii < block_dim2; ii += blockDim.x) {
         P[ii] += omegaMC * PF[ii]; // no atomic add, all separate

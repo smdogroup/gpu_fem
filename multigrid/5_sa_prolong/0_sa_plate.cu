@@ -145,7 +145,7 @@ int main() {
     printf("4.2.1) create P_rowp\n");
     for (int perm_inodef = 0; perm_inodef < nnodes_fine; perm_inodef++) {
         int inode_f = h_f_perm[perm_inodef]; // convert out of colored perm order to vis order
-        int ix = inode_f / nx_f, iy = inode_f % nx_f;
+        int ix = inode_f % nx_f, iy = inode_f / nx_f;
         int ix_c0 = ix / 2, iy_c0 = iy / 2; // loop over nearby coarse nodes +-1 each side
         // printf("fine node (%d,%d) => start coarse node (%d,%d)\n", ix, iy, ix_c0, iy_c0);
         P_rowp[perm_inodef + 1] = P_rowp[perm_inodef];
@@ -177,7 +177,7 @@ int main() {
     printf("4.2.2) create P_cols\n");
     for (int perm_inodef = 0; perm_inodef < nnodes_fine; perm_inodef++) {
         int inode_f = h_f_perm[perm_inodef]; // convert out of colored perm order to vis order
-        int ix = inode_f / nx_f, iy = inode_f % nx_f;
+        int ix = inode_f % nx_f, iy = inode_f / nx_f;
         int ix_c0 = ix / 2, iy_c0 = iy / 2; // loop over nearby coarse nodes +-1 each side
         std::vector<int> c_cols;
         for (int iyc = iy_c0 - 1; iyc < iy_c0 + 2; iyc++) {
@@ -217,7 +217,7 @@ int main() {
     printf("4.2.3) create P_vals on host\n");
     for (int perm_inodef = 0; perm_inodef < nnodes_fine; perm_inodef++) {
         int inode_f = h_f_perm[perm_inodef]; // convert out of colored perm order to vis order
-        int ix = inode_f / nx_f, iy = inode_f % nx_f;
+        int ix = inode_f % nx_f, iy = inode_f / nx_f;
         int ix_c0 = ix / 2, iy_c0 = iy / 2; // loop over nearby coarse nodes +-1 each side
         for (int iyc = iy_c0 - 1; iyc < iy_c0 + 2; iyc++) {
             for (int ixc = ix_c0 - 1; ixc < ix_c0 + 2; ixc++) {
@@ -238,7 +238,7 @@ int main() {
                     if (case3) scale = 0.25;
                     for (int ib = 0; ib < 6; ib++) {
                         // set diag of 6x6 block matrix here
-                        P_vals[36 * inz + 6 * ib + ib] = scale;
+                        P_vals[36 * inz + 6 * ib + ib] += scale;
                     }
                     inz++;
                 }
@@ -545,6 +545,25 @@ int main() {
     soln.permuteData(6, f_grid->d_perm);
     auto h_f_soln3 = soln.createHostVec(); // permute solve to vis order
     printToVTK<Assembler,HostVec<T>>(assembler, h_f_soln3, "out/plate_cf_new_fill.vtk");
+    // compute difference to the original
+    T *_hv1 = h_f_soln2.getPtr();
+    T *_hv2 = h_f_soln3.getPtr();
+    T *_dh_cf = new T[h_f_soln2.getSize()];
+    memset(_dh_cf, 0.0, N * sizeof(T));
+    T abs_err = 0.0;
+    T abs_disp = 0.0;
+    int err_dof = 0;
+    for (int i = 0; i < N; i++) {
+        _dh_cf[i] = _hv2[i] - _hv1[i];
+        if (abs(_dh_cf[i]) > abs_err) {
+            abs_err = abs(_dh_cf[i]);
+            err_dof = i;
+        }
+        abs_disp = max(abs_disp, abs(_hv1[i]));
+    }
+    printf("abs err of new CF %.8e / %.8e at DOF %d or node %d\n", abs_err, abs_disp, err_dof, err_dof/6);
+    // return 0;
+
 
     // allocate some data first
     printf("PF_rowp (DEBUG) with PF_nnzb = %d: ", PF_nnzb);
@@ -662,18 +681,44 @@ int main() {
     d_temp_vec2.permuteData(6, f_grid->d_perm);
     auto h_KPv2 = d_temp_vec2.createHostVec(); 
     printToVTK<Assembler,HostVec<T>>(assembler, h_KPv2, "out/plate_nKPv_new.vtk");
-
+    // compare vectors in the -K*P*v step, where the error is.. (VERIFICATION / DEBUG)
+    _hv1 = h_KPv1.getPtr();
+    _hv2 = h_KPv2.getPtr();
+    memset(_dh_cf, 0.0, N * sizeof(T));
+    abs_err = 0.0;
+    abs_disp = 0.0;
+    err_dof = 0;
+    for (int i = 0; i < N; i++) {
+        _dh_cf[i] = _hv2[i] - _hv1[i];
+        if (abs(_dh_cf[i]) > abs_err) {
+            abs_err = abs(_dh_cf[i]);
+            err_dof = i;
+        }
+        abs_disp = max(abs_disp, abs(_hv1[i]));
+    }
+    printf("abs err of -K*P*v step %.8e / %.8e at DOF %d or node %d\n", abs_err, abs_disp, err_dof, err_dof/6);
     // return 0;
+
+    /* begin smoothing phase of the P matrix! */
+    printf("h_color_rowp: ");
+    printVec<int>(num_colors + 1, h_color_rowp.getPtr());
+    printf("\twith nnodes_fine = %d\n", nnodes_fine);
+    // printf("PF_rowp[4224-on]: ");
+    // prinVec<int>(2, PF_rowp)
+
     int nsmooth = 1;
     // int nsmooth = 4;
+
     T omegaMC = 0.7; // smoother constant
     // T omegaMC = 1.5;
 
     int itest = 0;
     for (int ismooth = 0; ismooth < nsmooth; ismooth++) {
+        printf("matrix smoothing step %d / %d\n", ismooth + 1, nsmooth);
         // loop over each color (less efficient but let's just do it like this first)
         // for (int icolor = 0; icolor < num_colors; icolor++) {
-        for (int icolor = 0; icolor < 1; icolor++) {   // DEBUG
+        for (int icolor = 0; icolor < 1; icolor++) {   // DEBUG, works well now only with just 1 color smoothing step..
+        // for (int icolor = 0; icolor < 2; icolor++) {   // DEBUG
         
             /* 7.2) compute Kmat * P to get defect matrix (no fillin first) */
             // could maybe do it in place, but not worried about extra mem or inefficiencies rn
@@ -690,8 +735,9 @@ int main() {
             //     7.3.1) compute Dc^{-1} * PF => PF in place (applies Dinv to the rows of this color)
             // get num nnzb in PF of this color part of submat
             int start_node = h_color_rowp[icolor], end_node = h_color_rowp[icolor+1];
-            int start_block = PF_cols[start_node], end_block = PF_cols[end_node + 1];
+            int start_block = PF_rowp[start_node], end_block = PF_rowp[end_node + 1];
             int PF_color_nnzb = end_block - start_block;
+            printf("\tcolor %d with nodes %d to %d and nnzb = %d\n", icolor, start_node, end_node, PF_color_nnzb);
             dim3 DP_block(216);
             dim3 DP_grid(PF_color_nnzb);
             k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(PF_color_nnzb, block_dim, 
@@ -699,7 +745,7 @@ int main() {
 
             /* 7.4) now add colored modified rows from PF into P as the colored update from the smoother */
             // (considering that PF has some fillin to P (which we'll drop?))
-            dim3 add_block(36);
+            dim3 add_block(64);
             k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(PF_color_nnzb, block_dim, omegaMC, start_block, end_block,
                 d_PF_vals, d_P_vals);
 
@@ -723,6 +769,7 @@ int main() {
         c_soln.getPtr(), &b, d_temp));
     d_temp_vec.permuteData(6, f_grid->d_perm); // permute solve to vis order
     auto h_soln_smooth = d_temp_vec.createHostVec();
+    d_temp_vec.permuteData(6, f_grid->d_iperm); // permute back to solve order for next step
     printToVTK<Assembler,HostVec<T>>(assembler, h_soln_smooth, "out/plate_cf_smooth.vtk");
     // then compute -K*temp = -K*P*u_c => d_temp2
     a = -1.0, b = 0.0;
@@ -742,8 +789,6 @@ int main() {
     auto h_def1 = d_temp_vec.createHostVec();
     printToVTK<Assembler,HostVec<T>>(assembler, h_def1, "out/plate_fsmooth1.vtk");
     
-
-
 
     /* 9) verification, compare smoothed prolong matrix to original prolong matrix on a vec (with standard smoothing) */
     // TBD
