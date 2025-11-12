@@ -58,7 +58,8 @@ class PCGSolver : public BaseSolver {
     }
 
     // nothing
-    void update_after_assembly(DeviceVec<T> &vars) {}
+    // void update_after_assembly(DeviceVec<T> &vars) {}
+    void update_after_assembly(DeviceVec<T> &vars) { pc->update_after_assembly(vars); }
 
     void set_print(bool print) { options.print = print; }
     void set_abs_tol(T atol) { options.atol = atol; }

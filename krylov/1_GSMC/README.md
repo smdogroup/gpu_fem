@@ -1,0 +1,1 @@
+# gauss seidel multicolor smoother (GSMC) as preconditioner for GMRES iterative solver
