@@ -120,7 +120,7 @@ for i in range(n_levels-1):
         # for ismooth in range(5):
 
             # compute K * P (defect matrix)
-            KP = lhs @ P
+            KP = -lhs @ P
             # P2 = KP.multiply(P != 0)  # mask to preserve fillin for P
             # maybe keep one level of fillin?
             P2 = KP.copy()
