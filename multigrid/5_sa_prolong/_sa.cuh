@@ -79,7 +79,7 @@ __global__ void k_compute_Dinv_P_mmprod(int nnzb_prod, int block_dim,
 }
 
 template <typename T>
-__global__ void k_add_colored_submat_PFP(int color_nnzb, int block_dim, T omegaMC, int start_block, int end_block,
+__global__ void k_add_colored_submat_PFP(int color_nnzb, int block_dim, T omegaMC, int start_block, 
     const T *d_PF_vals, T *d_P_vals) {
     /* add colored rows of Dinv*PF=>PF previous step into P matrix as color smoother update */
     
@@ -111,4 +111,59 @@ __global__ void k_copy_P_to_fillP(int nnzb, const int block_dim, const int *d_fi
     for (int ii = threadIdx.x; ii < block_dim2; ii += blockDim.x) {
         vals[ii] = vals0[ii];
     }
+}
+
+template <typename T>
+__global__ void k_normalize_rows(const int nbrows, const int block_dim, const int max_inner_row, const int *d_rowp, 
+        T *d_vals) {
+    
+    int brow = blockIdx.x;
+    int thread = threadIdx.x; // local thread ids
+    if (brow >= nbrows) return; // num block rows
+    // __shared__ T row_norms_sq[6]; // 6 >= block_dim for all stuff in TACS (except hellinger-reissner element)
+    // __shared__ T row_norms[6];
+    // if (threadIdx.x == 0) {
+    //     memset(row_norms, 0.0, 6 * sizeof(T));
+    //     memset(row_norms_sq, 0.0, 6 * sizeof(T));
+    // }
+    // changing to row abs sums instead (so initially satisfied and doesn't mess up initial prolong starting point)
+    __shared__ T row_abs_sums[6]; // 6 >= block_dim for all stuff in TACS (except hellinger-reissner element)
+    if (threadIdx.x == 0) {
+        memset(row_abs_sums, 0.0, 6 * sizeof(T));
+    }
+    __syncthreads();
+
+    // each thread gets the number of blocks in this block row
+    int start_block = d_rowp[brow], end_block = d_rowp[brow+1];
+    int nblocks = end_block - start_block;
+    int block_dim2 = block_dim * block_dim;
+    int nvals = nblocks * block_dim2;
+
+    // get the row norms squared for each dof in the block
+    for (int i = threadIdx.x; i < nvals; i += blockDim.x) {
+        int iblock = i / block_dim2 + start_block, idof = i % block_dim2;
+        int irow = idof / block_dim; //, icol = idof % block_dim;
+        T val = d_vals[block_dim2 * iblock + idof];
+        // atomicAdd(&row_norms_sq[irow], val * val);
+        atomicAdd(&row_abs_sums[irow], abs(val));
+    }
+    
+    __syncthreads();
+
+    // then compute the row norms from the row norms sq
+    // for (int i = threadIdx.x; i < block_dim; i += blockDim.x) {
+    //     row_norms[i] = sqrt(row_norms_sq[i]);
+    // }
+    // __syncthreads();
+
+    // now normalize each row of the matrix
+    for (int i = threadIdx.x; i < nvals; i += blockDim.x) {
+        int iblock = i / block_dim2 + start_block, idof = i % block_dim2;
+        int irow = idof / block_dim; //, icol = idof % block_dim;
+        // T scale = 1.0 / row_norms[irow];
+        T scale = 1.0 / row_abs_sums[irow];
+        scale *= (irow < max_inner_row);
+        d_vals[block_dim2 * iblock + idof] *= scale;
+    }
+
 }

@@ -25,7 +25,7 @@ def get_rigid_body_modes(xpts, bcs, th:float=1.0):
     Bpred[:, 5, 3] = -th
 
     # v and w disp
-    Bpred[:, 1, 4] = th * _z
+    Bpred[:, 1, 4] = -th * _z
     Bpred[:, 2, 4] = th * _y
     # ah but then need to adjust thx or thy disp grads for trv shear error
     Bpred[:, 3, 4] = th
