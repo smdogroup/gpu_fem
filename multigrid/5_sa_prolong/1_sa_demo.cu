@@ -71,14 +71,15 @@ int main() {
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
 
     // some problem specific user inputs
-    int nxe = 64; // two-grid problem with second grid the coarser one
-    // int nxe = 32;
+    // int nxe = 64; // two-grid problem with second grid the coarser one
+    int nxe = 32;
     // int nxe = 16;
     // int nxe = 8;
     // int nxe = 4;
 
     // double SR = 1.0;
     double SR = 10.0;
+    // double SR = 100.0;
 
     printf("1) create handles\n");
     cublasHandle_t cublasHandle = NULL;
@@ -501,6 +502,61 @@ int main() {
         d_PF_rowp = d_P_rowp, d_PF_cols = d_P_cols;
         d_PF_rows = d_P_rows;
     }
+    // OPTIONAL do sparsity increase again
+    // because prelim prolong doesn't have enough sparsity increase I don't think with AP_0
+    bool compute_PF_fillin2 = true;
+    // bool compute_PF_fillin2 = false;
+    int PF2_nnzb, *PF2_rowp, *d_PF2_rowp, *PF2_rows, *d_PF2_rows, *PF2_cols, *d_PF2_cols;
+    if (compute_PF_fillin2) {
+        //   note there may be more efficient ways of getting fillin, not worried about that rn (just demo script)
+        PF2_rowp = new int[nnodes_fine + 1];
+        memset(PF2_rowp, 0, (nnodes_fine + 1) * sizeof(int));
+        for (int i = 0; i < nnodes_fine; i++) {
+            PF2_rowp[i+1] = PF2_rowp[i];
+            std::unordered_set<int> unique_cols;
+            for (int kp = h_kmat_rowp[i]; kp < h_kmat_rowp[i+1]; kp++) {
+                int k = h_kmat_cols[kp];
+                for (int jp = PF_rowp[k]; jp < PF_rowp[k+1]; jp++) {
+                    int j = PF_cols[jp];
+                    unique_cols.insert(j);
+                }
+            }
+            PF2_rowp[i+1] += unique_cols.size();
+        }
+        printf("PF2_rowp: ");
+        printVec<int>(50, PF2_rowp);
+        PF2_nnzb = PF2_rowp[nnodes_fine];
+        PF2_cols = new int[PF2_nnzb];
+        PF2_rows = new int[PF2_nnzb];
+        int iinz = 0;
+        for (int i = 0; i < nnodes_fine; i++) {
+            std::set<int> ordered_unique_cols;
+            for (int kp = h_kmat_rowp[i]; kp < h_kmat_rowp[i+1]; kp++) {
+                int k = h_kmat_cols[kp];
+                for (int jp = PF_rowp[k]; jp < PF_rowp[k+1]; jp++) {
+                    int j = PF_cols[jp];
+                    ordered_unique_cols.insert(j);
+                }
+            }
+            for (int col : ordered_unique_cols) {
+                PF2_cols[iinz] = col;
+                PF2_rows[iinz] = i;
+                iinz++;
+            }
+        }
+        printf("PF2_cols: ");
+        printVec<int>(50, PF2_cols);
+        d_PF2_rowp = HostVec<int>(nnodes_fine + 1, PF2_rowp).createDeviceVec().getPtr();
+        d_PF2_rows = HostVec<int>(PF2_nnzb, PF2_rows).createDeviceVec().getPtr();
+        d_PF2_cols = HostVec<int>(PF2_nnzb, PF2_cols).createDeviceVec().getPtr();
+
+        // hten replace into old sparsity
+        PF_rowp = PF2_rowp, PF_rows = PF2_rows, PF_cols = PF2_cols;
+        PF_nnzb = PF2_nnzb;
+        d_PF_rowp = d_PF2_rowp, d_PF_rows = d_PF2_rows, d_PF_cols = d_PF2_cols;
+    } else {
+        // do nothing, no additional sparsity increase
+    }
     // now move rowp, cols to the device
     T *d_PF_vals = DeviceVec<T>(36 * PF_nnzb).getPtr();
     // make P filled in too, so now copy it's data into new sparsity
@@ -702,6 +758,7 @@ int main() {
         Bc[36 * pic + 6 * 1 + 1] = 1.0; // v translation
         Bc[36 * pic + 6 * 2 + 2] = 1.0; // w translation
         if (proper_rot_bcs) {
+            // baseline (what I think is) correct
             // thx rotation
             Bc[36 * pic + 6 * 1 + 3] = -z;
             Bc[36 * pic + 6 * 2 + 3] = y;
@@ -711,9 +768,10 @@ int main() {
             Bc[36 * pic + 6 * 2 + 4] = -x;
             Bc[36 * pic + 6 * 4 + 4] = 1.0;
             // thz rotation
-            Bc[36 * pic + 6 * 0 + 5] = -y;
-            Bc[36 * pic + 6 * 1 + 5] = x;
-            Bc[36 * pic + 6 * 5 + 5] = 1.0;
+            Bc[36 * pic + 6 * 0 + 5] = y;
+            Bc[36 * pic + 6 * 1 + 5] = -x;
+            Bc[36 * pic + 6 * 5 + 5] = -1.0;
+
         } else {
             // temp debug, if we do this to just enforce row-sums
             // not exactly correct, but just try it for a sec..
@@ -843,9 +901,9 @@ int main() {
     // int nsmooth = 1;
     // int nsmooth = 2;
     // int nsmooth = 4; // good num here, shouldn't need too many steps
-    // int nsmooth = 10;
+    int nsmooth = 10;
     // int nsmooth = 20;
-    int nsmooth = 40;
+    // int nsmooth = 40;
     // int nsmooth = 100; 
     // int nsmooth = 300;
 
@@ -863,10 +921,12 @@ int main() {
     // T omegaMC = 2e-3;
     // T omegaMC = 5e-3;
     // T omegaMC = -5e-3; // wrong direction?
-    T omegaMC = 0.01;
-    // T omegaMC = 0.04;
+    // T omegaMC = 0.01;
+    T omegaMC = 0.04;
     // T omegaMC = 0.05;
+    // T omegaMC = -0.05;
     // T omegaMC = 0.1;
+    // T omegaMC = -0.1;
     // T omegaMC = 0.4;
     // T omegaMC = 0.7; // smoother constant
     // T omegaMC = 1.5;
@@ -876,13 +936,16 @@ int main() {
     bool write_vtk = false;
 
     // use multicolor vs jacobi smoother
-    bool use_multicolor = true;
-    // bool use_multicolor = false;
+    // bool use_multicolor = true;
+    bool use_multicolor = false;
     int nloop_colors = 1;
     if (use_multicolor) {
-        nsmooth = 1;
-        nloop_colors = 1; // temp debug
-        // nloop_colors = num_colors;
+        // // TEMP DEBUG
+        // nsmooth = 1;
+        // nloop_colors = 1; 
+
+        nloop_colors = num_colors;
+        // not hte most efficient right now for the MC case bc of 
     }
 
     // do orthog projection of near kernel modes
@@ -894,7 +957,7 @@ int main() {
 
     printf("inner-prod space energy min: init_defect %.8e and using omega = %.4e\n", def_nrm0, omegaMC);
     if (use_multicolor) {
-        printf("\tusing multicolor smoother\n");
+        printf("\tusing multicolor smoother so only 1 color\n");
     } else {
         printf("\tusing jacobi smoother\n");
     }
@@ -1049,13 +1112,13 @@ int main() {
             int PF_color_nnzb = end_block - start_block;
             dim3 add_block(64);
             dim3 add_grid(PF_color_nnzb);
-            printf("\tadd dP color %d update\n", icolor);
+            // printf("\tadd dP color %d update\n", icolor);
             k_add_colored_submat_PFP<T><<<add_grid, add_block>>>(PF_nnzb, block_dim, omegaMC, start_block,
                 d_PF_vals, d_P_vals);
         } else {
             // add whole dP update in
             dim3 add_block(64);
-            printf("\tadd dP update\n");
+            // printf("\tadd dP update\n");
             k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(PF_nnzb, block_dim, omegaMC, 0,
                 d_PF_vals, d_P_vals);
         }
@@ -1063,13 +1126,13 @@ int main() {
         // printf("\t\tdone with add colored submat PFP\n");
 
 
-        } // end of color loop
+        // } // end of color loop (optional SPOT 1)
 
 
         /* 7.6) compute the defect norms to check progress */
 
         // compute new PF -K*P defect matrix one more time,
-        printf("compute defect norms\n");
+        // printf("compute defect norms\n");
         cudaMemset(d_PF_vals, 0.0, PF_nnzb * 36 * sizeof(T));
         a = -1.0; // compute PF = -K * P matrix-matrix
         k_compute_P_K_P_mmprod<T><<<PKP_grid, PKP_block>>>(nnzb_prod, block_dim, a, d_K_blocks, 
@@ -1119,7 +1182,9 @@ int main() {
         }
         
         
-        printf("matrix smoothing step %d / %d: max disp %.4e, act defect %.4e, and PF defect %.4e\n", ismooth + 1, nsmooth, max_disp, def_nrm, PF_def_nrm);
+        printf("matrix smoothing step %d / %d, icolor %d: max disp %.4e, act defect %.4e, and PF defect %.4e\n", ismooth + 1, nsmooth, icolor, max_disp, def_nrm, PF_def_nrm);
+
+        } // end of color loop (OPTIONAL spot #2 - if want to check defect after every color)
 
     } // end of smoothing loop
 
