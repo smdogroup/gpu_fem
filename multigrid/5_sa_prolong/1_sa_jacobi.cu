@@ -71,9 +71,9 @@ int main() {
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
 
     // some problem specific user inputs
-    // int nxe = 64; // two-grid problem with second grid the coarser one
+    int nxe = 64; // two-grid problem with second grid the coarser one
     // int nxe = 32;
-    int nxe = 16;
+    // int nxe = 16;
     // int nxe = 8;
     // int nxe = 4;
 
@@ -128,6 +128,7 @@ int main() {
     c_bsr_data.compute_full_LU_pattern(10.0, false);
     auto c_h_color_rowp = HostVec<int>(c_num_colors + 1, _c_color_rowp);
     c_assembler.moveBsrDataToDevice();
+    T *xpts_coarse = c_assembler.getXpts().createHostVec().getPtr();
     auto c_loads = c_assembler.createVarsVec(coarse_loads);
     c_assembler.apply_bcs(c_loads);
     auto c_kmat = createBsrMat<Assembler, VecType<T>>(c_assembler);
@@ -443,89 +444,6 @@ int main() {
     auto D_LU_mat = BsrMat<DeviceVec<T>>(d_diag_bsr_data, d_dinv_vals);
 
 
-    // compute on the host first
-    printf("6) compute the coarse mesh rigid body modes\n");
-    T *d_xpts_coarse = c_assembler.getXpts();
-    T *xpts_coarse = d_xpts_coarse.createHostVec().getPtr();
-    T *Bc = new T[36 * nnodes_coarse]; // get it in solve order so need h_c_perm
-    memset(Bc, 0.0, 36 * nnodes_coarse);
-    for (int i = 0; i < 6 * nnodes_coarse; i++) {
-        int ic = i / 6, ii = i % 6;
-        int pic = h_c_iperm[ic]; // computed in permuted order
-        T x = xpts_coarse[3 * ic], y = xpts_coarse[3 * ic + 1], z = xpts_coarse[3 * ic + 2];
-        Bc[36 * pic + 6 * 0 + 0] = 1.0; // u translation
-        Bc[36 * pic + 6 * 1 + 1] = 1.0; // v translation
-        Bc[36 * pic + 6 * 2 + 2] = 1.0; // w translation
-        // thx rotation
-        Bc[36 * pic + 6 * 1 + 3] = -z;
-        Bc[36 * pic + 6 * 2 + 3] = y;
-        Bc[36 * pic + 6 * 3 + 3] = 1.0;        
-        // thy rotatoin
-        Bc[36 * pic + 6 * 0 + 4] = z;
-        Bc[36 * pic + 6 * 2 + 4] = -x;
-        Bc[36 * pic + 6 * 4 + 4] = 1.0;
-        // thz rotation
-        Bc[36 * pic + 6 * 0 + 5] = -y;
-        Bc[36 * pic + 6 * 1 + 5] = x;
-        Bc[36 * pic + 6 * 5 + 5] = 1.0;
-    }
-    // move to device
-    T *d_Bc = HostVec<T>(36 * nnodes_coarse, Bc).createDeviceVec().getPtr();
-    // then compute the fine node BC indicator matrix Fi later?
-
-    /* 6.2) compute free var unknowns */
-    // get the bcs and compute a free DOF map on the device
-    auto free_var_vec = DeviceVec<bool>(N);
-    free_var_vec.setFullVecToConstValue(true); // set all to default true meaning free var
-    bool *d_free_dof_ptr = free_var_vec.getPtr();
-    auto bcs_vec = assembler.getBCs();
-    int n_bcs = bcs_vec.getSize();
-    dim3 bcs_block(32), bcs_grid((n_bcs + 31) / 32);
-    // computes false or true bool pointer d_free_dof_ptr in solve node order (not vis order)
-    k_get_free_dof<<<bcs_grid, bcs_block>>>(n_bcs, block_dim, bcs_vec.getPtr(), f_grid->d_iperm, d_free_dof_ptr);
-
-    /* 6.3) construct (UTU+eps*I)^-1 matrix as linear operator just like Dinv */
-    // for the orthogonal projector
-    d_UTU_vals = DeviceVec<T>(ndiag_vals);
-    // compute UTU + eps*I values in a kernel
-    dim3 OP_block0(32), OP_grid0(nnodes_fine);
-    k_orthog_projector<T><<<OP_grid0, OP_block0>>>(nnodes_fine, block_dim, d_Bc, 
-        d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_UTU_vals);
-    // now compute the LU factor and inverse matrix UTUinv for each fine node (same size and like Dinv matrix)
-    // reuse same pointers and nnzb sizes as Dinv cause same dimensions
-    CUSPARSE::perform_ilu0_factorization(cusparseHandle, descr_L, descr_U, info_L, info_U,
-                                         &pBuffer, nnodes, diag_inv_nnzb, block_dim,
-                                         d_UTU_vals, d_diag_rowp, d_diag_cols, trans_L,
-                                         trans_U, policy_L, policy_U, dir);
-    // now compute UTUinv linear operator like I did for the Dinv
-    auto d_UTUinv_vals = DeviceVec<T>(ndiag_vals); // inv linear operator of UTU
-    for (int i = 0; i < block_dim; i++) {
-        // set d_temp to ei (one of e1 through e6 per block)
-        cudaMemset(d_temp, 0.0, N * sizeof(T));
-        dim3 block(32);
-        dim3 grid((nnodes + 31) / 32);
-        k_setBlockUnitVec<T><<<grid, block>>>(nnodes, block_dim, i, d_temp);
-
-        // now compute D^-1 through U^-1 L^-1 triang solves and copy result into d_temp2
-        const double alpha = 1.0;
-        CHECK_CUSPARSE(cusparseDbsrsv2_solve(
-            cusparseHandle, dir, trans_L, nnodes, nnodes, &alpha, descr_L, d_UTU_vals,
-            d_diag_rowp, d_diag_cols, block_dim, info_L, d_temp, d_resid, policy_L,
-            pBuffer));  // prob only need U^-1 part for block diag.. TBD
-
-        CHECK_CUSPARSE(cusparseDbsrsv2_solve(
-            cusparseHandle, dir, trans_U, nnodes, nnodes, &alpha, descr_U, d_UTU_vals,
-            d_diag_rowp, d_diag_cols, block_dim, info_U, d_resid, d_temp2, policy_U, pBuffer));
-
-        // now copy temp2 into columns of new operator
-        dim3 grid2((N + 31) / 32);
-        k_setLUinv_operator<T>
-            <<<grid2, block>>>(nnodes, block_dim, i, d_temp2, d_UTUinv_vals.getPtr());
-    }
-    // auto UTUinv_mat = BsrMat<DeviceVec<T>>(d_diag_bsr_data, d_UTUinv_vals);
-    // also set storage for SU matrix (aggregated for each fine node, like row sums of prolong, same size as D and UTU matrix)
-    auto d_SU_vals = DeviceVec<T>(ndiag_vals);
-
     /* 7) prolong smoothing loop */
     printf("7.1.1) prolong smoothing - PKP mat-mat product nz pattern\n");
     bool compute_PF_fillin = true;
@@ -769,6 +687,151 @@ int main() {
     printf("abs err of -K*P*v step %.8e / %.8e at DOF %d or node %d\n", abs_err, abs_disp, err_dof, err_dof/6);
     // return 0;
 
+    // 7.1) compute on the host first
+    // bool proper_rot_bcs = true;
+    bool proper_rot_bcs = false; // just does row sums and R or Bc = I
+
+    printf("7.1) compute the coarse mesh rigid body modes\n");
+    T *Bc = new T[36 * nnodes_coarse]; // get it in solve order so need h_c_perm
+    memset(Bc, 0.0, 36 * nnodes_coarse);
+    for (int pic = 0; pic < nnodes_coarse; pic++) {
+        // pic is permuted or solve order coarse nodes, while ic is vis or natural order
+        int ic = h_c_perm[pic];
+        T x = xpts_coarse[3 * ic], y = xpts_coarse[3 * ic + 1], z = xpts_coarse[3 * ic + 2];
+        Bc[36 * pic + 6 * 0 + 0] = 1.0; // u translation
+        Bc[36 * pic + 6 * 1 + 1] = 1.0; // v translation
+        Bc[36 * pic + 6 * 2 + 2] = 1.0; // w translation
+        if (proper_rot_bcs) {
+            // thx rotation
+            Bc[36 * pic + 6 * 1 + 3] = -z;
+            Bc[36 * pic + 6 * 2 + 3] = y;
+            Bc[36 * pic + 6 * 3 + 3] = 1.0;        
+            // thy rotatoin
+            Bc[36 * pic + 6 * 0 + 4] = z;
+            Bc[36 * pic + 6 * 2 + 4] = -x;
+            Bc[36 * pic + 6 * 4 + 4] = 1.0;
+            // thz rotation
+            Bc[36 * pic + 6 * 0 + 5] = -y;
+            Bc[36 * pic + 6 * 1 + 5] = x;
+            Bc[36 * pic + 6 * 5 + 5] = 1.0;
+        } else {
+            // temp debug, if we do this to just enforce row-sums
+            // not exactly correct, but just try it for a sec..
+            Bc[36 * pic + 6 * 3 + 3] = 1.0;        
+            Bc[36 * pic + 6 * 4 + 4] = 1.0;
+            Bc[36 * pic + 6 * 5 + 5] = 1.0;
+        }
+
+        // print out set values, DEBUG
+        // printf("Bc(%d) = \n", pic);
+        // for (int i = 0; i < 6; i++) {
+        //     printf("\t");
+        //     printVec<T>(6, &Bc[36 * pic + 6 * i]);
+        // }
+    }
+    // move to device
+    T *d_Bc = HostVec<T>(36 * nnodes_coarse, Bc).createDeviceVec().getPtr();
+    // then compute the fine node BC indicator matrix Fi later?
+    // printf("nnodes_coarse %d\n", nnodes_coarse);
+
+    /* 7.2) compute free var unknowns */
+    // get the bcs and compute a free DOF map on the device
+    auto free_var_vec = DeviceVec<bool>(N);
+    free_var_vec.setFullVecToConstValue(true); // set all to default true meaning free var
+    bool *d_free_dof_ptr = free_var_vec.getPtr();
+    auto bcs_vec = assembler.getBCs();
+    int n_bcs = bcs_vec.getSize();
+    dim3 bcs_block(32), bcs_grid((n_bcs + 31) / 32);
+    // computes false or true bool pointer d_free_dof_ptr in solve node order (not vis order)
+    k_get_free_dof<<<bcs_grid, bcs_block>>>(n_bcs, block_dim, bcs_vec.getPtr(), f_grid->d_iperm, d_free_dof_ptr);
+
+    /* 7.3) construct (UTU+eps*I)^-1 matrix as linear operator just like Dinv */
+    // for the orthogonal projector
+    auto d_UTU_vals = DeviceVec<T>(ndiag_vals);
+    // compute UTU + eps*I values in a kernel
+    dim3 OP_block0(32), OP_grid0(nnodes_fine);
+    k_orthog_projector_computeUTU<T><<<OP_grid0, OP_block0>>>(nnodes_fine, block_dim, d_Bc, 
+        d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_UTU_vals.getPtr());
+    CHECK_CUDA(cudaDeviceSynchronize());
+    // DEBUG, printout the computed UTU values on host
+    // if (nxe <= 8) {
+    //     auto h_UTU_vals = d_UTU_vals.createHostVec();
+    //     printf("h_UTU_vals: ");
+    //     T *h_UTU_ptr = h_UTU_vals.getPtr();
+    //     for (int inode = 0; inode < nnodes_fine; inode++) {
+    //         printf("  UTU-node(%d) = \n", inode);
+    //         T *h_UTU_node = &h_UTU_ptr[36 * inode];
+    //         for (int i = 0; i < 6; i++) {
+    //             printf("\t");
+    //             printVec<T>(6, &h_UTU_node[6 * i]);
+    //         }
+    //     }
+    //     return 0;
+    // }
+    
+    // now compute the LU factor and inverse matrix UTUinv for each fine node (same size and like Dinv matrix)
+    // reuse same pointers and nnzb sizes as Dinv cause same dimensions
+    CUSPARSE::perform_ilu0_factorization(cusparseHandle, descr_L, descr_U, info_L, info_U,
+                                         &pBuffer, nnodes, diag_inv_nnzb, block_dim,
+                                         d_UTU_vals.getPtr(), d_diag_rowp, d_diag_cols, trans_L,
+                                         trans_U, policy_L, policy_U, dir);
+    // now compute UTUinv linear operator like I did for the Dinv
+    auto d_UTUinv_vals = DeviceVec<T>(ndiag_vals); // inv linear operator of UTU
+    for (int i = 0; i < block_dim; i++) {
+        // set d_temp to ei (one of e1 through e6 per block)
+        cudaMemset(d_temp, 0.0, N * sizeof(T));
+        dim3 block(32);
+        dim3 grid((nnodes + 31) / 32);
+        k_setBlockUnitVec<T><<<grid, block>>>(nnodes, block_dim, i, d_temp);
+
+        // now compute D^-1 through U^-1 L^-1 triang solves and copy result into d_temp2
+        const double alpha = 1.0;
+        CHECK_CUSPARSE(cusparseDbsrsv2_solve(
+            cusparseHandle, dir, trans_L, nnodes, nnodes, &alpha, descr_L, d_UTU_vals.getPtr(),
+            d_diag_rowp, d_diag_cols, block_dim, info_L, d_temp, d_resid, policy_L,
+            pBuffer));  // prob only need U^-1 part for block diag.. TBD
+
+        CHECK_CUSPARSE(cusparseDbsrsv2_solve(
+            cusparseHandle, dir, trans_U, nnodes, nnodes, &alpha, descr_U, d_UTU_vals.getPtr(),
+            d_diag_rowp, d_diag_cols, block_dim, info_U, d_resid, d_temp2, policy_U, pBuffer));
+
+        // now copy temp2 into columns of new operator
+        dim3 grid2((N + 31) / 32);
+        k_setLUinv_operator<T>
+            <<<grid2, block>>>(nnodes, block_dim, i, d_temp2, d_UTUinv_vals.getPtr());
+    }
+    // auto UTUinv_mat = BsrMat<DeviceVec<T>>(d_diag_bsr_data, d_UTUinv_vals);
+    // DEBUG the UTUinv vals now
+    // if (nxe <= 8) {
+    //     auto h_UTU_vals = d_UTU_vals.createHostVec();
+    //     auto h_UTUinv_vals = d_UTUinv_vals.createHostVec();
+    //     printf("h_UTU vs UTUinv vals: \n");
+    //     T *h_UTU_ptr = h_UTU_vals.getPtr();
+    //     T *h_UTUinv_ptr = h_UTUinv_vals.getPtr();
+    //     for (int pif = 0; pif < nnodes_fine; pif++) {
+    //         int inode = h_f_perm[pif];
+    //         int ix = inode % nx_f, iy = inode / nx_f;
+    //         int is_interior = (0 < ix) && (ix < nx_f-1) && (0 < iy) && (iy < nx_f-1);
+    //         int nc = PF_rowp[pif+1] - PF_rowp[pif]; // num corase nodes attached
+    //         printf("  UTU-node(%d) with %d coarse neighbors (is_interior %d)\n", pif, nc, is_interior);
+    //         T *h_UTU_node = &h_UTU_ptr[36 * pif];
+    //         for (int i = 0; i < 6; i++) {
+    //             printf("\t");
+    //             printVec<T>(6, &h_UTU_node[6 * i]);
+    //         }
+
+    //         printf("  UTUinv-node(%d) (is_interior %d) = \n", pif, is_interior);
+    //         T *h_UTUinv_node = &h_UTUinv_ptr[36 * pif];
+    //         for (int i = 0; i < 6; i++) {
+    //             printf("\t");
+    //             printVec<T>(6, &h_UTUinv_node[6 * i]);
+    //         }
+    //     }
+    //     return 0;
+    // }
+    // also set storage for SU matrix (aggregated for each fine node, like row sums of prolong, same size as D and UTU matrix)
+    auto d_SU_vals = DeviceVec<T>(ndiag_vals);
+
     /* begin smoothing phase of the P matrix! */
     printf("h_color_rowp: ");
     printVec<int>(num_colors + 1, h_color_rowp.getPtr());
@@ -779,16 +842,30 @@ int main() {
 
     // int nsmooth = 1;
     // int nsmooth = 2;
-    // int nsmooth = 4;
+    // int nsmooth = 4; // good num here, shouldn't need too many steps
     // int nsmooth = 10;
     // int nsmooth = 20;
-    // int nsmooth = 40;
-    int nsmooth = 100;
+    int nsmooth = 40;
+    // int nsmooth = 100; 
     // int nsmooth = 300;
 
     // omegaMC < 2/rho(Dinv*A) is what it needs to be (may need to estimate from Arnoldi hessenberg iteration, the max eigenvalue)
+    // T omegaMC = 1e-5;
+    // T omegaMC = -1e-5;
+    // T omegaMC = 1e-4;
+    // T omegaMC = -1e-4; // wrong direction?
+    // T omegaMC = 4e-4;
+    // T omegaMC = -4e-4;
+    // T omegaMC = -5e-4;
+    // T omegaMC = 5e-4;
+    // T omegaMC = -1e-3;
+    // T omegaMC = 1e-3;
+    // T omegaMC = 2e-3;
     // T omegaMC = 5e-3;
+    // T omegaMC = -5e-3; // wrong direction?
     T omegaMC = 0.01;
+    // T omegaMC = 0.04;
+    // T omegaMC = 0.05;
     // T omegaMC = 0.1;
     // T omegaMC = 0.4;
     // T omegaMC = 0.7; // smoother constant
@@ -798,17 +875,34 @@ int main() {
     // bool write_vtk = true;
     bool write_vtk = false;
 
+    // use multicolor vs jacobi smoother
+    bool use_multicolor = true;
+    // bool use_multicolor = false;
+    int nloop_colors = 1;
+    if (use_multicolor) {
+        nsmooth = 1;
+        nloop_colors = 1; // temp debug
+        // nloop_colors = num_colors;
+    }
+
     // do orthog projection of near kernel modes
     
 
-    // do normalization of rows
-    bool norm_rows = true;
-    // bool norm_rows = false;
+    // do orthog projection (should want to do this)
+    bool do_orthog_proj = true;
+    // bool do_orthog_proj = false;
 
-    printf("Jacobi inner-prod space energy min: init_defect %.8e\n", def_nrm0);
+    printf("inner-prod space energy min: init_defect %.8e and using omega = %.4e\n", def_nrm0, omegaMC);
+    if (use_multicolor) {
+        printf("\tusing multicolor smoother\n");
+    } else {
+        printf("\tusing jacobi smoother\n");
+    }
 
     int itest = 0;
     for (int ismooth = 0; ismooth < nsmooth; ismooth++) {
+
+        for (int icolor = 0; icolor < nloop_colors; icolor++) { // is just 1 color if jacobi
     
         /* 7.2) compute Kmat * P to get defect matrix (no fillin first) */
         // could maybe do it in place, but not worried about extra mem or inefficiencies rn
@@ -835,33 +929,147 @@ int main() {
         // adds in terms that are lost as we don't fillin P matrix each time
         // this is important cause scalar equivalent is row-sum constraint (normalizes matrix in a way)
         // while vector cause does that + accounts for rigid body mdoes
-        dim3 OP_block(32), OP_grid(nnodes_fine);
-        // old call 
-        // k_orthog_projector_old<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
-        //     d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_PF_vals);
-        // new calls have UTU precomputed out front and data allocated for SU result for each fine node (block row-sums)
-        //   thus the new calls use much less shared mem in each kernel call
-        //   so first just compute the SU resultant for each fine node
-        // zero out SU since last smooth step (since we add into it again)
-        d_SU_vals.zeroValues();
-        k_orthog_projector_computeSU<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
-            d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_PF_vals, d_SU_vals);
-        // then compute S = S - (SU) * (UTUinv) * U^T mat-mat products where SU and UTUinv are fixed resultants for each fine node block row
-        //   but U^T is the U matrix for that particular block of the S == dP matrix or P update matrix
-        //   it thus eliminates any rigid body row-sums from dP update (preventing state drift in P matrix update, normalizing it)
-        k_orthog_projector_removeRowSums<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
-            d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_SU_vals, d_UTU_vals, d_PF_vals);
+        if (do_orthog_proj) {
 
+            dim3 OP_block(32), OP_grid(nnodes_fine);
+            // old call 
+            // k_orthog_projector_old<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
+            //     d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_PF_vals);
+            // new calls have UTU precomputed out front and data allocated for SU result for each fine node (block row-sums)
+            //   thus the new calls use much less shared mem in each kernel call
+            //   so first just compute the SU resultant for each fine node
+            // zero out SU since last smooth step (since we add into it again)
+            d_SU_vals.zeroValues();
+            k_orthog_projector_computeSU<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
+                d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_PF_vals, d_SU_vals.getPtr());
+            // DEBUG the SU vals
+            // if (nxe <= 8) {
+            //     auto h_S_vals = DeviceVec<T>(36 * PF_nnzb, d_PF_vals).createHostVec();
+            //     auto h_SU_vals = d_SU_vals.createHostVec();
+            //     printf("host S and SU resultant values: \n");
+            //     T *h_S_ptr = h_S_vals.getPtr();
+            //     T *h_SU_ptr = h_SU_vals.getPtr();
+            //     for (int inode = 0; inode < nnodes_fine; inode++) {
+            //         // printout the S or dP values in each row
+            //         int pif = h_f_iperm[inode]; // permuted fine node
+            //         int nc = PF_rowp[pif + 1] - PF_rowp[pif]; // num coarse nodes in this fine node block row
+            //         printf("S = dP values for fine node %d, with %d coarse nodes\n", inode, nc);
+            //         for (int jp = PF_rowp[pif]; jp < PF_rowp[pif + 1]; jp++) {
+            //             int pic = PF_cols[jp]; // permuted coarse node
+            //             int ic = h_c_perm[pic];
+            //             printf("  S or dP of fine node %d, coarse node %d\n", inode, ic);
+            //             T *h_S_node = &h_S_ptr[36 * jp];
+            //             for (int i = 0; i < 6; i++) {
+            //                 printf("\t");
+            //                 printVec<T>(6, &h_S_node[6 * i]);
+            //             }
+            //         }
+
+            //         printf("  SU-node(%d) = \n", inode);
+            //         T *h_SU_node = &h_SU_ptr[36 * pif];
+            //         for (int i = 0; i < 6; i++) {
+            //             printf("\t");
+            //             printVec<T>(6, &h_SU_node[6 * i]);
+            //         }
+            //     }
+            //     return 0;
+            // }
+            // then compute S = S - (SU) * (UTUinv) * U^T mat-mat products where SU and UTUinv are fixed resultants for each fine node block row
+            //   but U^T is the U matrix for that particular block of the S == dP matrix or P update matrix
+            //   it thus eliminates any rigid body row-sums from dP update (preventing state drift in P matrix update, normalizing it)
+            k_orthog_projector_removeRowSums<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
+                d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_SU_vals.getPtr(), d_UTUinv_vals.getPtr(), d_PF_vals);
+            // DEBUG the new S = dP vals
+            // if (nxe <= 8) {
+            //     auto h_S_vals = DeviceVec<T>(36 * PF_nnzb, d_PF_vals).createHostVec();
+            //     printf("host dP values after orthog projector (for updating prolongation P += dP where S = dP): \n");
+            //     T *h_S_ptr = h_S_vals.getPtr();
+            //     for (int inode = 0; inode < nnodes_fine; inode++) {
+            //         // printout the S or dP values in each row
+            //         int pif = h_f_iperm[inode]; // permuted fine node
+            //         int nc = PF_rowp[pif + 1] - PF_rowp[pif]; // num coarse nodes in this fine node block row
+            //         printf("S = dP values for fine node %d, with %d coarse nodes\n", inode, nc);
+            //         for (int jp = PF_rowp[pif]; jp < PF_rowp[pif + 1]; jp++) {
+            //             int pic = PF_cols[jp]; // permuted coarse node
+            //             int ic = h_c_perm[pic];
+            //             printf("  S or dP of fine node %d, coarse node %d\n", inode, ic);
+            //             T *h_S_node = &h_S_ptr[36 * jp];
+            //             for (int i = 0; i < 6; i++) {
+            //                 printf("\t");
+            //                 printVec<T>(6, &h_S_node[6 * i]);
+            //             }
+            //         }
+            //     }
+            //     return 0;
+            // } 
+            // DEBUG check row col sums in each S row (if R = I set for debug), row sum of S should be zero in each DOF row
+            // if (nxe <= 8) {
+            //     auto h_S_vals = DeviceVec<T>(36 * PF_nnzb, d_PF_vals).createHostVec();
+            //     printf("\n===========================\n");
+            //     printf("host dP values after orthog projector (for updating prolongation P += dP where S = dP): \n");
+            //     printf("\n===========================\n");
+            //     T *h_S_ptr = h_S_vals.getPtr();
+            //     for (int inode = 0; inode < nnodes_fine; inode++) {
+            //         // printout the S or dP values in each row
+            //         int pif = h_f_iperm[inode]; // permuted fine node
+            //         int ix = inode % nx_f, iy = inode / nx_f;
+            //         int is_interior = (0 < ix) && (ix < nx_f-1) && (0 < iy) && (iy < nx_f-1);
+                    
+            //         int nc = PF_rowp[pif + 1] - PF_rowp[pif];
+            //         printf("S = dP values for fine node %d and pif %d, with %d coarse nodes (is_interior %d)\n", inode, pif, nc, is_interior);
+            //         for (int idof = 0; idof < 6; idof++) {
+            //             // compute row sum first
+            //             T rc_sums[6] = { };
+            //             for (int jp = PF_rowp[pif]; jp < PF_rowp[pif+1]; jp++) {
+            //                 for (int jj = 0; jj < 6; jj++) {
+            //                     rc_sums[jj] += h_S_ptr[36 * jp + 6 * idof + jj]; 
+            //                 }
+            //             }
+            //             printf("  dof row %d has rc sums: ", idof);
+            //             printVec<T>(6, rc_sums);
+
+            //             for (int jp = PF_rowp[pif]; jp < PF_rowp[pif+1]; jp++) {
+            //                 int j = PF_cols[jp];
+            //                 printf("\t");
+            //                 printVec<T>(6, &h_S_ptr[36 * jp + 6 * idof]);
+            //             }
+            //             printf("\n");
+            //         }
+            //     }
+            //     return 0;
+            // } 
+
+        } // end of do_orthog_proj if statement
+        
 
         /* 7.5) now add modified P update into the P matrix (after orthog projection) for projected steepest descent here */
-        dim3 add_block(64);
-        k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(PF_nnzb, block_dim, omegaMC, 0,
-            d_PF_vals, d_P_vals);
+        if (use_multicolor) {
+            int start_node = h_color_rowp[icolor], end_node = h_color_rowp[icolor+1];
+            int start_block = PF_rowp[start_node], end_block = PF_rowp[end_node + 1];
+            int PF_color_nnzb = end_block - start_block;
+            dim3 add_block(64);
+            dim3 add_grid(PF_color_nnzb);
+            printf("\tadd dP color %d update\n", icolor);
+            k_add_colored_submat_PFP<T><<<add_grid, add_block>>>(PF_nnzb, block_dim, omegaMC, start_block,
+                d_PF_vals, d_P_vals);
+        } else {
+            // add whole dP update in
+            dim3 add_block(64);
+            printf("\tadd dP update\n");
+            k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(PF_nnzb, block_dim, omegaMC, 0,
+                d_PF_vals, d_P_vals);
+        }
+        
+        // printf("\t\tdone with add colored submat PFP\n");
+
+
+        } // end of color loop
 
 
         /* 7.6) compute the defect norms to check progress */
 
         // compute new PF -K*P defect matrix one more time,
+        printf("compute defect norms\n");
         cudaMemset(d_PF_vals, 0.0, PF_nnzb * 36 * sizeof(T));
         a = -1.0; // compute PF = -K * P matrix-matrix
         k_compute_P_K_P_mmprod<T><<<PKP_grid, PKP_block>>>(nnzb_prod, block_dim, a, d_K_blocks, 
