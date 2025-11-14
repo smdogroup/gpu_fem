@@ -982,8 +982,9 @@ int main() {
     // int nsmooth = 1;
     // int nsmooth = 2;
     // int nsmooth = 4; // good num here, shouldn't need too many steps
+    int nsmooth = 5;
     // int nsmooth = 10;
-    int nsmooth = 20;
+    // int nsmooth = 20;
     // int nsmooth = 40;
     // int nsmooth = 100; 
     // int nsmooth = 300;
@@ -1006,9 +1007,10 @@ int main() {
     // T omegaMC = 0.04;
     // T omegaMC = 0.05;
     // T omegaMC = -0.05;
-    T omegaMC = 0.1;
+    // T omegaMC = 0.1;
     // T omegaMC = -0.1;
-    // T omegaMC = 0.4;
+    // T omegaMC = 0.2;
+    T omegaMC = 0.4;
     // T omegaMC = 0.7; // smoother constant
     // T omegaMC = 1.5;
 
@@ -1017,8 +1019,8 @@ int main() {
     bool write_vtk = false;
 
     // use multicolor vs jacobi smoother
-    // bool use_multicolor = true;
-    bool use_multicolor = false;
+    bool use_multicolor = true;
+    // bool use_multicolor = false;
     int nloop_colors = 1;
     if (use_multicolor) {
         // // TEMP DEBUG
@@ -1040,9 +1042,9 @@ int main() {
     printf("=========================================\n");
     printf("inner-prod space energy min: init_defect %.8e and using omega = %.4e\n", def_nrm0, omegaMC);
     if (use_multicolor) {
-        printf("\tusing multicolor smoother so only 1 color\n");
+        printf("\tusing multicolor smoother with %d colors\n", num_colors);
     } else {
-        printf("\tusing jacobi smoother\n");
+        printf("\tusing jacobi smoother so only 1 color\n");
     }
     if (proper_rot_bcs && do_orthog_proj) {
         printf("\tusing true [I3,Omega;0,I3] rigid body modes for linear shells\n");
@@ -1198,7 +1200,8 @@ int main() {
         /* 7.5) now add modified P update into the P matrix (after orthog projection) for projected steepest descent here */
         if (use_multicolor) {
             int start_node = h_color_rowp[icolor], end_node = h_color_rowp[icolor+1];
-            int start_block = PF_rowp[start_node], end_block = PF_rowp[end_node + 1];
+            // int start_block = PF_rowp[start_node], end_block = PF_rowp[end_node + 1];
+            int start_block = PF_rowp[start_node], end_block = PF_rowp[end_node]; // should just be end_node?
             int PF_color_nnzb = end_block - start_block;
             dim3 add_block(64);
             dim3 add_grid(PF_color_nnzb);
