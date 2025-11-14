@@ -72,14 +72,14 @@ int main() {
 
     // some problem specific user inputs
     // int nxe = 64; // two-grid problem with second grid the coarser one
-    int nxe = 32;
-    // int nxe = 16;
+    // int nxe = 32;
+    int nxe = 16;
     // int nxe = 8;
     // int nxe = 4;
 
     // double SR = 1.0;
-    double SR = 10.0;
-    // double SR = 100.0;
+    // double SR = 10.0;
+    double SR = 100.0;
 
     printf("1) create handles\n");
     cublasHandle_t cublasHandle = NULL;
@@ -95,7 +95,9 @@ int main() {
     int nxe_per_comp = nxe / 2, nye_per_comp = nxe/2; // for now (should have 25 grids)
     auto assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
     double Q = 1.0; // load magnitude
-    T *fine_loads = getPlateLoads<T, Physics>(nxe, nxe, Lx, Ly, Q);
+    // T *fine_loads = getPlateLoads<T, Physics>(nxe, nxe, Lx, Ly, Q); // comlicated load case
+    int m = 1, n = 2; // (1,2) sine-sine load
+    T *fine_loads = getPlateSineLoads<T, Physics>(nxe, nxe, Lx, Ly, m, n, Q); // sine-sine load case
     auto &bsr_data = assembler.getBsrData();
     int num_colors, *_color_rowp;
     bsr_data.multicolor_reordering(num_colors, _color_rowp);
@@ -117,11 +119,11 @@ int main() {
 
 
     /* 3) create the coarse grid assembler, full LU + AMD reordering  */
-    
     printf("3.1) create coarse assembler\n");
     nxe_per_comp = nxe / 2, nye_per_comp = nxe / 2; // for now (should have 25 grids)
     auto c_assembler = createPlateAssembler<Assembler>(nxe / 2, nxe / 2, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
-    T *coarse_loads = getPlateLoads<T, Physics>(nxe / 2, nxe / 2, Lx, Ly, Q);
+    // T *coarse_loads = getPlateLoads<T, Physics>(nxe / 2, nxe / 2, Lx, Ly, Q);
+    T *coarse_loads = getPlateSineLoads<T, Physics>(nxe / 2, nxe / 2, Lx, Ly, m, n, Q); // sine-sine load case
     auto &c_bsr_data = c_assembler.getBsrData();
     int c_num_colors = 1, *_c_color_rowp = new int[2];
     _c_color_rowp[0] = 0, _c_color_rowp[1] = c_assembler.get_num_nodes() + 1;
@@ -168,8 +170,8 @@ int main() {
         int ix_c0 = ix / 2, iy_c0 = iy / 2; // loop over nearby coarse nodes +-1 each side
         // printf("fine node (%d,%d) => start coarse node (%d,%d)\n", ix, iy, ix_c0, iy_c0);
         P_rowp[perm_inodef + 1] = P_rowp[perm_inodef];
-        for (int ixc = ix_c0 - 1; ixc < ix_c0 + 2; ixc++) {
-            for (int iyc = iy_c0 - 1; iyc < iy_c0 + 2; iyc++) {
+        for (int iyc = iy_c0 - 1; iyc < iy_c0 + 2; iyc++) {
+            for (int ixc = ix_c0 - 1; ixc < ix_c0 + 2; ixc++) {
                 // compoute equiv fine node of each coarse node
                 int ix2 = 2 * ixc, iy2 = 2 * iyc;
                 // check adjacency with the orig fine node
@@ -268,14 +270,15 @@ int main() {
     // partition of unity normalize the P_vals
     printf("4.2.3) partition of unity operation on P_vals host\n");
     for (int brow = 0; brow < nnodes_fine; brow++) {
-        T total_scale = 0.0;
-        for (int jp = P_rowp[brow]; jp < P_rowp[brow+1]; jp++) {
-            total_scale += P_vals[36 * jp]; // (0,0) entry of a block
-        }
-        // normalize by this now
-        for (int jp = P_rowp[brow]; jp < P_rowp[brow+1]; jp++) {
-            for (int ib = 0; ib < 6; ib++) {
-                P_vals[36 * jp + 6 * ib + 6] /= total_scale;
+        for (int i = 0; i < 6; i++) { // each of 6 rows
+            T total_scale = 0.0;
+            for (int jp = P_rowp[brow]; jp < P_rowp[brow+1]; jp++) {
+                total_scale += P_vals[36 * jp + 6 * i + i]; // (i,i) entry of a block
+            }
+            // now you have total scale
+            for (int jp = P_rowp[brow]; jp < P_rowp[brow+1]; jp++) {
+                P_vals[36 * jp + 6 * i + i] /= total_scale;
+                // P_vals[36 * jp + 6 * i + 6] /= total_scale; // old was mistake here
             }
         }
     }
@@ -744,8 +747,8 @@ int main() {
     // return 0;
 
     // 7.1) compute on the host first
-    // bool proper_rot_bcs = true;
-    bool proper_rot_bcs = false; // just does row sums and R or Bc = I
+    bool proper_rot_bcs = true;
+    // bool proper_rot_bcs = false; // just does row sums and R or Bc = I
 
     printf("7.1) compute the coarse mesh rigid body modes\n");
     T *Bc = new T[36 * nnodes_coarse]; // get it in solve order so need h_c_perm
@@ -768,9 +771,11 @@ int main() {
             Bc[36 * pic + 6 * 2 + 4] = -x;
             Bc[36 * pic + 6 * 4 + 4] = 1.0;
             // thz rotation
-            Bc[36 * pic + 6 * 0 + 5] = y;
-            Bc[36 * pic + 6 * 1 + 5] = -x;
-            Bc[36 * pic + 6 * 5 + 5] = -1.0;
+            Bc[36 * pic + 6 * 0 + 5] = -y;
+            Bc[36 * pic + 6 * 1 + 5] = x;
+            Bc[36 * pic + 6 * 5 + 5] = 1.0;
+            // I have a test for rigid body modes later on, these are the correct ones..
+            // changing signs messes them up (this is correct at least for a plate)
 
         } else {
             // temp debug, if we do this to just enforce row-sums
@@ -791,6 +796,82 @@ int main() {
     T *d_Bc = HostVec<T>(36 * nnodes_coarse, Bc).createDeviceVec().getPtr();
     // then compute the fine node BC indicator matrix Fi later?
     // printf("nnodes_coarse %d\n", nnodes_coarse);
+
+    // =============================================
+    // DEBUG: 
+    // bool test_rigid_body_modes = true;
+    bool test_rigid_body_modes = false;
+    // test that the coarse rigid body modes have zero apparent energy b^T K b on the coarse mesh for each b in Bc
+    if (test_rigid_body_modes) {
+        printf("test coarse rigid body modes are rigid\n");
+        // construct the b vectors on the host for coarse mesh size
+        int Nc = c_assembler.get_num_vars();
+        T *h_b = new T[Nc];
+        T *h_force = new T[Nc];
+        auto d_b = DeviceVec<T>(Nc);
+        auto d_ctemp = DeviceVec<T>(Nc);
+        T *d_cresid = DeviceVec<T>(Nc).getPtr();
+        // get rowp, cols, values of the coarse kmat
+        int *d_ckmat_rowp = c_bsr_data.rowp;
+        int *d_ckmat_cols = c_bsr_data.cols;
+        int ckmat_nnzb = c_bsr_data.nnzb;
+        T *d_ckmat_vals = c_kmat.getPtr();
+        int *h_ckmat_rowp = DeviceVec<int>(nnodes_coarse + 1, d_ckmat_rowp).createHostVec().getPtr();
+        int *h_ckmat_cols = DeviceVec<int>(ckmat_nnzb, d_ckmat_cols).createHostVec().getPtr();
+        // compute a reference disp mode energy, <c_soln, K * c_soln> which should be nonzero
+        a = 1.0, b = 0.0;
+        CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
+            nnodes_coarse, nnodes_coarse, ckmat_nnzb, &a, descr_Kmat, d_ckmat_vals, d_ckmat_rowp, d_ckmat_cols, block_dim, 
+            c_soln.getPtr(), &b, d_ctemp.getPtr()));
+        // now comput dot product <d_ctemp, d_b>
+        T vkv_dot_ref;
+        CHECK_CUBLAS(cublasDdot(cublasHandle, Nc, c_soln.getPtr(), 1, d_ctemp.getPtr(), 1, &vkv_dot_ref));
+        // divide by the vec or disp norm
+        T v_normsq;
+        CHECK_CUBLAS(cublasDdot(cublasHandle, Nc, c_soln.getPtr(), 1, c_soln.getPtr(), 1, &v_normsq));
+        vkv_dot_ref /= v_normsq;
+        // I'd basically need to have the coarse kmat with no essential BCs (so let's reassemble it with no bcs)
+        c_assembler.add_jacobian_fast(c_kmat);
+        // c_assembler.apply_bcs(c_kmat); // don't do this cause we want to measure no BC rigid body mdoes (verification)
+        // now begin the loop over each of hte 6 rigid body modes
+        for (int irbm = 0; irbm < 6; irbm++) {
+            // copy the irbm column from Bc into the b vector of coarse size (in solve order), on host first
+            memset(h_b, 0.0, Nc * sizeof(T));
+            for (int i = 0; i < Nc; i++) {
+                h_b[i] = Bc[36 * (i / 6) + 6 * (i % 6) + irbm]; // other disps were roughly 1e-9 or 1e-8 so similar mag
+                // h_b[i] *= 1e-9; // dividing by vec norms later (so no need for this)
+            }
+            // print the values of this rigid body mode
+            // printf("rigid body mode %d has vals: ", irbm);
+            // printVec<T>(50, h_b);
+            // then copy to device
+            cudaMemcpy(d_b.getPtr(), h_b, Nc * sizeof(T), cudaMemcpyHostToDevice);
+            // now compute K * d_b => d_ctemp
+            a = 1.0, b = 0.0;
+            CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                nnodes_coarse, nnodes_coarse, ckmat_nnzb, &a, descr_Kmat, d_ckmat_vals, d_ckmat_rowp, d_ckmat_cols, block_dim, 
+                d_b.getPtr(), &b, d_ctemp.getPtr()));
+            // // and apply bcs on residuals too? (no cause I didn't do on this kmat now)
+            // // c_assembler.apply_bcs(d_ctemp); // so don't penalize boundary displacements..
+            // copy the right hand sides to host and printout..
+            // cudaMemcpy(h_force, d_ctemp.getPtr(), Nc * sizeof(T), cudaMemcpyDeviceToHost);
+            // printf("K*h_b mode: ");
+            // printVec<T>(50, h_force);
+            // now comput dot product <d_ctemp, d_b>
+            T bkb_dot;
+            CHECK_CUBLAS(cublasDdot(cublasHandle, Nc, d_b.getPtr(), 1, d_ctemp.getPtr(), 1, &bkb_dot));
+            T b_dot;
+            CHECK_CUBLAS(cublasDdot(cublasHandle, Nc, d_b.getPtr(), 1, d_b.getPtr(), 1, &b_dot));
+            // divide the <b,b> dot product to normalize it
+            bkb_dot /= b_dot;
+            T rel_energy = bkb_dot / vkv_dot_ref;
+            printf("\trigid body  mode %d : bkb dot = %.4e / vkv_dot_ref = %.4e => rel energy %.4e\n", irbm, bkb_dot, vkv_dot_ref, rel_energy);
+        }
+        printf("done testing coarse rigid body modes are actually rbmodes\n");
+        return 0;
+    }
+    // =============================================
+    // so yes those are the rigid body modes, it does work
 
     /* 7.2) compute free var unknowns */
     // get the bcs and compute a free DOF map on the device
@@ -901,8 +982,8 @@ int main() {
     // int nsmooth = 1;
     // int nsmooth = 2;
     // int nsmooth = 4; // good num here, shouldn't need too many steps
-    int nsmooth = 10;
-    // int nsmooth = 20;
+    // int nsmooth = 10;
+    int nsmooth = 20;
     // int nsmooth = 40;
     // int nsmooth = 100; 
     // int nsmooth = 300;
@@ -922,10 +1003,10 @@ int main() {
     // T omegaMC = 5e-3;
     // T omegaMC = -5e-3; // wrong direction?
     // T omegaMC = 0.01;
-    T omegaMC = 0.04;
+    // T omegaMC = 0.04;
     // T omegaMC = 0.05;
     // T omegaMC = -0.05;
-    // T omegaMC = 0.1;
+    T omegaMC = 0.1;
     // T omegaMC = -0.1;
     // T omegaMC = 0.4;
     // T omegaMC = 0.7; // smoother constant
@@ -952,14 +1033,23 @@ int main() {
     
 
     // do orthog projection (should want to do this)
-    bool do_orthog_proj = true;
-    // bool do_orthog_proj = false;
+    // bool do_orthog_proj = true;
+    bool do_orthog_proj = false;
 
+    printf("\n\n=========================================");
+    printf("=========================================\n");
     printf("inner-prod space energy min: init_defect %.8e and using omega = %.4e\n", def_nrm0, omegaMC);
     if (use_multicolor) {
         printf("\tusing multicolor smoother so only 1 color\n");
     } else {
         printf("\tusing jacobi smoother\n");
+    }
+    if (proper_rot_bcs && do_orthog_proj) {
+        printf("\tusing true [I3,Omega;0,I3] rigid body modes for linear shells\n");
+    } else if (do_orthog_proj) {
+        printf("\tusing I6 row-sums instead of true rigid body modes (debug/test)\n");
+    } else {
+        printf("\tnot doing orthogonal projector for row-sum + rigid body mode constraint\n");
     }
 
     int itest = 0;

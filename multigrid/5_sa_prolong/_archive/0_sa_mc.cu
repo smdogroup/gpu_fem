@@ -256,7 +256,7 @@ int main() {
         // normalize by this now
         for (int jp = P_rowp[brow]; jp < P_rowp[brow+1]; jp++) {
             for (int ib = 0; ib < 6; ib++) {
-                P_vals[36 * jp + 6 * ib + 6] /= total_scale;
+                P_vals[36 * jp + 6 * ib + ib] /= total_scale;
             }
         }
     }
