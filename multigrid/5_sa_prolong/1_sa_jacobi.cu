@@ -442,8 +442,6 @@ int main() {
 
     auto D_LU_mat = BsrMat<DeviceVec<T>>(d_diag_bsr_data, d_dinv_vals);
 
-    /* 6) compute the coarse mesh rigid body/nullspace modes of the plate (from its xpts),
-         should be easy I did it in python */
 
     // compute on the host first
     printf("6) compute the coarse mesh rigid body modes\n");
@@ -475,6 +473,58 @@ int main() {
     T *d_Bc = HostVec<T>(36 * nnodes_coarse, Bc).createDeviceVec().getPtr();
     // then compute the fine node BC indicator matrix Fi later?
 
+    /* 6.2) compute free var unknowns */
+    // get the bcs and compute a free DOF map on the device
+    auto free_var_vec = DeviceVec<bool>(N);
+    free_var_vec.setFullVecToConstValue(true); // set all to default true meaning free var
+    bool *d_free_dof_ptr = free_var_vec.getPtr();
+    auto bcs_vec = assembler.getBCs();
+    int n_bcs = bcs_vec.getSize();
+    dim3 bcs_block(32), bcs_grid((n_bcs + 31) / 32);
+    // computes false or true bool pointer d_free_dof_ptr in solve node order (not vis order)
+    k_get_free_dof<<<bcs_grid, bcs_block>>>(n_bcs, block_dim, bcs_vec.getPtr(), f_grid->d_iperm, d_free_dof_ptr);
+
+    /* 6.3) construct (UTU+eps*I)^-1 matrix as linear operator just like Dinv */
+    // for the orthogonal projector
+    d_UTU_vals = DeviceVec<T>(ndiag_vals);
+    // compute UTU + eps*I values in a kernel
+    dim3 OP_block0(32), OP_grid0(nnodes_fine);
+    k_orthog_projector<T><<<OP_grid0, OP_block0>>>(nnodes_fine, block_dim, d_Bc, 
+        d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_UTU_vals);
+    // now compute the LU factor and inverse matrix UTUinv for each fine node (same size and like Dinv matrix)
+    // reuse same pointers and nnzb sizes as Dinv cause same dimensions
+    CUSPARSE::perform_ilu0_factorization(cusparseHandle, descr_L, descr_U, info_L, info_U,
+                                         &pBuffer, nnodes, diag_inv_nnzb, block_dim,
+                                         d_UTU_vals, d_diag_rowp, d_diag_cols, trans_L,
+                                         trans_U, policy_L, policy_U, dir);
+    // now compute UTUinv linear operator like I did for the Dinv
+    auto d_UTUinv_vals = DeviceVec<T>(ndiag_vals); // inv linear operator of UTU
+    for (int i = 0; i < block_dim; i++) {
+        // set d_temp to ei (one of e1 through e6 per block)
+        cudaMemset(d_temp, 0.0, N * sizeof(T));
+        dim3 block(32);
+        dim3 grid((nnodes + 31) / 32);
+        k_setBlockUnitVec<T><<<grid, block>>>(nnodes, block_dim, i, d_temp);
+
+        // now compute D^-1 through U^-1 L^-1 triang solves and copy result into d_temp2
+        const double alpha = 1.0;
+        CHECK_CUSPARSE(cusparseDbsrsv2_solve(
+            cusparseHandle, dir, trans_L, nnodes, nnodes, &alpha, descr_L, d_UTU_vals,
+            d_diag_rowp, d_diag_cols, block_dim, info_L, d_temp, d_resid, policy_L,
+            pBuffer));  // prob only need U^-1 part for block diag.. TBD
+
+        CHECK_CUSPARSE(cusparseDbsrsv2_solve(
+            cusparseHandle, dir, trans_U, nnodes, nnodes, &alpha, descr_U, d_UTU_vals,
+            d_diag_rowp, d_diag_cols, block_dim, info_U, d_resid, d_temp2, policy_U, pBuffer));
+
+        // now copy temp2 into columns of new operator
+        dim3 grid2((N + 31) / 32);
+        k_setLUinv_operator<T>
+            <<<grid2, block>>>(nnodes, block_dim, i, d_temp2, d_UTUinv_vals.getPtr());
+    }
+    // auto UTUinv_mat = BsrMat<DeviceVec<T>>(d_diag_bsr_data, d_UTUinv_vals);
+    // also set storage for SU matrix (aggregated for each fine node, like row sums of prolong, same size as D and UTU matrix)
+    auto d_SU_vals = DeviceVec<T>(ndiag_vals);
 
     /* 7) prolong smoothing loop */
     printf("7.1.1) prolong smoothing - PKP mat-mat product nz pattern\n");
@@ -727,16 +777,6 @@ int main() {
     // prinVec<int>(2, PF_rowp)
     auto d_temp2_vec = DeviceVec<T>(N, d_temp2);
 
-    // get the bcs and compute a free DOF map on the device
-    auto free_var_vec = DeviceVec<bool>(N);
-    free_var_vec.setFullVecToConstValue(true); // set all to default true meaning free var
-    bool *d_free_dof_ptr = free_var_vec.getPtr();
-    auto bcs_vec = assembler.getBCs();
-    int n_bcs = bcs_vec.getSize();
-    dim3 bcs_block(32), bcs_grid((n_bcs + 31) / 32);
-    // computes false or true bool pointer d_free_dof_ptr in solve node order (not vis order)
-    k_get_free_dof<<<bcs_grid, bcs_block>>>(n_bcs, block_dim, bcs_vec.getPtr(), f_grid->d_iperm, d_free_dof_ptr);
-
     // int nsmooth = 1;
     // int nsmooth = 2;
     // int nsmooth = 4;
@@ -791,12 +831,26 @@ int main() {
         k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(PF_nnzb, block_dim, 
             d_dinv_vals.getPtr(), d_PF_rows, d_PF_vals);
 
-        /* 7.4) TBD: apply orthogonal projector, which handles fixed sparsity + rigid body mode constraints */
+        /* 7.4) apply orthogonal projector to the P matrix update dP = Dinv * PF, Q(dP) => dP' */
         // adds in terms that are lost as we don't fillin P matrix each time
+        // this is important cause scalar equivalent is row-sum constraint (normalizes matrix in a way)
+        // while vector cause does that + accounts for rigid body mdoes
         dim3 OP_block(32), OP_grid(nnodes_fine);
-        k_orthog_projector<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
-            d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_PF_vals);
-        
+        // old call 
+        // k_orthog_projector_old<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
+        //     d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_PF_vals);
+        // new calls have UTU precomputed out front and data allocated for SU result for each fine node (block row-sums)
+        //   thus the new calls use much less shared mem in each kernel call
+        //   so first just compute the SU resultant for each fine node
+        // zero out SU since last smooth step (since we add into it again)
+        d_SU_vals.zeroValues();
+        k_orthog_projector_computeSU<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
+            d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_PF_vals, d_SU_vals);
+        // then compute S = S - (SU) * (UTUinv) * U^T mat-mat products where SU and UTUinv are fixed resultants for each fine node block row
+        //   but U^T is the U matrix for that particular block of the S == dP matrix or P update matrix
+        //   it thus eliminates any rigid body row-sums from dP update (preventing state drift in P matrix update, normalizing it)
+        k_orthog_projector_removeRowSums<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
+            d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_SU_vals, d_UTU_vals, d_PF_vals);
 
 
         /* 7.5) now add modified P update into the P matrix (after orthog projection) for projected steepest descent here */
