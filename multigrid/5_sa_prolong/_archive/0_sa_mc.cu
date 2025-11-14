@@ -38,20 +38,6 @@
 // helper kernels
 #include "_sa.cuh"
 
-template <typename T>
-T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
-    T *h_soln = d_soln.createHostVec().getPtr();
-    int nvars = d_soln.getSize();
-    int nnodes = nvars / 6;
-    T my_max = 0.0;
-    for (int inode = 0; inode < nnodes; inode++) {
-        T val = abs(h_soln[6 * inode + idof]);
-        if (val > my_max) my_max = val;
-    }
-    return my_max;
-}
-
-
 int main() {
 
     /* 1) type definitions for this shell element */
@@ -71,13 +57,10 @@ int main() {
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
 
     // some problem specific user inputs
-    // int nxe = 64; // two-grid problem with second grid the coarser one
-    // int nxe = 32;
-    int nxe = 16;
+    int nxe = 64; // two-grid problem with second grid the coarser one
+    // int nxe = 16;
     // int nxe = 8;
     // int nxe = 4;
-
-    // double SR = 1.0;
     double SR = 10.0;
 
     printf("1) create handles\n");
@@ -301,13 +284,13 @@ int main() {
     c_soln.permuteData(6, c_grid->d_perm); // permute solve to vis order
     auto h_c_soln = c_soln.createHostVec(); 
     c_soln.permuteData(6, c_grid->d_iperm); // permute back to solve order
-    printToVTK<Assembler,HostVec<T>>(c_assembler, h_c_soln, "out/_plate_coarse.vtk");
+    printToVTK<Assembler,HostVec<T>>(c_assembler, h_c_soln, "out/plate_coarse.vtk");
     // compare to coarse-fine from the structured plate prolongator
     soln.zeroValues();
     f_prolongation->prolongate(c_soln, soln);
     soln.permuteData(6, f_grid->d_perm);
     auto h_f_soln2 = soln.createHostVec(); // permute solve to vis order
-    printToVTK<Assembler,HostVec<T>>(assembler, h_f_soln2, "out/_plate_cf_orig.vtk");
+    printToVTK<Assembler,HostVec<T>>(assembler, h_f_soln2, "out/plate_cf_orig.vtk");
     // try running permute on the coarse solution to fine with P_mat built here
     T a = 1.0, b = 0.0;
     int block_dim = 6;
@@ -316,7 +299,7 @@ int main() {
         c_soln.getPtr(), &b, soln.getPtr()));
     soln.permuteData(6, f_grid->d_perm);
     auto h_f_soln = soln.createHostVec(); // permute solve to vis order
-    printToVTK<Assembler,HostVec<T>>(assembler, h_f_soln, "out/_plate_cf_new.vtk");
+    printToVTK<Assembler,HostVec<T>>(assembler, h_f_soln, "out/plate_cf_new.vtk");
     
 
     // printf("stop here after P_mat verification for step 1 debug\n");
@@ -447,29 +430,28 @@ int main() {
 
     // compute on the host first
     printf("6) compute the coarse mesh rigid body modes\n");
-    T *d_xpts_coarse = c_assembler.getXpts();
-    T *xpts_coarse = d_xpts_coarse.createHostVec().getPtr();
+    T *xpts_coarse = c_assembler.getXpts().createHostVec().getPtr();
     T *Bc = new T[36 * nnodes_coarse]; // get it in solve order so need h_c_perm
     memset(Bc, 0.0, 36 * nnodes_coarse);
     for (int i = 0; i < 6 * nnodes_coarse; i++) {
         int ic = i / 6, ii = i % 6;
-        int pic = h_c_iperm[ic]; // computed in permuted order
+        int pic = h_c_iperm[ic];
         T x = xpts_coarse[3 * ic], y = xpts_coarse[3 * ic + 1], z = xpts_coarse[3 * ic + 2];
         Bc[36 * pic + 6 * 0 + 0] = 1.0; // u translation
         Bc[36 * pic + 6 * 1 + 1] = 1.0; // v translation
         Bc[36 * pic + 6 * 2 + 2] = 1.0; // w translation
-        // thx rotation
-        Bc[36 * pic + 6 * 1 + 3] = -z;
-        Bc[36 * pic + 6 * 2 + 3] = y;
-        Bc[36 * pic + 6 * 3 + 3] = 1.0;        
-        // thy rotatoin
-        Bc[36 * pic + 6 * 0 + 4] = z;
-        Bc[36 * pic + 6 * 2 + 4] = -x;
-        Bc[36 * pic + 6 * 4 + 4] = 1.0;
-        // thz rotation
-        Bc[36 * pic + 6 * 0 + 5] = -y;
-        Bc[36 * pic + 6 * 1 + 5] = x;
-        Bc[36 * pic + 6 * 5 + 5] = 1.0;
+        // xy-plane rotation
+        Bc[36 * pic + 6 * 0 + 3] = y;
+        Bc[36 * pic + 6 * 1 + 3] = -x;
+        Bc[36 * pic + 6 * 5 + 3] = -1.0;
+        // yz-plane rotation
+        Bc[36 * pic + 6 * 1 + 4] = z;
+        Bc[36 * pic + 6 * 2 + 4] = y;
+        Bc[36 * pic + 6 * 3 + 4] = 1.0;
+        // xz-plane rotation
+        Bc[36 * pic + 6 * 0 + 5] = z;
+        Bc[36 * pic + 6 * 2 + 5] = -x;
+        Bc[36 * pic + 6 * 4 + 5] = 1.0;
     }
     // move to device
     T *d_Bc = HostVec<T>(36 * nnodes_coarse, Bc).createDeviceVec().getPtr();
@@ -562,7 +544,7 @@ int main() {
         c_soln.getPtr(), &b, soln.getPtr()));
     soln.permuteData(6, f_grid->d_perm);
     auto h_f_soln3 = soln.createHostVec(); // permute solve to vis order
-    printToVTK<Assembler,HostVec<T>>(assembler, h_f_soln3, "out/_plate_cf_new_fill.vtk");
+    printToVTK<Assembler,HostVec<T>>(assembler, h_f_soln3, "out/plate_cf_new_fill.vtk");
     // compute difference to the original
     T *_hv1 = h_f_soln2.getPtr();
     T *_hv2 = h_f_soln3.getPtr();
@@ -684,11 +666,9 @@ int main() {
         nnodes_fine, nnodes_fine, kmat_nnzb, &a, descr_Kmat, d_kmat_vals, d_kmat_rowp, d_kmat_cols, block_dim, 
         soln.getPtr(), &b, d_temp));
     auto d_temp_vec = DeviceVec<T>(N, d_temp);
-    // get initial defect disp
-    T def_nrm0 = get_max_disp<T>(d_temp_vec);
     d_temp_vec.permuteData(6, f_grid->d_perm); // permute solve to vis order
     auto h_KPv1 = d_temp_vec.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(assembler, h_KPv1, "out/_plate_nKPv_orig.vtk");
+    printToVTK<Assembler,HostVec<T>>(assembler, h_KPv1, "out/plate_nKPv_orig.vtk");
     // now compute -KPv through PF*v matrix operator now
     printf("7.1.5) prolong smoothing - PKP mat-mat; new -P*K*v = PF*v prod\n");
     a = 1.0, b = 0.0; // v = 0*v + PF*v
@@ -700,7 +680,7 @@ int main() {
     auto d_temp_vec2 = DeviceVec<T>(N, d_temp);
     d_temp_vec2.permuteData(6, f_grid->d_perm);
     auto h_KPv2 = d_temp_vec2.createHostVec(); 
-    printToVTK<Assembler,HostVec<T>>(assembler, h_KPv2, "out/_plate_nKPv_new.vtk");
+    printToVTK<Assembler,HostVec<T>>(assembler, h_KPv2, "out/plate_nKPv_new.vtk");
     // compare vectors in the -K*P*v step, where the error is.. (VERIFICATION / DEBUG)
     _hv1 = h_KPv1.getPtr();
     _hv2 = h_KPv2.getPtr();
@@ -725,160 +705,106 @@ int main() {
     printf("\twith nnodes_fine = %d\n", nnodes_fine);
     // printf("PF_rowp[4224-on]: ");
     // prinVec<int>(2, PF_rowp)
-    auto d_temp2_vec = DeviceVec<T>(N, d_temp2);
 
-    // get the bcs and compute a free DOF map on the device
-    auto free_var_vec = DeviceVec<bool>(N);
-    free_var_vec.setFullVecToConstValue(true); // set all to default true meaning free var
-    bool *d_free_dof_ptr = free_var_vec.getPtr();
-    auto bcs_vec = assembler.getBCs();
-    int n_bcs = bcs_vec.getSize();
-    dim3 bcs_block(32), bcs_grid((n_bcs + 31) / 32);
-    // computes false or true bool pointer d_free_dof_ptr in solve node order (not vis order)
-    k_get_free_dof<<<bcs_grid, bcs_block>>>(n_bcs, block_dim, bcs_vec.getPtr(), f_grid->d_iperm, d_free_dof_ptr);
-
-    // int nsmooth = 1;
-    // int nsmooth = 2;
+    int nsmooth = 1;
     // int nsmooth = 4;
-    // int nsmooth = 10;
-    // int nsmooth = 20;
-    // int nsmooth = 40;
-    int nsmooth = 100;
-    // int nsmooth = 300;
 
-    // omegaMC < 2/rho(Dinv*A) is what it needs to be (may need to estimate from Arnoldi hessenberg iteration, the max eigenvalue)
-    // T omegaMC = 5e-3;
-    T omegaMC = 0.01;
-    // T omegaMC = 0.1;
-    // T omegaMC = 0.4;
-    // T omegaMC = 0.7; // smoother constant
+    T omegaMC = 0.7; // smoother constant
     // T omegaMC = 1.5;
-
-    // for debugging
-    // bool write_vtk = true;
-    bool write_vtk = false;
-
-    // do orthog projection of near kernel modes
-    
-
-    // do normalization of rows
-    bool norm_rows = true;
-    // bool norm_rows = false;
-
-    printf("Jacobi inner-prod space energy min: init_defect %.8e\n", def_nrm0);
 
     int itest = 0;
     for (int ismooth = 0; ismooth < nsmooth; ismooth++) {
-    
-        /* 7.2) compute Kmat * P to get defect matrix (no fillin first) */
-        // could maybe do it in place, but not worried about extra mem or inefficiencies rn
+        printf("matrix smoothing step %d / %d\n", ismooth + 1, nsmooth);
+        // loop over each color (less efficient but let's just do it like this first)
+        // for (int icolor = 0; icolor < num_colors; icolor++) {
+        // for (int icolor = 0; icolor < 1; icolor++) {   // DEBUG, works well now only with just 1 color smoothing step..
+        for (int icolor = 0; icolor < 2; icolor++) {   // DEBUG
         
-        // compute Kmat * P => P_defect (could do up front and just update as normal, 
-        // but not gonna do the more efficient way yet)
-        cudaMemset(d_PF_vals, 0.0, PF_nnzb * 36 * sizeof(T));
-        a = -1.0; // compute PF = -K * P matrix-matrix
-        k_compute_P_K_P_mmprod<T><<<PKP_grid, PKP_block>>>(nnzb_prod, block_dim, a, d_K_blocks, 
-            d_P_blocks, d_PF_blocks, d_kmat_vals, d_P_vals, d_PF_vals);
+            /* 7.2) compute Kmat * P to get defect matrix (no fillin first) */
+            // could maybe do it in place, but not worried about extra mem or inefficiencies rn
+            
+            // compute Kmat * P => P_defect (could do up front and just update as normal, 
+            // but not gonna do the more efficient way yet)
+            cudaMemset(d_PF_vals, 0.0, PF_nnzb * 36 * sizeof(T));
+            a = -1.0; // compute PF = -K * P matrix-matrix
+            k_compute_P_K_P_mmprod<T><<<PKP_grid, PKP_block>>>(nnzb_prod, block_dim, a, d_K_blocks, 
+                d_P_blocks, d_PF_blocks, d_kmat_vals, d_P_vals, d_PF_vals);
 
 
-        // NOW just doing block-jacobi here Dinv (no colors)
-        /* 7.3) apply smoother using custom submat transpose product kernels */
-        //     7.3.1) compute Dc^{-1} * PF => PF in place (applies Dinv to the rows of this color)
-        // get num nnzb in PF of this color part of submat
-        // printf("\tcolor %d with nodes %d to %d and nnzb = %d\n", icolor, start_node, end_node, PF_color_nnzb);
-        dim3 DP_block(216);
-        dim3 DP_grid(PF_nnzb);
-        k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(PF_nnzb, block_dim, 
-            d_dinv_vals.getPtr(), d_PF_rows, d_PF_vals);
+            /* 7.3) apply smoother using custom submat transpose product kernels */
+            //     7.3.1) compute Dc^{-1} * PF => PF in place (applies Dinv to the rows of this color)
+            // get num nnzb in PF of this color part of submat
+            int start_node = h_color_rowp[icolor], end_node = h_color_rowp[icolor+1];
+            int start_block = PF_rowp[start_node], end_block = PF_rowp[end_node + 1];
+            int PF_color_nnzb = end_block - start_block;
+            printf("\tcolor %d with nodes %d to %d and nnzb = %d\n", icolor, start_node, end_node, PF_color_nnzb);
+            dim3 DP_block(216);
+            dim3 DP_grid(PF_color_nnzb);
+            k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(PF_color_nnzb, block_dim, 
+                d_dinv_vals.getPtr(), d_PF_rows, d_PF_vals);
 
-        /* 7.4) TBD: apply orthogonal projector, which handles fixed sparsity + rigid body mode constraints */
-        // adds in terms that are lost as we don't fillin P matrix each time
-        dim3 OP_block(32), OP_grid(nnodes_fine);
-        k_orthog_projector<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
-            d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_PF_vals);
-        
+            /* 7.4) now add colored modified rows from PF into P as the colored update from the smoother */
+            // (considering that PF has some fillin to P (which we'll drop?))
+            dim3 add_block(64);
+            k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(PF_color_nnzb, block_dim, omegaMC, start_block, 
+                d_PF_vals, d_P_vals);
+
+            /* 7.5) normalize rows with row abs sum */
+            dim3 norm_block(32);
+            dim3 norm_grid(nnodes);
+            // printf("\tnormalize rows\n");
+            // int max_inner_row = 3; // just normalize u,v,w rows
+            int max_inner_row = 6; // normalize all 6 dof in each block
+            k_normalize_rows<T><<<norm_grid, norm_block>>>(nnodes, block_dim, max_inner_row, d_PF_rowp, d_P_vals);
+            // CHECK_CUDA(cudaDeviceSynchronize());
+            // printf("\tnormalize rows done\n");
 
 
-        /* 7.5) now add modified P update into the P matrix (after orthog projection) for projected steepest descent here */
-        dim3 add_block(64);
-        k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(PF_nnzb, block_dim, omegaMC, 0,
-            d_PF_vals, d_P_vals);
-
-
-        /* 7.6) compute the defect norms to check progress */
-
-        // compute new PF -K*P defect matrix one more time,
-        cudaMemset(d_PF_vals, 0.0, PF_nnzb * 36 * sizeof(T));
-        a = -1.0; // compute PF = -K * P matrix-matrix
-        k_compute_P_K_P_mmprod<T><<<PKP_grid, PKP_block>>>(nnzb_prod, block_dim, a, d_K_blocks, 
-            d_P_blocks, d_PF_blocks, d_kmat_vals, d_P_vals, d_PF_vals);
-        // compute both P*v and -K*P*v and PF*v, three things to check..
-        //   first d_temp = P*u_c
-        a = 1.0, b = 0.0; // v = 0*v + P*v
-        CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
-            nnodes_fine, nnodes_coarse, PF_nnzb, &a, descr_Pmat, d_P_vals, d_PF_rowp, d_PF_cols, block_dim, 
-            c_soln.getPtr(), &b, d_temp));
-        if (write_vtk || ismooth == nsmooth - 1) {
-            d_temp_vec.permuteData(6, f_grid->d_perm); // permute solve to vis order
-            auto h_soln_smooth = d_temp_vec.createHostVec();
-            d_temp_vec.permuteData(6, f_grid->d_iperm); // permute back to solve order for next step
-            std::stringstream outputFile1;
-            outputFile1 << "out/plate_cf_smooth_" << ismooth << ".vtk";
-            printToVTK<Assembler,HostVec<T>>(assembler, h_soln_smooth, outputFile1.str());
-        }
-        T max_disp = get_max_disp<T>(d_temp_vec);
-        
-        // then compute -K*temp = -K*P*u_c => d_temp2
-        a = -1.0, b = 0.0;
-        CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
-            nnodes_fine, nnodes_fine, kmat_nnzb, &a, descr_Kmat, d_kmat_vals, d_kmat_rowp, d_kmat_cols, block_dim, 
-            d_temp, &b, d_temp2));
-        T def_nrm = get_max_disp<T>(d_temp2_vec);
-        if (write_vtk || ismooth == nsmooth - 1) {
-            d_temp2_vec.permuteData(6, f_grid->d_perm); // permute solve to vis order
-            auto h_def0 = d_temp2_vec.createHostVec();
-            std::stringstream outputFile2;
-            outputFile2 << "out/plate_nKPv_" << ismooth << ".vtk";
-            printToVTK<Assembler,HostVec<T>>(assembler, h_def0, outputFile2.str());
-        }
-        
-        // then compute PF*u_c equiv to -K*P*u_c (using PF matrix here)
-        a = 1.0, b = 0.0; // v = 0*v + PF*v
-        CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
-            nnodes_fine, nnodes_coarse, PF_nnzb, &a, descr_Pmat, d_PF_vals, d_PF_rowp, d_PF_cols, block_dim, 
-            c_soln.getPtr(), &b, d_temp));
-        T PF_def_nrm = get_max_disp<T>(d_temp_vec);
-        if (write_vtk || ismooth == nsmooth - 1) {
-            d_temp_vec.permuteData(6, f_grid->d_perm); // permute solve to vis order
-            auto h_def1 = d_temp_vec.createHostVec();
-            std::stringstream outputFile3;
-            outputFile3 << "out/plate_PFv_" << ismooth << ".vtk";
-            printToVTK<Assembler,HostVec<T>>(assembler, h_def1, outputFile3.str());
-        }
-        
-        
-        printf("matrix smoothing step %d / %d: max disp %.4e, act defect %.4e, and PF defect %.4e\n", ismooth + 1, nsmooth, max_disp, def_nrm, PF_def_nrm);
-
+            /* 7.5) TBD: apply orthogonal projector with the rigid body modes matrix */
+        } // end of color loop for this smoothing step
     } // end of smoothing loop
 
-    f_grid->free();
-    c_grid->free();
-    assembler.free();
-    c_assembler.free();
-    cudaFree(Bc);
-    cudaFree(d_temp);
-    cudaFree(d_temp2);
-    cudaFree(d_resid);
-    soln.free();
-    c_soln.free();
-    loads.free();
-    c_loads.free();
-    kmat.free();
-    c_kmat.free();
-    cudaFree(d_P_vals);
-    cudaFree(d_PF_vals);
-    // cudaMemfree
+    // NOTE : not sure if the MC smoother can really be used as an iner product space?
+    // also it ignores fillin in each MC smoothing step (so maybe would have to do orthog projection after each MC smooth step)?
+    // and it's like we're taking optimization steps in each subcolor inner product? Idk, TBD on that..
+    // doesn't work past one color yet.. may need the orthog projection still.. hence I'm doing jacobi first in the next script.
 
+
+    /* 8) check and see if the smoothed prolong matrix is indeed smoother after all */
+    
+    // compute new PF -K*P defect matrix one more time,
+    cudaMemset(d_PF_vals, 0.0, PF_nnzb * 36 * sizeof(T));
+    a = -1.0; // compute PF = -K * P matrix-matrix
+    k_compute_P_K_P_mmprod<T><<<PKP_grid, PKP_block>>>(nnzb_prod, block_dim, a, d_K_blocks, 
+        d_P_blocks, d_PF_blocks, d_kmat_vals, d_P_vals, d_PF_vals);
+    // compute both P*v and -K*P*v and PF*v, three things to check..
+    //   first d_temp = P*u_c
+    a = 1.0, b = 0.0; // v = 0*v + P*v
+    CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
+        nnodes_fine, nnodes_coarse, PF_nnzb, &a, descr_Pmat, d_P_vals, d_PF_rowp, d_PF_cols, block_dim, 
+        c_soln.getPtr(), &b, d_temp));
+    d_temp_vec.permuteData(6, f_grid->d_perm); // permute solve to vis order
+    auto h_soln_smooth = d_temp_vec.createHostVec();
+    d_temp_vec.permuteData(6, f_grid->d_iperm); // permute back to solve order for next step
+    printToVTK<Assembler,HostVec<T>>(assembler, h_soln_smooth, "out/plate_cf_smooth.vtk");
+    // then compute -K*temp = -K*P*u_c => d_temp2
+    a = -1.0, b = 0.0;
+    CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
+        nnodes_fine, nnodes_fine, kmat_nnzb, &a, descr_Kmat, d_kmat_vals, d_kmat_rowp, d_kmat_cols, block_dim, 
+        d_temp, &b, d_temp2));
+    auto d_temp2_vec = DeviceVec<T>(N, d_temp2);
+    d_temp2_vec.permuteData(6, f_grid->d_perm); // permute solve to vis order
+    auto h_def0 = d_temp2_vec.createHostVec();
+    printToVTK<Assembler,HostVec<T>>(assembler, h_def0, "out/plate_fsmooth0.vtk");
+    // then compute PF*u_c equiv to -K*P*u_c (using PF matrix here)
+    a = 1.0, b = 0.0; // v = 0*v + PF*v
+    CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
+        nnodes_fine, nnodes_coarse, PF_nnzb, &a, descr_Pmat, d_PF_vals, d_PF_rowp, d_PF_cols, block_dim, 
+        c_soln.getPtr(), &b, d_temp));
+    d_temp_vec.permuteData(6, f_grid->d_perm); // permute solve to vis order
+    auto h_def1 = d_temp_vec.createHostVec();
+    printToVTK<Assembler,HostVec<T>>(assembler, h_def1, "out/plate_fsmooth1.vtk");
+    
 
     /* 9) verification, compare smoothed prolong matrix to original prolong matrix on a vec (with standard smoothing) */
     // TBD

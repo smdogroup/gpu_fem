@@ -167,3 +167,245 @@ __global__ void k_normalize_rows(const int nbrows, const int block_dim, const in
     }
 
 }
+
+void k_get_free_dof(const int n_bcs, int block_dim, int *bcs, int *iperm, bool *free_dof_ptr) {
+    // get the free dof (in solve order, so permuted)
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (tid >= n_bcs) return;
+    int ibc = tid;
+    int bc = bcs[ibc]; // BC dof in visualization order
+    int bc_node = bc / block_dim, bc_dof = bc % block_dim;
+    int bc_pnode = iperm[bc_node]; // BC node permtued to solve order 
+    int pbc = block_dim * bc_pnode + bc_dof;
+
+    free_dof_ptr[pbc] = false; // not a free DOF
+}
+
+#define EPS 1e-12
+__device__ void cholesky6_shared(double* UTU)
+{
+    int t = threadIdx.x; // thread 0..5, one per row
+    if (t >= 6) return;
+
+    for (int k = 0; k < 6; k++)
+    {
+        // Thread k computes the diagonal
+        double Lkk = 0.0;
+        if (t == k)
+        {
+            double sum = 0.0;
+            for (int s = 0; s < k; s++)
+                sum += UTU[k*6 + s] * UTU[k*6 + s];
+            Lkk = sqrt(max(UTU[k*6 + k] - sum, EPS));
+            UTU[k*6 + k] = Lkk;
+        }
+
+        __syncthreads(); // make sure Lkk is visible
+
+        // Threads t > k compute column k
+        if (t > k && t < 6)
+        {
+            double sum = 0.0;
+            for (int s = 0; s < k; s++)
+                sum += UTU[t*6 + s] * UTU[k*6 + s];
+            UTU[t*6 + k] = (UTU[t*6 + k] - sum) / UTU[k*6 + k];
+        }
+
+        __syncthreads();
+    }
+
+    // Zero upper triangle
+    if (t < 6)
+    {
+        for (int j = t+1; j < 6; j++)
+            UTU[t*6 + j] = 0.0;
+    }
+}
+
+// Solve L*L^T x = b using in-place forward/backward substitution
+// UTU: lower-triangular from cholesky6_shared
+// b: 6-vector, replaced with solution x
+__device__ void cholesky6_solve_inplace_shared(double* UTU, double* b)
+{
+    int t = threadIdx.x; // thread 0..5
+    if (t >= 6) return;
+
+    __shared__ double y[6];
+
+    // Forward substitution L * y = b
+    for (int i = 0; i < 6; i++)
+    {
+        if (t == i)
+        {
+            double sum = 0.0;
+            for (int j = 0; j < i; j++)
+                sum += UTU[i*6 + j] * y[j];
+            y[i] = (b[i] - sum) / UTU[i*6 + i];
+        }
+        __syncthreads();
+    }
+
+    // Backward substitution L^T * x = y
+    for (int i = 5; i >= 0; i--)
+    {
+        if (t == i)
+        {
+            double sum = 0.0;
+            for (int j = i+1; j < 6; j++)
+                sum += UTU[j*6 + i] * b[j]; // b[j] will hold solution x[j]
+            b[i] = (y[i] - sum) / UTU[i*6 + i];
+        }
+        __syncthreads();
+    }
+}
+
+
+template <typename T>
+__global__ void k_orthog_projector(const int nnodes_fine, const int block_dim, const T *R_vals,
+    const bool *free_dof_ptr, const int *rowp, const int *cols, T *S_vals) {
+    /* enforces the orthog projection to elim changes to fine rigid body modes 
+        of the projector in projected steepest descent method*/
+
+    // each thread block does orthog projection to one block row (or one nodal row)
+    int bid = blockIdx.x; // node number or block row number
+    if (bid >= nnodes_fine) return;
+    int inode = bid; // in solve order
+    
+    // computing two sum of mat-mat products first (each 6x6), where S is the projection update delta(P) = S
+    // 1) SU = sum_k S_{ik} U_{ik} where S_{ik}, U_{ik} in R^{6x6}
+    // 2) UTU = sum_k U_{ik}^T U_{ik}
+
+    __shared__ T SU[36]; // could declare less than 36 for smaller block size problems (but don't care now as = 36), + has to be compile time constant here
+    __shared__ T UTU[36];
+    __shared__ T V[36];
+    __shared__ int Fi[6]; // fine node free DOF indicator (since only one fine node here, easy to just load into shared)
+    if (threadIdx.x == 0) {
+        memset(SU, 0.0, 36 * sizeof(T));
+        memset(UTU, 0.0, 36 * sizeof(T));
+    }
+    for (int idof = threadIdx.x; idof < 6; idof += blockDim.x) {
+        Fi[idof] = (int)free_dof_ptr[block_dim * inode + idof]; 
+    }
+    __syncthreads();
+
+    // 1) first compute SU = sum_k S_{ik} U_{ik}, where U_{ik} = n_{ik} * R_k * F_i where i is fine node, k is coarse node,
+    //  n_{ik} is sparsity indicator, R_k is the coarse rigid body mode of node k and F_i is the free DOF indicator 6x6 matrix
+    //  F_i is just gonna be 0 or 1s on the diag so no mat-mat product needed for that.
+    // compute the number of S blocks in this row (aka P)
+    int start_block = rowp[bid], end_block = rowp[bid+1];
+    int nblocks = end_block - start_block;
+    // compute num products to compute in S*U (each thread will do different product + sum, looping over them together)
+    int block_dim2 = block_dim * block_dim;
+    int block_dim3 = block_dim2 * block_dim;
+    int nprods = nblocks * block_dim3;
+    for (int iprod = threadIdx.x; iprod < nprods, iprod += blockDim.x) {
+        int loc_row_block = iprod / block_dim3;
+        int iblock = loc_row_block + start_block; // block num in this row
+        int jkl = iprod % block_dim3; // ijkljk product index (jkl < 216)
+        // not quite sure the best order and how to make this most efficient (TBD), but gonna do l, then k, then j order
+        int l = jkl % block_dim, jk = jkl / block_dim;
+        int k = jk / block_dim, j = jk % block_dim; // with each of (j,k,l) in [0,6) integers
+        
+        // load the correct value of R_{jk} the coarse rigid body modes
+        int ic = cols[loc_row_block]; // in solve order since R_vals is also in solve order and so is S and P
+        T R_kl = R_vals[block_dim2 * icoarse + block_dim * k + l]; // R_{kl} of coarse node ic
+        // multiply R_kl by F_l (zeroes out columns of R aka individual rigid body modes)
+        R_kl *= Fi[l]; // equal to R*F 6x6 matrix here (but one entry of it)
+
+        // load the correct value of S_{ij} = dP_{ij} the projection update 
+        T S_jk = S_vals[block_dim2 * iblock + block_dim * j + k]; // S_{jk} of fine node bid aka i
+
+        // now multiply and add into SU
+        atomicAdd(&SU[block_dim * j + l], S_jk * R_kl);
+    }
+    __syncthreads(); // splits computation and registers here
+
+    // 2) now compute UTU = sum_k (U_{ik})^T * U_{ik}, same number of products
+    for (int iprod = threadIdx.x; iprod < nprods, iprod += blockDim.x) {
+        int loc_row_block = iprod / block_dim3;
+        int iblock = loc_row_block + start_block; // block num in this row
+        int jkl = iprod % block_dim3; // ijkljk product index (jkl < 216)
+        // not quite sure the best order and how to make this most efficient (TBD), but gonna do l, then k, then j order
+        int l = jkl % block_dim, jk = jkl / block_dim;
+        int k = jk / block_dim, j = jk % block_dim; // with each of (j,k,l) in [0,6) integers
+        
+        // get the coarse node for this U 6x6 matrix in R
+        int ic = cols[loc_row_block]; // in solve order since R_vals is also in solve order and so is S and P
+
+        // once U = {[U1,U2,...,]}_{iK} the fine node i and coarse node K have been loaded as 6x6 matrix, we compute the 
+        // 6x6 mat-mat product (UTU)_{jl} = U_{jk}^T * U_{kl} = U_{kj} U_{kl}
+        // now load the correct part of the rigid body modes to compute each U_{kj} and U_{kl} value
+        T U_kl = R_vals[block_dim2 * icoarse + block_dim * k + l] * Fi[l]; // Fi is 6x6 which then
+        T U_kj = R_vals[block_dim2 * icoarse + block_dim * k + j] * Fi[j]; // zeroes out certain columns in U if not free node
+        //Fi itself is 6x6 the l and j above are indexing hte 6x6 matrix of (Fi) => 6x6
+
+        // now multiply and add into SU
+        atomicAdd(&UTU[block_dim * j + l], U_kj * U_kl);
+        // since includes product Fi[j] * Fi[l], UTU will have row and cols zero for Dirichlet BC dof.
+    }
+    __syncthreads(); // splits computation and registers here
+
+    // now need to compute the 6x6 pseudo-inverse (UTU)^+ = ((UTU)^2)^{-1} * UTU (to handle the dirichlet bcs correctly)
+    // while the pseudo-inv is mathematically correct way to do it.. it may be easier to add small 1e-12 value or something to the diag
+    // and do cholesky solve or something.. would be numerically equivalent and stable I think..
+
+    // 3.0) how would you do the cholesky solve then? Need it to be exact..
+    //  not great to do (UTU)^2 * M = UTU * U^T since (UTU)^2 destroys condition number.
+    //  so instead I'm gonna do (UTU + eps * I)^-1 instead of pinv (shouild work due to fully zero each row and col of constr DOF)
+    //  will check the linear system is solved later
+    // first add small eps*I to UTU (1e-12 should be well below it given typical mesh sizes and the I in it)
+    for (int i = threadIdx.x; i < block_dim; i += blockDim.x) {
+        UTU[block_dim * i + i] += 1e-12;
+    } 
+    __syncthreads();
+
+    // 3) now do a 6x6 cholesky factorization of (UTU+eps*I) approx LL^T in place in UTU storage
+    cholesky6(UTU);
+    __syncthreads();
+
+    // 4.1) now we'll do the linear solve of (LL^T)^{-1} * U^T => V (with six right-hand-sides)
+    int t = threadIdx.x;
+    if (t < 6)
+    {
+        // Forward substitution: L * Y = U^T
+        // Y is stored temporarily in V
+        for (int col = 0; col < 6; col++)
+        {
+            T sum = 0.0;
+            for (int k = 0; k < t; k++)
+                sum += UTU[t*6 + k] * V[k*6 + col];
+            V[t*6 + col] = (U[col*6 + t] - sum) / UTU[t*6 + t]; // U^T[row,col] = U[col,row]
+        }
+    }
+    __syncthreads();
+
+    // 4.2) Backward substitution: L^T * X = Y, overwrite V
+    if (t < 6)
+    {
+        for (int col = 0; col < 6; col++)
+        {
+            T sum = 0.0;
+            for (int k = t+1; k < 6; k++)
+                sum += UTU[k*6 + t] * V[k*6 + col];
+            V[t*6 + col] = (V[t*6 + col] - sum) / UTU[t*6 + t];
+        }
+    }
+    __syncthreads();
+
+    // 5) update all S values in this nodal row with the projector S -= SU * V
+    for (int iprod = threadIdx.x; iprod < nprods, iprod += blockDim.x) {
+        int loc_row_block = iprod / block_dim3;
+        int iblock = loc_row_block + start_block; // block num in this row
+        int jkl = iprod % block_dim3; // ijkljk product index (jkl < 216)
+        // not quite sure the best order and how to make this most efficient (TBD), but gonna do l, then k, then j order
+        int l = jkl % block_dim, jk = jkl / block_dim;
+        int k = jk / block_dim, j = jk % block_dim; // with each of (j,k,l) in [0,6) integers
+
+        // get V_{kl} value
+        T V_kl = V[6 * k + l];
+        T SU_jk = SU[6 * j + k];
+        atomicAdd(&S_vals[block_dim2 * iblock + block_dim * j + l], -1.0 * SU_jk * V_kl);
+    }
+
+    // END OF kernel!
+}
