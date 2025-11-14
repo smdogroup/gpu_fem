@@ -447,8 +447,7 @@ int main() {
 
     // compute on the host first
     printf("6) compute the coarse mesh rigid body modes\n");
-    T *d_xpts_coarse = c_assembler.getXpts();
-    T *xpts_coarse = d_xpts_coarse.createHostVec().getPtr();
+    T *xpts_coarse = c_assembler.getXpts().createHostVec().getPtr();
     T *Bc = new T[36 * nnodes_coarse]; // get it in solve order so need h_c_perm
     memset(Bc, 0.0, 36 * nnodes_coarse);
     for (int i = 0; i < 6 * nnodes_coarse; i++) {
@@ -794,20 +793,26 @@ int main() {
         /* 7.4) TBD: apply orthogonal projector, which handles fixed sparsity + rigid body mode constraints */
         // adds in terms that are lost as we don't fillin P matrix each time
         dim3 OP_block(32), OP_grid(nnodes_fine);
+        printf("\ttry orthog projector\n");
         k_orthog_projector<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
             d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_PF_vals);
+        CHECK_CUDA(cudaDeviceSynchronize());
+        printf("\t\tdone with orthog projector\n");
+        return 0;
         
-
 
         /* 7.5) now add modified P update into the P matrix (after orthog projection) for projected steepest descent here */
         dim3 add_block(64);
+        printf("\tadd colored submat PFP\n");
         k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(PF_nnzb, block_dim, omegaMC, 0,
             d_PF_vals, d_P_vals);
+        printf("\t\tdone with add colored submat PFP\n");
 
 
         /* 7.6) compute the defect norms to check progress */
 
         // compute new PF -K*P defect matrix one more time,
+        printf("compute defect norms\n");
         cudaMemset(d_PF_vals, 0.0, PF_nnzb * 36 * sizeof(T));
         a = -1.0; // compute PF = -K * P matrix-matrix
         k_compute_P_K_P_mmprod<T><<<PKP_grid, PKP_block>>>(nnzb_prod, block_dim, a, d_K_blocks, 
