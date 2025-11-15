@@ -88,9 +88,11 @@ void krylov_solve(int nxe, double SR, int nsmooth, T pressure = 5.0e7) {
     // so may not be surprising if it doesn't solve as well => it's really just a smoother anyways
     // T omega = 1.0; // use 1.0 default for l1-jacobi, shouldn't need to change too much I don't think
     // T omega = 2.0; // maybe want higher update?
-    T omega = 5.0; 
+    // T omega = 5.0; 
     // smoother doesn't quite seem to be working yet lol, compared to GSMC this is not working at all as precond.. (even on small plate problem)
     // maybe the block L1-preconditioner D_{L1} is not good for my shell problems.. that could be it, may need to go back to jacobi with eigenvalue estimate
+    // what about trying smaller omega?
+    T omega = 0.5;
 
     double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
     int nxe_per_comp = nxe / 4, nye_per_comp = nxe/4; // for now (should have 25 grids)
