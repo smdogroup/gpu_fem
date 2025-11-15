@@ -33,6 +33,7 @@ class BsrData {
           tr_cols(nullptr),
           tr_block_map(nullptr),
           host(true) {
+        // get rowp and cols from element connectivity
         _get_row_col_ptrs_sparse();
 
         // make a nominal ordering (no permutation)
@@ -115,6 +116,13 @@ class BsrData {
         nnzb = su_mat->nnz;
         rowp = su_mat->rowp;
         cols = su_mat->cols;
+        // then also compute rows here
+        rows = new int[nnzb];
+        for (int i = 0; i < nnodes; i++) {
+            for (int jp = rowp[i]; jp < rowp[i+1]; jp++) {
+                rows[jp] = i;
+            }
+        }
     }
 
     __HOST__ static int getBandWidth(const int &nnodes, const int &nnzb, int *rowp, int *cols) {
@@ -779,11 +787,12 @@ class BsrData {
 #endif
 
         // create HostVec wrapper objects in CUDA, transfer to device and get ptr for new object
-        DeviceVec<int> d_rowp(nnodes + 1, rowp), d_cols(nnzb, cols), d_perm(nnodes, perm),
+        DeviceVec<int> d_rowp(nnodes + 1, rowp), d_rows(nnzb, rows), d_cols(nnzb, cols), d_perm(nnodes, perm),
             d_iperm(nnodes, iperm), d_elem_ind_map(n_eim, elem_ind_map),
             d_tr_rowp(nnodes + 1, tr_rowp), d_tr_cols(nnzb, tr_cols),
             d_tr_block_map(nnzb, tr_block_map);
         new_bsr.rowp = d_rowp.createHostVec().getPtr();
+        new_bsr.rows = d_rows.createHostVec().getPtr();
         new_bsr.cols = d_cols.createHostVec().getPtr();
         new_bsr.perm = d_perm.createHostVec().getPtr();
         new_bsr.iperm = d_iperm.createHostVec().getPtr();
@@ -831,9 +840,10 @@ class BsrData {
             new_bsr.elem_conn = d_elem_conn;
         }
 
-        HostVec<int> h_rowp(nnodes + 1, rowp), h_cols(nnzb, cols), h_perm(nnodes, perm),
+        HostVec<int> h_rowp(nnodes + 1, rowp), h_rows(nnzb, rows), h_cols(nnzb, cols), h_perm(nnodes, perm),
             h_iperm(nnodes, iperm);
         new_bsr.rowp = h_rowp.createDeviceVec().getPtr();
+        new_bsr.rows = h_rows.createDeviceVec().getPtr();
         new_bsr.cols = h_cols.createDeviceVec().getPtr();
         new_bsr.perm = h_perm.createDeviceVec().getPtr();
         new_bsr.iperm = h_iperm.createDeviceVec().getPtr();
@@ -851,6 +861,7 @@ class BsrData {
 #ifdef USE_GPU
             // delete data on device
             if (rowp) cudaFree(rowp);
+            if (rows) cudaFree(rows);
             if (cols) cudaFree(cols);
             if (perm) cudaFree(perm);
             if (iperm) cudaFree(iperm);
@@ -862,6 +873,7 @@ class BsrData {
         } else {
             // delete data on host
             if (rowp) delete[] rowp;
+            if (rows) delete[] rows;
             if (cols) delete[] cols;
             if (perm) delete[] perm;
             if (iperm) delete[] iperm;

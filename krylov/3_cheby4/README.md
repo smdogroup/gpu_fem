@@ -1,0 +1,2 @@
+Use fourth-order chebyshev polynomial smoothers (with l1-jacobi preconditioner so always contraction without needing CG-Lanczos or Gershgorin's theorem eigenvalue estimates rho(Dinv * A))
+  from the paper, Optimal Polynomial Smoothers for Multigrid V-cycles by James Lottes (2023), so actually quite recent! Maybe I'm not so behind in the literature after all!

@@ -16,6 +16,24 @@ __global__ static void k_copyBlockDiagFromBsrMat(int nnodes, int block_dim, int 
     }
 }
 
+
+template <typename T>
+__global__ static void k_computeL1BlockDiags(const int kmat_nnzb, const int block_dim, const int *kmat_rows,
+                                                       const T *kmat_vals, T *diag_vals) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int block_dim2 = block_dim * block_dim;
+    int kmat_nvals = kmat_nnzb * block_dim2;
+    if (tid >= kmat_nvals) return;
+    int node_block = tid / block_dim2;
+    int node_row = kmat_rows[node_block];
+    int ii = tid % block_dim2;
+    // int i = ii / block_dim, j = ii % block_dim;
+
+    // compute absolute value row-sums
+    T abs_val = abs(kmat_vals[tid]);
+    atomicAdd(&diag_vals[block_dim2 * node_row + ii], abs_val);
+}
+
 template <typename T>
 __global__ static void k_setBlockUnitVec(int nnodes, int block_dim, int ii, T *vec) {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
