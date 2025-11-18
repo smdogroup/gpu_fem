@@ -175,7 +175,7 @@ void krylov_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omega, T f
     // run the linear solver
     auto start_solve = std::chrono::high_resolution_clock::now();
     // printf("running GSMC-GMRES linear solve\n");
-    gmres_solver->solve(grid->d_defect, lin_soln, true);
+    bool fail = gmres_solver->solve(grid->d_defect, lin_soln, true);
     // printf("\t\ndone with GSMC-GMRES linear solve\n");
 
     auto end_solve = std::chrono::high_resolution_clock::now();
@@ -189,6 +189,11 @@ void krylov_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omega, T f
     T lin_max_disp = get_max_disp(lin_soln);
 
     // return; // for now DEBUG
+
+    if (fail) {
+        printf("\tGMRES solved failed, so not proceeding to nonlinear solves\n");
+        return;
+    }
 
 
     // -----------------------------------------------------------

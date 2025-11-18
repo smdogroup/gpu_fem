@@ -164,7 +164,7 @@ void gsmc_gmres_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaM
     // run the linear solver
     auto start_solve = std::chrono::high_resolution_clock::now();
     // printf("running GSMC-GMRES linear solve\n");
-    gmres_solver->solve(grid->d_defect, lin_soln, true);
+    bool fail = gmres_solver->solve(grid->d_defect, lin_soln, true);
     // printf("\t\ndone with GSMC-GMRES linear solve\n");
 
     auto end_solve = std::chrono::high_resolution_clock::now();
@@ -176,6 +176,11 @@ void gsmc_gmres_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaM
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
     printToVTK<Assembler,HostVec<T>>(gmres_solver->grid->assembler, h_soln, "out/wing_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
+
+    if (fail) {
+        printf("\tGMRES solved failed, so not proceeding to nonlinear solves\n");
+        return;
+    }
 
     // return; // for now DEBUG
 
