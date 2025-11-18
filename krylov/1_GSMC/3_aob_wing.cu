@@ -60,7 +60,7 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 }
 
 template <typename T, class Assembler>
-void gsmc_gmres_solve(int level, MPI_Comm comm, double SR, int nsmooth, T force = 5.0e7) {
+void gsmc_gmres_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC, T force = 5.0e7) {
     /* gauss-seidel multicolor GMRES solve */
 
     using Basis = typename Assembler::Basis;
@@ -87,14 +87,6 @@ void gsmc_gmres_solve(int level, MPI_Comm comm, double SR, int nsmooth, T force 
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start0 = std::chrono::high_resolution_clock::now();
-
-    // some important settings
-    // T omegaMC = 1.5; // for GS-SOR
-    // T omegaMC = 0.75;
-    // T omegaMC = 0.7;
-    // T omegaMC = 0.3;
-    // T omegaMC = 1.5;
-    T omegaMC = 0.75;
 
 
     // create the assembler
@@ -360,9 +352,9 @@ void solve_direct(int level, MPI_Comm comm, double SR, T force = 5.0e7) {
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(bool is_krylov, MPI_Comm comm, int level, double SR, int nsmooth, T force = 5.0e7) {
+void gatekeeper_method(bool is_krylov, MPI_Comm comm, int level, double SR, int nsmooth, T omega, T force = 5.0e7) {
     if (is_krylov) {
-        gsmc_gmres_solve<T, Assembler>(level, comm, SR, nsmooth, force);
+        gsmc_gmres_solve<T, Assembler>(level, comm, SR, nsmooth, omega, force);
     } else {
         solve_direct<T, Assembler>(level, comm, SR, force);
     }
@@ -378,6 +370,7 @@ int main(int argc, char **argv) {
     double SR = 10.0; // default, the less slender it is, solves much faster
     double force = 4e7;
     int level = 2;
+    double omega = 0.7; // default MC smoother omega
 
     int nsmooth = 40; 
     // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
@@ -399,7 +392,14 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --level\n";
                 return 1;
             }
-        }  else if (strcmp(arg, "--sr") == 0) {
+        } else if (strcmp(arg, "--omega") == 0) {
+            if (i + 1 < argc) {
+                omega = std::atof(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --omega\n";
+                return 1;
+            }
+        } else if (strcmp(arg, "--sr") == 0) {
             if (i + 1 < argc) {
                 SR = std::atof(argv[++i]);
             } else {
@@ -447,15 +447,15 @@ int main(int argc, char **argv) {
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 2>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, comm, level, SR, nsmooth, force);
+        gatekeeper_method<T, Assembler>(is_krylov, comm, level, SR, nsmooth, omega, force);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, comm, level, SR, nsmooth, force);
+        gatekeeper_method<T, Assembler>(is_krylov, comm, level, SR, nsmooth, omega, force);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, comm, level, SR, nsmooth, force);
+        gatekeeper_method<T, Assembler>(is_krylov, comm, level, SR, nsmooth, omega, force);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }

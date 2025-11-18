@@ -25,10 +25,14 @@
 #include "multigrid/grid.h"
 #include "multigrid/utils/fea.h"
 #include "multigrid/prolongation/structured.h"
-#include "multigrid/smoothers/mc_smooth1.h"
+#include "multigrid/smoothers/cheb4_poly.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>
 #include <chrono>
+
+// wing stuff
+#include "multigrid/prolongation/unstructured.h"
+#include "multigrid/smoothers/_wingbox_coloring.h"
 
 // finalsolver
 #include "multigrid/solvers/direct/cusp_directLU.h"
@@ -56,15 +60,27 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 }
 
 template <typename T, class Assembler>
-void gsmc_gmres_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressure = 5.0e7) {
-    /* gauss-seidel multicolor GMRES solve */
+void krylov_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omega, T force = 5.0e7) {
+    /* chebyshev polynomial GMRES solve */
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
-    const SCALER scaler  = LINE_SEARCH;
-    using Smoother = MulticolorGSSmoother_V1<Assembler>;
-    using Prolongation = StructuredProlongation<Assembler, PLATE>; // technically don't need this here.. but GMRES solver uses grid right now..
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
+    // whether to use D1-jacobi preconditioner or not 
+    // (L1 jacobi may be advantagous as always contraction, but doesn't well here?)
+    const bool L1_JACOBI = false; // works better right now
+    // const bool L1_JACOBI = true; 
+
+    // polynomial order of the chebyshev polynomial smoother
+    // const int ORDER = 1;
+    // const int ORDER = 2;
+    // const int ORDER = 4; // preferred? works better than ORDER=1,2
+    const int ORDER = 8; // needs lower omega than ORDER 4 for some reason?
+    
+    using Smoother = ChebyshevPolynomialSmoother<Assembler, L1_JACOBI, ORDER>; // 4th order chebyshev polynomial smoother
+
+    using Prolongation = UnstructuredProlongation<Assembler, Basis, true>; 
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+    using Data = ShellIsotropicData<T, false>;
 
     // for K-cycles
     // const int N_SUBSPACE = 50;
@@ -84,24 +100,40 @@ void gsmc_gmres_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressu
     auto start0 = std::chrono::high_resolution_clock::now();
 
 
-    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
-    int nxe_per_comp = nxe / 4, nye_per_comp = nxe/4; // for now (should have 25 grids)
-    auto assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
-    double uniform_force = pressure * 1.0 * 1.0;
-    double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
-    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-    T *my_loads = getPlateLoads<T, Physics>(nxe, nxe, Lx, Ly, nodal_loads);
-    printf("making grid with nxe %d\n", nxe);
+    // create the assembler
+    TACSMeshLoader mesh_loader{comm};
+    std::string fname = "../../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    mesh_loader.scanBDFFile(fname.c_str());
+    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+    printf("making assembler for mesh '%s'\n", fname.c_str());
+    auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
+
+    // make the loads on the wing
+    int nvars = assembler.get_num_vars();
+    int nnodes = assembler.get_num_nodes();
+    HostVec<T> h_loads(nvars);
+    double load_mag = force / nnodes; // estimate for nodal load mag
+    double *my_loads = h_loads.getPtr();
+    for (int inode = 0; inode < nnodes; inode++) {
+        my_loads[6 * inode + 2] = load_mag;
+    }
 
     // perform multicolor reordering
+    bool custom_wing_coloring = true;
+    // bool custom_wing_coloring = false;
+
     auto &bsr_data = assembler.getBsrData();
     int num_colors, *_color_rowp;
-    bsr_data.multicolor_reordering(num_colors, _color_rowp);
+    if (custom_wing_coloring) {
+        WingboxMultiColoring<Assembler>::apply_coloring(assembler, bsr_data, num_colors, _color_rowp);
+    } else {
+        bsr_data.multicolor_reordering(num_colors, _color_rowp);
+    }
     bsr_data.compute_nofill_pattern();
     auto h_color_rowp = HostVec<int>(num_colors + 1, _color_rowp);
     assembler.moveBsrDataToDevice();
 
-    // create the loads and kmat
+    // create the device loads and kmat
     auto loads = assembler.createVarsVec(my_loads);
     assembler.apply_bcs(loads);
     auto kmat = createBsrMat<Assembler, VecType<T>>(assembler);
@@ -122,8 +154,9 @@ void gsmc_gmres_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressu
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
-    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
-    auto prolongation = new Prolongation(assembler);
+    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, nsmooth);
+    int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
+    auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
     auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
     
     // create the preconditioner and GMRES solver now
@@ -147,13 +180,15 @@ void gsmc_gmres_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressu
 
     auto end_solve = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end_solve - start_solve;
-    printf("\tGMRES solve time %.2e on %d nxe\n", solve_time.count(), nxe);
+    printf("\tCheby-polynomial precond-GMRES solve time %.2e on %d level\n", solve_time.count(), level);
 
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = gmres_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(gmres_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(gmres_solver->grid->assembler, h_soln, "out/wing_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
+
+    // return; // for now DEBUG
 
 
     // -----------------------------------------------------------
@@ -199,7 +234,7 @@ void gsmc_gmres_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressu
 
     // print some of the data of host residual
     auto h_vars = vars.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/plate_kry_nl.vtk");
+    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/wing_kry_nl.vtk");
 
     // important to know reduction for how NL regime we are
     T ratio = nl_max_disp / lin_max_disp;
@@ -209,7 +244,7 @@ void gsmc_gmres_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressu
     std::chrono::duration<double> nl_solve_time = end1 - start1;
     int ndof = assembler.get_num_vars();
     double total = startup_time.count() + nl_solve_time.count();
-    printf("nonlinear Newton-Raphson GSMC-GMRES solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), nl_solve_time.count(), total);
+    printf("nonlinear Newton-Raphson GSMC-GMRES solve of AOB-WING geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), nl_solve_time.count(), total);
 
     // // free and cleanup
     // // --------------------
@@ -220,23 +255,36 @@ void gsmc_gmres_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressu
 }
 
 template <typename T, class Assembler>
-void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
+void solve_direct(int level, MPI_Comm comm, double SR, T force = 5.0e7) {
 
     /* direct NL solve used to check that how NL the problem is and how */
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
+    using Data = ShellIsotropicData<T, false>;
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start0 = std::chrono::high_resolution_clock::now();
 
-    int nye = nxe;
-    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
-    int nxe_per_comp = nxe / 4, nye_per_comp = nye/4; // for now (should have 25 grids)
-    auto assembler = createPlateAssembler<Assembler>(nxe, nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+    // create the assembler
+    TACSMeshLoader mesh_loader{comm};
+    std::string fname = "../../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    mesh_loader.scanBDFFile(fname.c_str());
+    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+    printf("making assembler for mesh '%s'\n", fname.c_str());
+    auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
 
-    // BSR factorization
-    auto& bsr_data = assembler.getBsrData();
+    // make the loads on the wing
+    int nvars = assembler.get_num_vars();
+    int nnodes = assembler.get_num_nodes();
+    HostVec<T> h_loads(nvars);
+    double load_mag = force / nnodes; // estimate for nodal load mag
+    double *my_loads = h_loads.getPtr();
+    for (int inode = 0; inode < nnodes; inode++) {
+        my_loads[6 * inode + 2] = load_mag;
+    }
+
+    auto &bsr_data = assembler.getBsrData();
     double fillin = 10.0;  // 10.0
     bool print = true;
     bsr_data.AMD_reordering();
@@ -248,18 +296,6 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     cusparseHandle_t cusparseHandle = NULL;
     CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
 
-    // get plate loads
-    double uniform_force = pressure * 1.0 * 1.0;
-    double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
-    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-    // T *my_loads = getPlatePointLoad<T, Physics>(c_nxe, c_nye, Lx, Ly, Q);
-    T *my_loads = getPlateLoads<T, Physics>(nxe, nye, Lx, Ly, nodal_loads);
-
-    // double Q = 1.0e5;
-    // T *my_loads = getPlatePointLoad<T, Physics>(nxe, nye, Lx, Ly, Q);
-    // double in_plane_frac = 0.3;
-    // T *my_loads = getPlateNonlinearLoads<T, Physics>(nxe, nye, Lx, Ly, Q, in_plane_frac);
-    // T *my_loads = getPlateLoads<T, Physics>(nxe, nye, Lx, Ly, Q);
     auto loads = assembler.createVarsVec(my_loads);
     assembler.apply_bcs(loads);
 
@@ -274,22 +310,6 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     auto start1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> startup_time = start1 - start0;
 
-    // newton solve
-    // int num_load_factors = 50, num_newton = 10;
-    // T min_load_factor = 1.0 / (num_load_factors - 1), max_load_factor = 1.0, abs_tol = 1e-8,
-    //     rel_tol = 1e-8;
-    // auto solve_func = CUSPARSE::direct_LU_solve<T>;
-    // std::string outputPrefix = "out/plate_";
-    // // bool write_vtk = true;
-    // bool write_vtk = false;
-    // old slow nonlinear solve (less robust)
-    // const bool fast_assembly = true;
-    // // const bool fast_assembly = false;
-    // newton_solve<T, BsrMat<DeviceVec<T>>, DeviceVec<T>, Assembler, fast_assembly>(
-    //     solve_func, kmat, loads, soln, assembler, res, rhs, vars,
-    //     num_load_factors, min_load_factor, max_load_factor, num_newton, abs_tol,
-    //     rel_tol, outputPrefix, print, write_vtk);
-
     // compare to pure linear solve (to see how nonlinear)
     // ==================================
 
@@ -298,7 +318,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     CUSPARSE::direct_LU_solve(kmat, loads, soln);
     T lin_max_disp = get_max_disp(soln);
     auto h_soln = soln.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/plate_direct_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/wing_direct_lin.vtk");
     
 
     // new nonlinear solver
@@ -323,7 +343,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 
     // print some of the data of host residual
     auto h_vars = vars.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/plate_direct_nl.vtk");
+    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/wing_direct_nl.vtk");
 
     // important to know reduction for how NL regime we are
     T ratio = nl_max_disp / lin_max_disp;
@@ -333,7 +353,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     std::chrono::duration<double> solve_time = end1 - start1;
     int ndof = assembler.get_num_vars();
     double total = startup_time.count() + solve_time.count();
-    printf("nonlinear Newton-Raphson Direct-LU solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), solve_time.count(), total);
+    printf("nonlinear Newton-Raphson Direct-LU solve of AOB-WING geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), solve_time.count(), total);
 
     // free and cleanup
     // --------------------
@@ -343,23 +363,27 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(bool is_krylov, int nxe, double SR, int nsmooth, T omega, T load_mag = 5.0e7) {
+void gatekeeper_method(bool is_krylov, MPI_Comm comm, int level, double SR, int nsmooth, T omega, T force = 5.0e7) {
     if (is_krylov) {
-        gsmc_gmres_solve<T, Assembler>(nxe, SR, nsmooth, omega, load_mag);
+        krylov_solve<T, Assembler>(level, comm, SR, nsmooth, omega, force);
     } else {
-        solve_direct<T, Assembler>(nxe, SR, load_mag);
+        solve_direct<T, Assembler>(level, comm, SR, force);
     }
 }
 
 int main(int argc, char **argv) {
+    // Intialize MPI and declare communicator
+    MPI_Init(&argc, &argv);
+    MPI_Comm comm = MPI_COMM_WORLD;
+
     // input ----------
     bool is_krylov = true;
-    int nxe = 128; // default value (three grids)
     double SR = 10.0; // default, the less slender it is, solves much faster
-    double pressure = 8.0e6;
-    double omega = 1.5; // default omega
+    double force = 4e7;
+    int level = 2;
+    double omega = 0.1; // default jacobi omega
 
-    int nsmooth = 40; 
+    int nsmooth = 2; 
     // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
     std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
 
@@ -372,11 +396,18 @@ int main(int argc, char **argv) {
             is_krylov = false;
         } else if (strcmp(arg, "krylov") == 0) {
             is_krylov = true;
-        } else if (strcmp(arg, "--nxe") == 0) {
+        } else if (strcmp(arg, "--level") == 0) {
             if (i + 1 < argc) {
-                nxe = std::atoi(argv[++i]);
+                level = std::atoi(argv[++i]);
             } else {
-                std::cerr << "Missing value for --nxe\n";
+                std::cerr << "Missing value for --level\n";
+                return 1;
+            }
+        }  else if (strcmp(arg, "--sr") == 0) {
+            if (i + 1 < argc) {
+                SR = std::atof(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --SR\n";
                 return 1;
             }
         } else if (strcmp(arg, "--omega") == 0) {
@@ -386,18 +417,11 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --omega\n";
                 return 1;
             }
-        } else if (strcmp(arg, "--sr") == 0) {
+        } else if (strcmp(arg, "--force") == 0) {
             if (i + 1 < argc) {
-                SR = std::atof(argv[++i]);
+                force = std::atof(argv[++i]);
             } else {
-                std::cerr << "Missing value for --SR\n";
-                return 1;
-            }
-        } else if (strcmp(arg, "--pressure") == 0) {
-            if (i + 1 < argc) {
-                pressure = std::atof(argv[++i]);
-            } else {
-                std::cerr << "Missing value for --load\n";
+                std::cerr << "Missing value for --force\n";
                 return 1;
             }
         } else if (strcmp(arg, "--elem") == 0) {
@@ -430,19 +454,19 @@ int main(int argc, char **argv) {
     using Data = ShellIsotropicData<T, has_ref_axis>;
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
-    printf("plate mesh with geomNL %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
+    printf("AOB-wing mesh with geomNL %s elements, level %d and SR %.2e\n------------\n", elem_type.c_str(), level, SR);
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 2>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, omega, pressure);
+        gatekeeper_method<T, Assembler>(is_krylov, comm, level, SR, nsmooth, omega, force);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, omega, pressure);
+        gatekeeper_method<T, Assembler>(is_krylov, comm, level, SR, nsmooth, omega, force);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, omega, pressure);
+        gatekeeper_method<T, Assembler>(is_krylov, comm, level, SR, nsmooth, omega, force);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }
