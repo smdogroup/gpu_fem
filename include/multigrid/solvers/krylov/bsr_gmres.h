@@ -31,6 +31,8 @@ class GMRESSolver : public BaseSolver {
         iperm = bsr_data.iperm;
         d_vals = mat.getPtr();
 
+        if (!pc) printf("\nWARNING : GMRES solver was constructed with no preconditioner\n\n");
+
         // cublasHandle = grid->cublasHandle;
         // cusparseHandle = grid->cusparseHandle;
 
@@ -72,7 +74,7 @@ class GMRESSolver : public BaseSolver {
         bool perm = true;
         grid->setStateVars(vars, perm);
         grid->update_after_assembly();
-        pc->update_after_assembly(vars);
+        if (pc) pc->update_after_assembly(vars);
     }
 
     void set_print(bool print) { options.print = print; }
@@ -131,7 +133,12 @@ class GMRESSolver : public BaseSolver {
                 // U^-1 L^-1 * vj => d_tmp2 precond solve here
                 CHECK_CUDA(
                     cudaMemcpy(d_tmp, &d_Vmat[j * N], N * sizeof(T), cudaMemcpyDeviceToDevice));
-                pc->solve(d_tmp_vec, d_tmp2_vec);
+                if (pc) {
+                    pc->solve(d_tmp_vec, d_tmp2_vec);
+                } else {
+                    // otherwise no preconditioner
+                    cudaMemcpy(d_tmp2, d_tmp, N * sizeof(T), cudaMemcpyDeviceToDevice);
+                }
 
                 // w = A * vj + 0 * w
                 // BSR matrix multiply here MV
@@ -226,7 +233,13 @@ class GMRESSolver : public BaseSolver {
             }
 
             // then compute xR = M^-1 xR (un-preconditions it back to x space)
-            pc->solve(d_xR_vec, d_tmp_vec);
+            if (pc) {
+                pc->solve(d_xR_vec, d_tmp_vec);
+            } else {
+                // no preconditioner
+                cudaMemcpy(d_tmp, d_xR, N * sizeof(T), cudaMemcpyDeviceToDevice);
+            }
+            
             CHECK_CUDA(cudaMemcpy(d_xR, d_tmp, N * sizeof(T), cudaMemcpyDeviceToDevice));
 
             // then update x = x_0 + xR
@@ -250,7 +263,11 @@ class GMRESSolver : public BaseSolver {
         CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_resid, 1, &final_resid));
 
         if (options.print) {
-            printf("GMRES converged to %.4e resid in %d iterations\n", final_resid, total_iter);
+            if (converged) {    
+                printf("GMRES converged to %.4e resid in %d iterations\n", final_resid, total_iter);
+            } else {
+                printf("GMRES did NOT CONVERGE with %.4e resid in %d iterations\n", final_resid, total_iter);
+            }
         }
 
         // cudaMemcpy(soln_out.getPtr(), d_x, N * sizeof(T), cudaMemcpyDeviceToDevice);

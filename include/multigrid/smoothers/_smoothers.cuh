@@ -18,21 +18,59 @@ __global__ static void k_copyBlockDiagFromBsrMat(int nnodes, int block_dim, int 
 
 
 template <typename T>
-__global__ static void k_computeL1BlockDiags(const int kmat_nnzb, const int block_dim, const int *kmat_rows,
-                                                       const T *kmat_vals, T *diag_vals) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int block_dim2 = block_dim * block_dim;
-    int kmat_nvals = kmat_nnzb * block_dim2;
-    if (tid >= kmat_nvals) return;
-    int node_block = tid / block_dim2;
-    int node_row = kmat_rows[node_block];
-    int ii = tid % block_dim2;
-    // int i = ii / block_dim, j = ii % block_dim;
+__global__
+void k_computeBlockL1Norms(int kmat_nnzb, int block_dim,
+                           const int *kmat_rows,
+                           const int *kmat_cols,
+                           const T *kmat_vals,
+                           T *block_norms) {
 
-    // compute absolute value row-sums
-    T abs_val = abs(kmat_vals[tid]);
-    atomicAdd(&diag_vals[block_dim2 * node_row + ii], abs_val);
+    
+    int bid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (bid >= kmat_nnzb) return;
+
+    int row = kmat_rows[bid];
+    int col = kmat_cols[bid];
+    bool diagonal = (row == col);
+
+    int b = block_dim;
+    int block_dim2 = b * b;
+
+    const T* B = kmat_vals + bid * block_dim2;
+
+    // compute block 1-norm = max column sum
+    T maxcol = 0;
+    for (int j = 0; j < b; j++) {
+        T sum = 0;
+        for (int i = 0; i < b; i++)
+            sum += abs(B[i*b + j]);
+        maxcol = max(maxcol, sum);
+    }
+
+    block_norms[bid] = maxcol * (!diagonal); // so diagonal will have zero value
 }
+
+template <typename T>
+__global__
+void k_accumulateBlockL1ToDiag(int kmat_nnzb, int block_dim,
+                               const int *kmat_rows,
+                               const T *block_norms,
+                               T *diag_vals)
+{
+    int bid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (bid >= kmat_nnzb) return;
+
+    int brow = kmat_rows[bid];
+
+    // Add accum * Identity(b)
+    int b = block_dim;
+    T* D = diag_vals + brow * b * b;
+
+    for (int d = 0; d < b; d++) {
+        atomicAdd(&D[d * b + d], block_norms[bid]); // note block norms is zero on diag
+    }
+}
+
 
 template <typename T>
 __global__ static void k_setBlockUnitVec(int nnodes, int block_dim, int ii, T *vec) {

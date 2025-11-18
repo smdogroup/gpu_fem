@@ -56,15 +56,26 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 }
 
 template <typename T, class Assembler>
-void krylov_solve(int nxe, double SR, int nsmooth, T pressure = 5.0e7) {
+void krylov_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) {
     /* chebyshev fourth-order jacobi smoother used as preconditioner for GMRES method */
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
-    const SCALER scaler  = LINE_SEARCH;
-    using Smoother = ChebyshevPolynomialSmoother<Assembler, 4>; // 4th order chebyshev polynomial smoother
+
+    // whether to use D1-jacobi preconditioner or not 
+    // (L1 jacobi may be advantagous as always contraction, but doesn't well here?)
+    const bool L1_JACOBI = false; // works better right now
+    // const bool L1_JACOBI = true; 
+
+    // polynomial order of the chebyshev polynomial smoother
+    // const int ORDER = 1;
+    // const int ORDER = 2;
+    // const int ORDER = 4; // preferred? works better than ORDER=1,2
+    const int ORDER = 8; // needs lower omega than ORDER 4 for some reason?
+    
+    using Smoother = ChebyshevPolynomialSmoother<Assembler, L1_JACOBI, ORDER>; // 4th order chebyshev polynomial smoother
     using Prolongation = StructuredProlongation<Assembler, PLATE>; // technically don't need this here.. but GMRES solver uses grid right now..
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
 
     // for K-cycles
     // const int N_SUBSPACE = 50;
@@ -82,18 +93,6 @@ void krylov_solve(int nxe, double SR, int nsmooth, T pressure = 5.0e7) {
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start0 = std::chrono::high_resolution_clock::now();
-
-    // some important settings
-    // may be better to not do L1-jacobi? If we have to choose higher omega to get faster conv? though this is for solve not smooth here
-    // so may not be surprising if it doesn't solve as well => it's really just a smoother anyways
-    // T omega = 1.0; // use 1.0 default for l1-jacobi, shouldn't need to change too much I don't think
-    // T omega = 2.0; // maybe want higher update?
-    // T omega = 5.0; 
-    // smoother doesn't quite seem to be working yet lol, compared to GSMC this is not working at all as precond.. (even on small plate problem)
-    // maybe the block L1-preconditioner D_{L1} is not good for my shell problems.. that could be it, may need to go back to jacobi with eigenvalue estimate
-    // what about trying smaller omega?
-    T omega = 0.5;
-
     double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
     int nxe_per_comp = nxe / 4, nye_per_comp = nxe/4; // for now (should have 25 grids)
     auto assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
@@ -137,7 +136,8 @@ void krylov_solve(int nxe, double SR, int nsmooth, T pressure = 5.0e7) {
     auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
     
     // create the preconditioner and GMRES solver now
-    auto pc = smoother;
+    auto pc = smoother; // turns out the smoother does work somewhat
+    // BaseSolver *pc = nullptr; // if want to try no precond for comparison (TEMP DEBUG)
     auto options = SolverOptions();
     options.print_freq = 10;
     int MAX_ITER = N_SUBSPACE;
@@ -165,7 +165,7 @@ void krylov_solve(int nxe, double SR, int nsmooth, T pressure = 5.0e7) {
     printToVTK<Assembler,HostVec<T>>(gmres_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
-    return; // temp debug
+    // return; // temp debug
 
 
     // -----------------------------------------------------------
@@ -355,9 +355,9 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(bool is_krylov, int nxe, double SR, int nsmooth, T load_mag = 5.0e7) {
+void gatekeeper_method(bool is_krylov, int nxe, double SR, int nsmooth, T omega, T load_mag = 5.0e7) {
     if (is_krylov) {
-        krylov_solve<T, Assembler>(nxe, SR, nsmooth, load_mag);
+        krylov_solve<T, Assembler>(nxe, SR, nsmooth, omega, load_mag);
     } else {
         solve_direct<T, Assembler>(nxe, SR, load_mag);
     }
@@ -366,10 +366,11 @@ void gatekeeper_method(bool is_krylov, int nxe, double SR, int nsmooth, T load_m
 int main(int argc, char **argv) {
     // input ----------
     bool is_krylov = true;
-    int nxe = 128; // default value (three grids)
+    int nxe = 64; // default value (three grids)
     double SR = 10.0; // default, the less slender it is, solves much faster
     double pressure = 8.0e6;
-    int nsmooth = 1; // number of times to apply the smoother
+    int nsmooth = 4; // number of times to apply the smoother
+    double omega = 0.3; // TODO : implement more robust spectral norm scaling using CG
 
     std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
     // std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
@@ -402,6 +403,13 @@ int main(int argc, char **argv) {
                 SR = std::atof(argv[++i]);
             } else {
                 std::cerr << "Missing value for --SR\n";
+                return 1;
+            }
+        } else if (strcmp(arg, "--omega") == 0) {
+            if (i + 1 < argc) {
+                omega = std::atof(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --omega\n";
                 return 1;
             }
         } else if (strcmp(arg, "--pressure") == 0) {
@@ -438,15 +446,15 @@ int main(int argc, char **argv) {
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 2>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, pressure);
+        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, omega, pressure);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, pressure);
+        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, omega, pressure);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, pressure);
+        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, omega, pressure);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }

@@ -12,7 +12,7 @@
 //    this since L1-jacobi doesn't require eigenvalue estimates (always has rho(D_{L1}^{-1} A) <= 1) and thus is commonly used in hypre
 //    and SA-AMG methods for tentative prolongator
 
-template <class Assembler, int order = 4>
+template <class Assembler, bool L1_JACOBI = false, int ORDER = 4>
 class ChebyshevPolynomialSmoother : public BaseSolver {
    public:
     using T = typename Assembler::T;
@@ -145,19 +145,31 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
 
             delete[] h_kmat_rowp;
             delete[] h_kmat_cols;
+
+            if constexpr (L1_JACOBI) {
+                d_block_norms = DeviceVec<T>(kmat_nnzb).getPtr();
+            }
         }  // end of startup
 
-        // we compute the L1 diagonal matrix with absolute value elem-wise row-sums
-        // first zero the previous diag values (as we're gonna add into it)
+        // regular jacobi preconditioner
+        //  zero previous values (to get new Dinv, in case optimization or nonlinear problem)
         d_diag_vals.zeroValues(); // this is vector for the opinter d_diag_LU_vals (confusing, can fix later
-        int n_mat_vals = block_dim * block_dim * kmat_nnzb;
-        dim3 block(32);
-        int ntblocks = (n_mat_vals + 31) / 32; // num thread blocks
-        dim3 grid(ntblocks);
-        printf("compute L1 block diags with nnodes %d and kmat_nnzb %d\n", nnodes, kmat_nnzb);
-        k_computeL1BlockDiags<T><<<grid, block>>>(kmat_nnzb, block_dim, d_kmat_rows, d_kmat_vals, d_diag_LU_vals);
-        CHECK_CUDA(cudaDeviceSynchronize());
-        printf("\tdone with compute L1 block diags\n");
+        k_copyBlockDiagFromBsrMat<T><<<(ndiag_vals + 31) / 32, 32>>>(nnodes, block_dim, d_kmat_diagp, d_kmat_vals, d_diag_LU_vals);
+
+        // we compute the L1 diagonal matrix off-diag terms 
+        if constexpr (L1_JACOBI) {
+            // get block norms
+            printf("trying to compute block norms\n");
+            k_computeBlockL1Norms<T><<<(kmat_nnzb + 31) / 32, 32>>>(kmat_nnzb, block_dim, d_kmat_rows, d_kmat_cols, d_kmat_vals, d_block_norms);
+            CHECK_CUDA(cudaDeviceSynchronize());
+            printf("\tdone computing block norms\n");
+
+            // then add in ||A_{ij}||_1 for off-block diags (diagonal part i==js just 0 cause we d_block_norms has zero for those blocks)
+            printf("trying to add block norms to D mat\n");
+            k_accumulateBlockL1ToDiag<T><<<(kmat_nnzb + 31) / 32, 32>>>(kmat_nnzb, block_dim, d_kmat_rows, d_block_norms, d_diag_LU_vals);
+            CHECK_CUDA(cudaDeviceSynchronize());
+            printf("\tdone adding block norms to D mat\n");
+        }
 
         // ilu0 factoriation
         if constexpr (startup) {
@@ -277,53 +289,57 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
     void smoothDefect(DeviceVec<T> d_defect, DeviceVec<T> d_soln, int n_iters, bool print = false,
                       int print_freq = 10) {
         /* apply chebyshev smoother a certain number of times to solve the system */
-        // n_iters should really be 1 though?
-        // the kind of hte smoother is really how much it should be iterating (so I'm gonna ignore n_iters here, ignored arg)
-        // but it is a required arg of base class or other smoother calls, so leaving it
 
-        // reset z and zprev to zero (cause new smooth solve her)
-        cudaMemset(d_z, 0.0, N * sizeof(T));
-        cudaMemset(d_zprev, 0.0, N * sizeof(T));
+        for (int iter = 0; iter < n_iters; iter++) {
+            // number of smoothing steps
 
-        // NOTE : I've rewritten the recursion with d = b - A*x_k the defect
-        //   and z_k = delta(x_k) helping to update the defect (as standard MG smoother would)
-        //   still only does one A*() mat-vec product and one Dinv*() mat-vec product each
-
-        // iteration starts by first computing z_1 so k=1 (as z_0 = 0)
-        for (int k = 1; k < order + 1; k++) { // order = 4 is default fourth-order chebyshev from template parameter
-            // then compute D_{L1}^{-1} * residual (the l1-jacobi preconditioner) into the temp vec
-            //   where D_{L1}^{-1} was LU factored and then computed as a linear operator so we can do mat-vec mult here!
-            T a = omega, b = 0.0; // b = 0 so adds to replace d_temp (with scalar of omega, should be omega = 1.0 by default in D_{L1} jacobi)
-            CHECK_CUSPARSE(cusparseDbsrmv(
-                cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes,
-                nnodes, diag_inv_nnzb, &a, descrDinvMat, d_dinv_vals.getPtr(), d_diag_rowp, d_diag_cols,
-                block_dim, d_defect.getPtr(), &b, d_temp));
-
-            // then compute the recursion of zprev into z
-            //  first re-zero new z
+            // reset z and zprev to zero (cause new smooth solve her)
             cudaMemset(d_z, 0.0, N * sizeof(T));
-            //  then add old z into it with the prescribed scalar
-            a = (2.0 * k - 3.0) / (2.0 * k + 1.0);
-            CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_zprev, 1, d_z, 1));
-            // then add preconditioned residual into it too
-            a = (8.0 * k - 4.0) / (2.0 * k + 1.0);
-            CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_temp, 1, d_z, 1));
+            cudaMemset(d_zprev, 0.0, N * sizeof(T));
 
-            // then copy d_z into the previous value (for next iteration)
-            CHECK_CUDA(cudaMemcpy(d_zprev, d_z, N * sizeof(T), cudaMemcpyDeviceToDevice));
+            // NOTE : I've rewritten the recursion with d = b - A*x_k the defect
+            //   and z_k = delta(x_k) helping to update the defect (as standard MG smoother would)
+            //   still only does one A*() mat-vec product and one Dinv*() mat-vec product each
 
-            // and finally update the solution using the current d_z vector
-            a = 1.0;
-            CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_z, 1, d_soln.getPtr(), 1));
+            // iteration starts by first computing z_1 so k=1 (as z_0 = 0)
+            for (int k = 1; k < ORDER + 1; k++) { // order = 4 is default fourth-order chebyshev from template parameter
+                // then compute D_{L1}^{-1} * residual (the l1-jacobi preconditioner) into the temp vec
+                //   where D_{L1}^{-1} was LU factored and then computed as a linear operator so we can do mat-vec mult here!
+                T a = omega, b = 0.0; // b = 0 so adds to replace d_temp (with scalar of omega, should be omega = 1.0 by default in D_{L1} jacobi)
+                CHECK_CUSPARSE(cusparseDbsrmv(
+                    cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes,
+                    nnodes, diag_inv_nnzb, &a, descrDinvMat, d_dinv_vals.getPtr(), d_diag_rowp, d_diag_cols,
+                    block_dim, d_defect.getPtr(), &b, d_temp));
 
-            // update the defect by z_k = delta(x_k), so defect -= A * z_k
-            a = -1.0, b = 1.0;
-            CHECK_CUSPARSE(cusparseDbsrmv(
-                cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes,
-                nnodes, kmat_nnzb, &a, descrKmat, d_kmat_vals, d_kmat_rowp, d_kmat_cols,
-                block_dim, d_z, &b, d_defect.getPtr()));
+                // then compute the recursion of zprev into z
+                //  first re-zero new z
+                cudaMemset(d_z, 0.0, N * sizeof(T));
+                //  then add old z into it with the prescribed scalar
+                a = (2.0 * k - 3.0) / (2.0 * k + 1.0);
+                CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_zprev, 1, d_z, 1));
+                // then add preconditioned residual into it too
+                a = (8.0 * k - 4.0) / (2.0 * k + 1.0);
+                CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_temp, 1, d_z, 1));
 
-        } // end of chebyshev recursion
+                // then copy d_z into the previous value (for next iteration)
+                CHECK_CUDA(cudaMemcpy(d_zprev, d_z, N * sizeof(T), cudaMemcpyDeviceToDevice));
+
+                // and finally update the solution using the current d_z vector
+                a = 1.0;
+                CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_z, 1, d_soln.getPtr(), 1));
+
+                // update the defect by z_k = delta(x_k), so defect -= A * z_k
+                a = -1.0, b = 1.0;
+                CHECK_CUSPARSE(cusparseDbsrmv(
+                    cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes,
+                    nnodes, kmat_nnzb, &a, descrKmat, d_kmat_vals, d_kmat_rowp, d_kmat_cols,
+                    block_dim, d_z, &b, d_defect.getPtr()));
+
+            } // end of chebyshev recursion
+
+        }
+
+        
     } // end of smoothDefect function
 
     // data
@@ -368,6 +384,7 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
     int *d_kmat_diagp;
     BsrData d_diag_bsr_data;
     DeviceVec<T> d_dinv_vals;
+    T *d_block_norms;
 
     // for kmat
     int kmat_nnzb, *d_kmat_rowp, *d_kmat_rows, *d_kmat_cols;
