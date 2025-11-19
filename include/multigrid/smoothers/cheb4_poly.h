@@ -6,20 +6,22 @@
 /* fourth order chebyshev polynomial smoother*/
 // based on this paper, https://arxiv.org/pdf/2202.08830
 //  "Optimal Polynomial Smoothers for Multigrid V-cycles" by James Lottes
-// commonly used as a multigrid smoother (and his paper gives optimal coefficients for 2-level and multilevel smoothing)
+// commonly used as a multigrid smoother (and his paper gives optimal coefficients for 2-level and
+// multilevel smoothing)
 //  can also be used as preconditioner for GMRES iterations
-// we use L1-jacobi, with absolute value block-element row-sums (D_{L1})_{ii} = \sum_j |A_{ij}| with i and j representing nodes (not entries inside nodes)
-//    this since L1-jacobi doesn't require eigenvalue estimates (always has rho(D_{L1}^{-1} A) <= 1) and thus is commonly used in hypre
-//    and SA-AMG methods for tentative prolongator
+// we use L1-jacobi, with absolute value block-element row-sums (D_{L1})_{ii} = \sum_j |A_{ij}| with
+// i and j representing nodes (not entries inside nodes)
+//    this since L1-jacobi doesn't require eigenvalue estimates (always has rho(D_{L1}^{-1} A) <= 1)
+//    and thus is commonly used in hypre and SA-AMG methods for tentative prolongator
 
-template <class Assembler, bool L1_JACOBI = false, int ORDER = 4>
+template <class Assembler, bool L1_JACOBI = false>
 class ChebyshevPolynomialSmoother : public BaseSolver {
    public:
     using T = typename Assembler::T;
 
     ChebyshevPolynomialSmoother(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
-                            Assembler &assembler_, BsrMat<DeviceVec<T>> Kmat_,
-                            T omega_ = 1.0, int n_solve_steps_ = 1)
+                                Assembler &assembler_, BsrMat<DeviceVec<T>> Kmat_, T omega_ = 1.0,
+                                int ORDER_ = 4, int n_solve_steps_ = 1)
         : cublasHandle(cublasHandle_), cusparseHandle(cusparseHandle_) {
         Kmat = Kmat_;
         block_dim = 6;
@@ -27,7 +29,9 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
         nnodes = N / 6;
         assembler = assembler_;
         omega = omega_;
-        n_solve_steps = n_solve_steps_;  // only used for it as a preconditioner (not MG smoother), but this arg is ignored anyways (fix later)
+        ORDER = ORDER_;
+        n_solve_steps = n_solve_steps_;  // only used for it as a preconditioner (not MG smoother),
+                                         // but this arg is ignored anyways (fix later)
 
         // get data out of kmat
         auto d_kmat_bsr_data = Kmat.getBsrData();
@@ -70,7 +74,6 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
     void free() {}  // TBD on this one
 
     void initCuda() {
-
         // init some util vecs
         d_temp_vec = DeviceVec<T>(N);
         d_temp = d_temp_vec.getPtr();
@@ -153,20 +156,25 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
 
         // regular jacobi preconditioner
         //  zero previous values (to get new Dinv, in case optimization or nonlinear problem)
-        d_diag_vals.zeroValues(); // this is vector for the opinter d_diag_LU_vals (confusing, can fix later
-        k_copyBlockDiagFromBsrMat<T><<<(ndiag_vals + 31) / 32, 32>>>(nnodes, block_dim, d_kmat_diagp, d_kmat_vals, d_diag_LU_vals);
+        d_diag_vals.zeroValues();  // this is vector for the opinter d_diag_LU_vals (confusing, can
+                                   // fix later
+        k_copyBlockDiagFromBsrMat<T><<<(ndiag_vals + 31) / 32, 32>>>(
+            nnodes, block_dim, d_kmat_diagp, d_kmat_vals, d_diag_LU_vals);
 
-        // we compute the L1 diagonal matrix off-diag terms 
+        // we compute the L1 diagonal matrix off-diag terms
         if constexpr (L1_JACOBI) {
             // get block norms
             printf("trying to compute block norms\n");
-            k_computeBlockL1Norms<T><<<(kmat_nnzb + 31) / 32, 32>>>(kmat_nnzb, block_dim, d_kmat_rows, d_kmat_cols, d_kmat_vals, d_block_norms);
+            k_computeBlockL1Norms<T><<<(kmat_nnzb + 31) / 32, 32>>>(
+                kmat_nnzb, block_dim, d_kmat_rows, d_kmat_cols, d_kmat_vals, d_block_norms);
             CHECK_CUDA(cudaDeviceSynchronize());
             printf("\tdone computing block norms\n");
 
-            // then add in ||A_{ij}||_1 for off-block diags (diagonal part i==js just 0 cause we d_block_norms has zero for those blocks)
+            // then add in ||A_{ij}||_1 for off-block diags (diagonal part i==js just 0 cause we
+            // d_block_norms has zero for those blocks)
             printf("trying to add block norms to D mat\n");
-            k_accumulateBlockL1ToDiag<T><<<(kmat_nnzb + 31) / 32, 32>>>(kmat_nnzb, block_dim, d_kmat_rows, d_block_norms, d_diag_LU_vals);
+            k_accumulateBlockL1ToDiag<T><<<(kmat_nnzb + 31) / 32, 32>>>(
+                kmat_nnzb, block_dim, d_kmat_rows, d_block_norms, d_diag_LU_vals);
             CHECK_CUDA(cudaDeviceSynchronize());
             printf("\tdone adding block norms to D mat\n");
         }
@@ -302,14 +310,18 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
             //   still only does one A*() mat-vec product and one Dinv*() mat-vec product each
 
             // iteration starts by first computing z_1 so k=1 (as z_0 = 0)
-            for (int k = 1; k < ORDER + 1; k++) { // order = 4 is default fourth-order chebyshev from template parameter
-                // then compute D_{L1}^{-1} * residual (the l1-jacobi preconditioner) into the temp vec
-                //   where D_{L1}^{-1} was LU factored and then computed as a linear operator so we can do mat-vec mult here!
-                T a = omega, b = 0.0; // b = 0 so adds to replace d_temp (with scalar of omega, should be omega = 1.0 by default in D_{L1} jacobi)
+            for (int k = 1; k < ORDER + 1;
+                 k++) {  // order = 4 is default fourth-order chebyshev from template parameter
+                // then compute D_{L1}^{-1} * residual (the l1-jacobi preconditioner) into the temp
+                // vec
+                //   where D_{L1}^{-1} was LU factored and then computed as a linear operator so we
+                //   can do mat-vec mult here!
+                T a = omega, b = 0.0;  // b = 0 so adds to replace d_temp (with scalar of omega,
+                                       // should be omega = 1.0 by default in D_{L1} jacobi)
                 CHECK_CUSPARSE(cusparseDbsrmv(
-                    cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes,
-                    nnodes, diag_inv_nnzb, &a, descrDinvMat, d_dinv_vals.getPtr(), d_diag_rowp, d_diag_cols,
-                    block_dim, d_defect.getPtr(), &b, d_temp));
+                    cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                    nnodes, nnodes, diag_inv_nnzb, &a, descrDinvMat, d_dinv_vals.getPtr(),
+                    d_diag_rowp, d_diag_cols, block_dim, d_defect.getPtr(), &b, d_temp));
 
                 // then compute the recursion of zprev into z
                 //  first re-zero new z
@@ -330,17 +342,15 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
 
                 // update the defect by z_k = delta(x_k), so defect -= A * z_k
                 a = -1.0, b = 1.0;
-                CHECK_CUSPARSE(cusparseDbsrmv(
-                    cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes,
-                    nnodes, kmat_nnzb, &a, descrKmat, d_kmat_vals, d_kmat_rowp, d_kmat_cols,
-                    block_dim, d_z, &b, d_defect.getPtr()));
+                CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
+                                              CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes, nnodes,
+                                              kmat_nnzb, &a, descrKmat, d_kmat_vals, d_kmat_rowp,
+                                              d_kmat_cols, block_dim, d_z, &b, d_defect.getPtr()));
 
-            } // end of chebyshev recursion
-
+            }  // end of chebyshev recursion
         }
 
-        
-    } // end of smoothDefect function
+    }  // end of smoothDefect function
 
     // data
     Assembler assembler;
@@ -359,6 +369,7 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
     // ----------------------------------------------------
 
     // smoother settings
+    int ORDER = 4;
     T omega = 1.0;
     bool symmetric = false;
 
