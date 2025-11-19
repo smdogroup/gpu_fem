@@ -19,8 +19,8 @@ class PCGSolver : public BaseSolver {
           cusparseHandle(cusparseHandle_) {
         // get matrix and init other temp data for PCG solve
         mat = grid->Kmat;
-        soln = grid->d_soln;
-        rhs = grid->d_rhs;
+        // soln = grid->d_soln;
+        // rhs = grid->d_rhs;
 
         auto bsr_data = mat.getBsrData();
         mb = bsr_data.nnodes;
@@ -34,8 +34,8 @@ class PCGSolver : public BaseSolver {
         cublasHandle = grid->cublasHandle;
         cusparseHandle = grid->cusparseHandle;
 
-        N = soln.getSize();
-        d_rhs = rhs.getPtr();
+        N = grid->N;
+        d_rhs = DeviceVec<T>(N).getPtr();
         d_x = DeviceVec<T>(N).getPtr();  // needs to be separate vec than soln in grid
 
         // printf("PCG Krylov solver made with options ncycl %d and print %d, with problem size
@@ -48,7 +48,6 @@ class PCGSolver : public BaseSolver {
         CHECK_CUSPARSE(cusparseSetMatIndexBase(descrK, CUSPARSE_INDEX_BASE_ZERO));
 
         // make temp vecs
-        d_tmp = DeviceVec<T>(N).getPtr();
         d_resid_vec = DeviceVec<T>(N);
         d_resid = d_resid_vec.getPtr();
         d_p = DeviceVec<T>(N).getPtr();
@@ -59,7 +58,12 @@ class PCGSolver : public BaseSolver {
 
     // nothing
     // void update_after_assembly(DeviceVec<T> &vars) {}
-    void update_after_assembly(DeviceVec<T> &vars) { pc->update_after_assembly(vars); }
+    void update_after_assembly(DeviceVec<T> &vars) { 
+        bool perm = true;
+        grid->setStateVars(vars, perm);
+        grid->update_after_assembly();
+        if (pc) pc->update_after_assembly(vars); 
+    }
 
     void set_print(bool print) { options.print = print; }
     void set_abs_tol(T atol) { options.atol = atol; }
@@ -213,7 +217,6 @@ class PCGSolver : public BaseSolver {
         d_resid_vec.free();
         if (d_x) cudaFree(d_x);
         if (d_rhs) cudaFree(d_rhs);
-        if (d_tmp) cudaFree(d_tmp);
         if (d_p) cudaFree(d_p);
         if (d_w) cudaFree(d_w);
         if (d_z) cudaFree(d_z);
@@ -228,7 +231,7 @@ class PCGSolver : public BaseSolver {
    private:
     // main matrix and linear system data
     BsrMat<DeviceVec<T>> mat;
-    DeviceVec<T> soln, rhs;
+    // DeviceVec<T> soln, rhs;
     int N, mb, nb, nnzb, block_dim;
     int *d_rowp, *d_cols, *iperm;
     T *d_vals;
@@ -247,7 +250,7 @@ class PCGSolver : public BaseSolver {
 
     // temp vecs for PCG algorithm
     DeviceVec<T> d_z_vec;
-    T *d_tmp, *d_p, *d_w, *d_z;
+    T *d_p, *d_w, *d_z;
 
     // temp scalars for PCG
     T rho, rho_prev, a, alpha, b;

@@ -34,6 +34,7 @@
 #include "multigrid/solvers/direct/cusp_directLU.h"
 #include "multigrid/solvers/solve_utils.h"
 #include "multigrid/solvers/krylov/bsr_gmres.h"
+#include "multigrid/solvers/krylov/bsr_pcg.h"
 
 
 void to_lowercase(char *str) {
@@ -56,7 +57,7 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 }
 
 template <typename T, class Assembler>
-void krylov_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) {
+void gmres_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) {
     /* chebyshev fourth-order jacobi smoother used as preconditioner for GMRES method */
 
     using Basis = typename Assembler::Basis;
@@ -236,6 +237,186 @@ void krylov_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) 
     // fine_assembler.free();
 }
 
+
+template <typename T, class Assembler>
+void pcg_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) {
+    /* chebyshev fourth-order jacobi smoother used as preconditioner for GMRES method */
+
+    using Basis = typename Assembler::Basis;
+    using Physics = typename Assembler::Phys;
+
+    // whether to use D1-jacobi preconditioner or not 
+    // (L1 jacobi may be advantagous as always contraction, but doesn't well here?)
+    const bool L1_JACOBI = false; // works better right now
+    // const bool L1_JACOBI = true; 
+
+    // polynomial order of the chebyshev polynomial smoother
+    // const int ORDER = 1;
+    // const int ORDER = 2;
+    // const int ORDER = 4; // preferred? works better than ORDER=1,2
+    const int ORDER = 8; // needs lower omega than ORDER 4 for some reason?
+    
+    using Smoother = ChebyshevPolynomialSmoother<Assembler, L1_JACOBI, ORDER>; // 4th order chebyshev polynomial smoother
+    using Prolongation = StructuredProlongation<Assembler, PLATE>; // technically don't need this here.. but GMRES solver uses grid right now..
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+
+    // linear solver
+    using Precond = Smoother;
+    using PCG = PCGSolver<T, GRID>;
+
+    // create cublas and cusparse handles (single one each)
+    // -----------------------------------------------------
+    cublasHandle_t cublasHandle = NULL;
+    CHECK_CUBLAS(cublasCreate(&cublasHandle));
+    cusparseHandle_t cusparseHandle = NULL;
+    CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start0 = std::chrono::high_resolution_clock::now();
+    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+    int nxe_per_comp = nxe / 4, nye_per_comp = nxe/4; // for now (should have 25 grids)
+    auto assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+    double uniform_force = pressure * 1.0 * 1.0;
+    double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
+    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
+    T *my_loads = getPlateLoads<T, Physics>(nxe, nxe, Lx, Ly, nodal_loads);
+    printf("making grid with nxe %d\n", nxe);
+
+    // perform multicolor reordering
+    auto &bsr_data = assembler.getBsrData();
+    int num_colors, *_color_rowp;
+    bsr_data.multicolor_reordering(num_colors, _color_rowp);
+    bsr_data.compute_nofill_pattern();
+    auto h_color_rowp = HostVec<int>(num_colors + 1, _color_rowp);
+    assembler.moveBsrDataToDevice();
+
+    // create the loads and kmat
+    auto loads = assembler.createVarsVec(my_loads);
+    assembler.apply_bcs(loads);
+    auto kmat = createBsrMat<Assembler, VecType<T>>(assembler);
+    auto res = assembler.createVarsVec();
+    auto lin_soln = assembler.createVarsVec();
+    auto vars = assembler.createVarsVec();
+    auto loads2 = assembler.createVarsVec();
+    int N = res.getSize();
+
+    // assemble the kmat
+    auto startkmat = std::chrono::high_resolution_clock::now();
+    assembler.add_jacobian_fast(kmat);
+    assembler.apply_bcs(kmat);
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto endkmat = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> assembly_time = endkmat - startkmat;
+    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+
+    // build smoother and prolongations..
+    // nsmooth steps per precond set in the solver
+    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, nsmooth);
+    auto prolongation = new Prolongation(assembler);
+    auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
+    
+    // create the preconditioner and GMRES solver now
+    auto pc = smoother; // turns out the smoother does work somewhat
+    // BaseSolver *pc = nullptr; // if want to try no precond for comparison (TEMP DEBUG)
+    auto options = SolverOptions();
+    options.ncycles = 200; // number of max PCG cycles
+    options.print_freq = 10;
+    auto pcg_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options);
+    pcg_solver->set_rel_tol(1e-4);
+    pcg_solver->set_abs_tol(1e-6);
+    pcg_solver->set_print(true);
+
+    auto endstartup = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> startup_time = endstartup - start0;
+
+    // run the linear solver
+    auto start_solve = std::chrono::high_resolution_clock::now();
+    // printf("running GSMC-GMRES linear solve\n");
+    bool fail = pcg_solver->solve(grid->d_defect, lin_soln, true);
+    // printf("\t\ndone with GSMC-GMRES linear solve\n");
+
+    auto end_solve = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> solve_time = end_solve - start_solve;
+    printf("\tPCG linear solve time %.2e on %d nxe\n", solve_time.count(), nxe);
+
+    // // print to VTK (permuting from solve to vis order)
+    int *d_perm = pcg_solver->grid->d_perm;
+    auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
+    printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
+    T lin_max_disp = get_max_disp(lin_soln);
+
+    if (fail) {
+        printf("\tPCG solved failed, so not proceeding to nonlinear solves\n");
+        return;
+    }
+
+    // return; // temp debug
+
+
+    // -----------------------------------------------------------
+    // 2) actually try Newton-mg solve here (this is just V1, later versions may use FMG cycle so less extra work needs to be done on fine grids)
+    //     i.e. you can do most of hte nonlinear solves to get in basin of attraction on coarser grids first.. (then nonlinear fine grid at end only, or some FMG cycle)
+
+    // new nonlinear solver
+    // ======================
+
+    // build the inexact newton + outer continuation solver
+    using Mat = BsrMat<DeviceVec<T>>;
+    using Vec = DeviceVec<T>;
+    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, PCG>;
+    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
+
+    T initLinSolveRtol = 1e-3;
+    T initLinSolveAtol = 1e-4;
+    T minRtol = 1e-4, maxRtol = 1e-2; // don't want min rtol too low, cause GMRES will run out of steps (with GSMC precond)
+
+    // get the loads out again cause they were permuted by grid
+    bool perm_out = true;
+    grid->getDefect(loads2, perm_out);
+
+    pcg_solver->set_print(false);
+
+    INK *inner_solver = new INK(cublasHandle, assembler, kmat, loads2, pcg_solver, initLinSolveRtol, initLinSolveAtol, minRtol, maxRtol);
+    // bool use_predictor = true, debug = false;
+    bool use_predictor = true, debug = false;
+    NL *nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
+
+    // now try calling it
+    T lambda0 = 0.2;
+    // T lambda0 = 0.05;
+    // T inner_atol = 1e-2;
+    // T inner_atol = 1e-4;
+    // T inner_atol = 1e-4;
+    T inner_atol = 1e-6;
+    T lambdaf = 1.0;
+
+    auto start1 = std::chrono::high_resolution_clock::now();
+    nl_solver->solve(vars, lambda0, inner_atol, lambdaf);
+    T nl_max_disp = get_max_disp(vars);
+
+    // print some of the data of host residual
+    auto h_vars = vars.createHostVec();
+    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/plate_kry_nl.vtk");
+
+    // important to know reduction for how NL regime we are
+    T ratio = nl_max_disp / lin_max_disp;
+    printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
+
+    auto end1 = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> nl_solve_time = end1 - start1;
+    int ndof = assembler.get_num_vars();
+    double total = startup_time.count() + nl_solve_time.count();
+    printf("nonlinear Newton-Raphson CHEB4-PCG solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), nl_solve_time.count(), total);
+
+    // // free and cleanup
+    // // --------------------
+
+    // //  nl_solver.free();
+    // kmg->free();
+    // fine_assembler.free();
+}
+
 template <typename T, class Assembler>
 void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 
@@ -360,9 +541,11 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(bool is_krylov, int nxe, double SR, int nsmooth, T omega, T load_mag = 5.0e7) {
-    if (is_krylov) {
-        krylov_solve<T, Assembler>(nxe, SR, nsmooth, omega, load_mag);
+void gatekeeper_method(int solve_mode, int nxe, double SR, int nsmooth, T omega, T load_mag = 5.0e7) {
+    if (solve_mode == 2) {
+        gmres_solve<T, Assembler>(nxe, SR, nsmooth, omega, load_mag);
+    } else if (solve_mode == 1) {
+        pcg_solve<T, Assembler>(nxe, SR, nsmooth, omega, load_mag);
     } else {
         solve_direct<T, Assembler>(nxe, SR, load_mag);
     }
@@ -370,6 +553,8 @@ void gatekeeper_method(bool is_krylov, int nxe, double SR, int nsmooth, T omega,
 
 int main(int argc, char **argv) {
     // input ----------
+    // PCG is a bit faster and uses less memory (can solve more iterations)
+    int solve_mode = 1; // 0 - direct, 1 - PCG, 2 - krylov
     bool is_krylov = true;
     int nxe = 64; // default value (three grids)
     double SR = 10.0; // default, the less slender it is, solves much faster
@@ -377,8 +562,9 @@ int main(int argc, char **argv) {
     int nsmooth = 4; // number of times to apply the smoother
     double omega = 0.3; // TODO : implement more robust spectral norm scaling using CG
 
-    std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
-    // std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
+    // CFI4 smooths a bit better
+    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+    std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -386,9 +572,11 @@ int main(int argc, char **argv) {
         to_lowercase(arg);
 
         if (strcmp(arg, "direct") == 0) {
-            is_krylov = false;
-        } else if (strcmp(arg, "krylov") == 0) {
-            is_krylov = true;
+            solve_mode = 0;
+        } else if (strcmp(arg, "pcg") == 0) {
+            solve_mode = 1;
+        } else if (strcmp(arg, "gmres") == 0) {
+            solve_mode = 2;
         } else if (strcmp(arg, "--nxe") == 0) {
             if (i + 1 < argc) {
                 nxe = std::atoi(argv[++i]);
@@ -451,15 +639,15 @@ int main(int argc, char **argv) {
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 2>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, omega, pressure);
+        gatekeeper_method<T, Assembler>(solve_mode, nxe, SR, nsmooth, omega, pressure);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, omega, pressure);
+        gatekeeper_method<T, Assembler>(solve_mode, nxe, SR, nsmooth, omega, pressure);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_krylov, nxe, SR, nsmooth, omega, pressure);
+        gatekeeper_method<T, Assembler>(solve_mode, nxe, SR, nsmooth, omega, pressure);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }

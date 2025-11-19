@@ -192,7 +192,7 @@ class GMRESSolver : public BaseSolver {
                 H[N_SUBSPACE * j + j] = r;
                 H[N_SUBSPACE * (j + 1) + j] = 0.0;
 
-                if (abs(g[j + 1]) < (options.atol + beta * options.rtol)) {
+                if (check_conv && abs(g[j + 1]) < (options.atol + beta * options.rtol)) {
                     // if (options.print)
                     //     printf("GMRES converged in %d iterations to %.9e resid\n", j + 1, g[j +
                     //     1]);

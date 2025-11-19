@@ -107,7 +107,7 @@ class InexactNewtonSolver {
             update.zeroValues();
             res.permuteData(block_dim,
                             d_iperm);  // res from VIS => SOLVE order
-            fatalFailure = linear_solver->solve(res, update);
+            fatalFailure = linear_solver->solve(res, update, true); // check_conv = true
             update.permuteData(block_dim,
                                d_perm);  // update from SOLVE => VIS order
 
