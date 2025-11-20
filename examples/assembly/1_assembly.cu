@@ -77,14 +77,40 @@ void time_assembly(int nxe) {
     auto end_res = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> res_time = end_res - start_res;
     printf("\tresidual assembly in %.5e seconds\n", res_time.count());
+
+    // estimate throughput on jacobian assembly
+    // double peak_gflops = 108*64*2*1.41; // for A100
+    double peak_gflops = 1250; // gflops for 3090Ti GPU (double precision so about 10x lower)
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
+    kernel_assemble<<<grid, block>>>(...);
+    cudaEventRecord(stop);
+
+    cudaEventSynchronize(stop);
+    float ms = 0.0f;
+    cudaEventElapsedTime(&ms, start, stop);
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    double flops = num_elements * flops_per_element;
+    double achieved_gflops = flops / (ms * 1e6);
+    double percent = 100.0 * achieved_gflops / peak_gflops;
+
+    printf("Assembly: %.2f GFLOPS (%.1f%% of peak)\n",
+        achieved_gflops, percent);
+
 }
 
 int main() {
     
-    int nxe_vals[3] = {16, 32, 64};
-    // int nxe_vals[7] = {16, 32, 64, 128, 256, 512, 1024};
+    // int nxe_vals[3] = {16, 32, 64};
+    int nxe_vals[7] = {16, 32, 64, 128, 256, 512, 1024};
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 7; i++) {
     // for (int i = 0; i < 7; i++) {
         int nxe = nxe_vals[i];
         time_assembly(nxe);
