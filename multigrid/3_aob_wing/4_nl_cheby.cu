@@ -74,7 +74,7 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 
 template <typename T, class Assembler>
 void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR, 
-    int nsmooth, int ninnercyc, std::string cycle_type, T omega, int ORDER, T omega_min = 0.25, T omega_max = 1.0, double total_force = 1.0) {
+    int nsmooth, int ninnercyc, std::string cycle_type, T omega, int ORDER, T omega_min = 0.25, T omega_max = 1.0, int n_krylov = 50, double total_force = 1.0) {
     // geometric multigrid method here..
     // need to make a number of grids..
     // level gives the finest level here..
@@ -258,7 +258,7 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
 
     if (is_kcycle) {
         // int n_krylov = 10; // set lower to force failure on L2 mesh (temp debug)
-        int n_krylov = 50;
+        // int n_krylov = 50;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, 
             n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
@@ -588,9 +588,9 @@ void solve_nonlinear_direct(MPI_Comm &comm, int level, double SR, double total_f
 
 template <typename T, class Assembler>
 void gatekeeper_method(bool is_multigrid, MPI_Comm &comm, int level, double SR, int nsmooth, 
-    int ninnercyc, std::string cycle_type, T omega, int ORDER, T omega_min, T omega_max, double total_force) {
+    int ninnercyc, std::string cycle_type, T omega, int ORDER, T omega_min, T omega_max, int n_krylov, double total_force) {
     if (is_multigrid) {
-        solve_nonlinear_multigrid<T, Assembler>(comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omega_min, omega_max, total_force);
+        solve_nonlinear_multigrid<T, Assembler>(comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omega_min, omega_max, n_krylov, total_force);
     } else {
         solve_nonlinear_direct<T, Assembler>(comm, level, SR, total_force);
     }
@@ -608,13 +608,18 @@ int main(int argc, char **argv) {
     // int level = 3; // level mesh to solve.. level 4 also a good starting setting (big case)
     bool is_multigrid = true;
     // bool is_debug = false;
-    
+   
+    // L2 and L3 mesh rn prefer ORDER = 4 and omega = 0.15
+    // L4 mesh (slightly worse spectral radius I guess), needs omega = 0.1 and ORDER = 8 (fastest)
+
     // nsmooth = 2 and ORDER = 4 is 20% slower than ORDER = 8, nsmooth = 1 (better to just go higher order polynomial)
     int ORDER = 8; // default chebyshev order
     double omega = 0.15; // default omega (needs to be below spectral radius/2 probably for guaranteed conv)
     // line search breaking down a lot..
     double omegaLS_min = 1.0; // default min line search omega
     double omegaLS_max = 1.0;
+
+    // NOTE : may need lower omega for higher meshes like 0.1
 
     // very slender (buckles earlier)
     // double force = 6e5;
@@ -625,13 +630,22 @@ int main(int argc, char **argv) {
     double force = 4e7;
     double SR = 10.0; // so that uses optimal design from AOB paper
 
+    // had 50 before, just keep it a bit higher
+    int n_krylov = 200; // default n_krylov (may need to increase for L4 mesh)
+    
+    // with this higher order smoother (don't need huge number of inner solves)
+    // also ninnercyc = 1 is actually better
     int nsmooth = 1; // may need more here (esp for MITC elements, but CFI can use less)
-    int ninnercyc = 2; // inner V-cycles to precond K-cycle
+    int ninnercyc = 1; // inner V-cycles to precond K-cycle
     std::string cycle_type = "K"; // "V", "F", "W", "K"
 
     // probably need more locking / multigrid friendly element than either of these (CFI4 is locking, while MITC4 has bad GMG performance)
-    std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
-    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+    // std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
+    
+    // for nonlinear cases, line search breaks down (in later NL steps)
+    // and CFI4 locks (so need line search, so bad NL perf in more meshes)
+    // thus MITC4 best for now (but better locking-mitigation + SR performance would work better)
+    std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -653,6 +667,8 @@ int main(int argc, char **argv) {
 	    omegaLS_min = std::atof(argv[++i]);
 	} else if (strcmp(arg, "--omegamax") == 0) {
 	    omegaLS_max = std::atof(argv[++i]);
+	} else if (strcmp(arg, "--nkrylov") == 0) {
+	    n_krylov = std::atoi(argv[++i]);
 	} else if (strcmp(arg, "--level") == 0) {
             if (i + 1 < argc) {
                 level = std::atoi(argv[++i]);
@@ -730,15 +746,15 @@ int main(int argc, char **argv) {
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 2>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, force);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, n_krylov, force);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, force);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, n_krylov, force);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, force);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, n_krylov, force);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }
