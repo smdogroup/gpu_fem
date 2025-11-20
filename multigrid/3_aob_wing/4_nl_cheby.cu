@@ -74,7 +74,7 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 
 template <typename T, class Assembler>
 void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR, 
-    int nsmooth, int ninnercyc, std::string cycle_type, T omega, int ORDER, double total_force = 1.0) {
+    int nsmooth, int ninnercyc, std::string cycle_type, T omega, int ORDER, T omega_min = 0.25, T omega_max = 1.0, double total_force = 1.0) {
     // geometric multigrid method here..
     // need to make a number of grids..
     // level gives the finest level here..
@@ -108,9 +108,11 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
 
     // choose the bounds for GMG lin solve line searches
     // T omega_min = 0.5, omega_max = 4.0; // default
-    T omega_min = 0.5, omega_max = 2.0; // default
+    // T omega_min = 0.5, omega_max = 2.0; // default
     // T omega_min = 0.8, omega_max = 2.0;
-    // T omega_min = 0.25, omega_max = 2.0;
+    // T omega_min = 0.25, omega_max = 4.0;
+    // T omega_max = 4.0;
+    // best is actually omega_min = 1.0, omega_max = 4.0 (so far)
 
     auto start0 = std::chrono::high_resolution_clock::now();
 
@@ -308,8 +310,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     T linSolveAtol = 1e-2; // lower atol for this case
     // T linSolveAtol = 1e-4; // lower atol for this case
 
-    bool debug = true; // debug means it will exit on linear solve failure (instead of dropping lambda and trying to keep going)
-    // bool debug = false;
+    // bool debug = true; // debug means it will exit on linear solve failure (instead of dropping lambda and trying to keep going)
+    bool debug = false;
 
     // T minLinSolveTol = 1e-2;
     T minLinSolveTol = 1e-3;
@@ -586,9 +588,9 @@ void solve_nonlinear_direct(MPI_Comm &comm, int level, double SR, double total_f
 
 template <typename T, class Assembler>
 void gatekeeper_method(bool is_multigrid, MPI_Comm &comm, int level, double SR, int nsmooth, 
-    int ninnercyc, std::string cycle_type, T omega, int ORDER, double total_force) {
+    int ninnercyc, std::string cycle_type, T omega, int ORDER, T omega_min, T omega_max, double total_force) {
     if (is_multigrid) {
-        solve_nonlinear_multigrid<T, Assembler>(comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, total_force);
+        solve_nonlinear_multigrid<T, Assembler>(comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omega_min, omega_max, total_force);
     } else {
         solve_nonlinear_direct<T, Assembler>(comm, level, SR, total_force);
     }
@@ -607,9 +609,13 @@ int main(int argc, char **argv) {
     bool is_multigrid = true;
     // bool is_debug = false;
     
-    int ORDER = 4; // default chebyshev order
-    double omega = 0.3; // default omega (needs to be below spectral radius/2 probably for guaranteed conv)
-    
+    // nsmooth = 2 and ORDER = 4 is 20% slower than ORDER = 8, nsmooth = 1 (better to just go higher order polynomial)
+    int ORDER = 8; // default chebyshev order
+    double omega = 0.15; // default omega (needs to be below spectral radius/2 probably for guaranteed conv)
+    // line search breaking down a lot..
+    double omegaLS_min = 1.0; // default min line search omega
+    double omegaLS_max = 1.0;
+
     // very slender (buckles earlier)
     // double force = 6e5;
     // double SR = 100.0; // so that uses optimal design from AOB paper
@@ -619,7 +625,7 @@ int main(int argc, char **argv) {
     double force = 4e7;
     double SR = 10.0; // so that uses optimal design from AOB paper
 
-    int nsmooth = 4; // may need more here (esp for MITC elements, but CFI can use less)
+    int nsmooth = 1; // may need more here (esp for MITC elements, but CFI can use less)
     int ninnercyc = 2; // inner V-cycles to precond K-cycle
     std::string cycle_type = "K"; // "V", "F", "W", "K"
 
@@ -643,7 +649,11 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --SR\n";
                 return 1;
             }
-        } else if (strcmp(arg, "--level") == 0) {
+        } else if (strcmp(arg, "--omegamin") == 0) {
+	    omegaLS_min = std::atof(argv[++i]);
+	} else if (strcmp(arg, "--omegamax") == 0) {
+	    omegaLS_max = std::atof(argv[++i]);
+	} else if (strcmp(arg, "--level") == 0) {
             if (i + 1 < argc) {
                 level = std::atoi(argv[++i]);
             } else {
@@ -662,6 +672,13 @@ int main(int argc, char **argv) {
                 force = std::atof(argv[++i]);
             } else {
                 std::cerr << "Missing value for --load\n";
+                return 1;
+            }
+        } else if (strcmp(arg, "--omega") == 0) {
+            if (i + 1 < argc) {
+                omega = std::atof(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --omega\n";
                 return 1;
             }
         } else if (strcmp(arg, "--elem") == 0) {
@@ -713,15 +730,15 @@ int main(int argc, char **argv) {
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 2>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, force);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, force);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, force);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, force);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, force);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, force);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }

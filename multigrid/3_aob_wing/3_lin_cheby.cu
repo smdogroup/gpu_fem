@@ -388,7 +388,7 @@ int main(int argc, char **argv) {
     double SR = 300.0;
     int nsmooth = 2; // may need more here (esp for MITC elements, but CFI can use less)
     int ninnercyc = 2; // inner V-cycles to precond K-cycle
-    T omega = 0.3; // starting omega for AOB wing
+    double omega = 0.3; // starting omega for AOB wing
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
 
