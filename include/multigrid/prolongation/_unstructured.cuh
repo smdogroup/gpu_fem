@@ -141,6 +141,35 @@ __global__ static void k_restrict_mat_assembly(const int *d_coarse_iperm, const 
 }
 
 template <typename T>
+__global__ static void k_bsrmv_transpose(const int nnzb, const int block_dim, const int *rows, const int *cols, 
+        const T *vals, const T *fine_vec_in, T *coarse_vec_out) {
+        /* transpose product like u_c = P^T * u_f (since cusparse doesn't have bsrmv_transpose option) */
+        // this way we don't have to store a transposed copy R = P^T
+        // assumes vectors are in solve order (so no permutations during product)
+        // also the fact we use rows instead of rowp (may be more efficient than cusparse (less reads))
+
+        // parallelizes over each product individually
+        // can explore different methods later
+        int block_dim2 = block_dim * block_dim;
+        int tid = threadIdx.x + blockIdx.x * blockDim.x;
+        int nprods = nnzb * block_dim2;
+        if (tid >= nprods) return;
+
+        // loops through Pmat in BSR order (during product)
+        int block_id = tid / block_dim2;
+        int block_row = rows[block_id], block_col = cols[block_id];
+        int ii_prod = tid % block_dim2; // which of the block_dim^2 products we do for this thread
+        int ii_fine = ii_prod / block_dim, ii_coarse = ii_prod % block_dim; // not sure which order best here yet
+
+        // get the fine vec and mat value for this thread
+        T f_val = fine_vec_in[block_dim * block_row + ii_fine];
+        T mat_val = vals[block_dim2 * block_id + ii_prod];
+
+        // now add into the output
+        atomicAdd(&coarse_vec_out[block_dim * block_col + ii_coarse], mat_val * f_val);
+    }
+
+template <typename T>
 __global__ static void k_csr_mat_vec(const int nnzb, const int block_dim, const int *d_rows, const int *d_cols, const T *d_vals, const T *vec_in, T *vec_out) {
     // fast CSR mat-vec kernel (does same prolong / restrict for every dof per node)
     int tid = threadIdx.x + blockIdx.x * blockDim.x;

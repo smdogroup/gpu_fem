@@ -433,7 +433,7 @@ void _compute_prolong_xi_coords_fast(const int nnodes_fine, const int nnodes_coa
     }
 }
 
-template <typename T, class Assembler, class Basis, bool is_bsr>
+template <typename T, class Assembler, class Basis, bool is_bsr, bool include_restrict = true>
 void init_unstructured_grid_maps(Assembler &fine_assembler, Assembler &coarse_assembler,
                                  BsrMat<DeviceVec<T>> *&prolong_mat,
                                  BsrMat<DeviceVec<T>> *&restrict_mat, int *&d_coarse_conn,
@@ -867,16 +867,19 @@ void init_unstructured_grid_maps(Assembler &fine_assembler, Assembler &coarse_as
     P_bsr_data.rows = d_P_rows;
     prolong_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_P_vals);
 
-    auto d_PT_rowp = HostVec<int>(nnodes_coarse + 1, h_prolT_rowp).createDeviceVec().getPtr();
-    auto d_PT_cols = HostVec<int>(PT_nnzb, h_prolT_cols).createDeviceVec().getPtr();
-    auto d_PT_vals = DeviceVec<T>(block_dim2 * PT_nnzb);
-    auto PT_bsr_data = BsrData(nnodes_coarse, P_block_dim, PT_nnzb, d_PT_rowp, d_PT_cols,
-                               d_coarse_perm, d_coarse_iperm, false);
-    PT_bsr_data.mb = nnodes_coarse, PT_bsr_data.nb = nnodes_fine;
-    PT_bsr_data.rows = d_PT_rows;  // for each nnz, which row is it (not same as rowp),
-                                   // helps for efficient mat-prods
-    restrict_mat = new BsrMat<DeviceVec<T>>(
-        PT_bsr_data, d_PT_vals);  // only store this matrix on the coarse grid
+    if constexpr (include_restrict) {
+        auto d_PT_rowp = HostVec<int>(nnodes_coarse + 1, h_prolT_rowp).createDeviceVec().getPtr();
+        auto d_PT_cols = HostVec<int>(PT_nnzb, h_prolT_cols).createDeviceVec().getPtr();
+        auto d_PT_vals = DeviceVec<T>(block_dim2 * PT_nnzb);
+        auto PT_bsr_data = BsrData(nnodes_coarse, P_block_dim, PT_nnzb, d_PT_rowp, d_PT_cols,
+                                d_coarse_perm, d_coarse_iperm, false);
+        PT_bsr_data.mb = nnodes_coarse, PT_bsr_data.nb = nnodes_fine;
+        PT_bsr_data.rows = d_PT_rows;  // for each nnz, which row is it (not same as rowp),
+                                    // helps for efficient mat-prods
+        restrict_mat = new BsrMat<DeviceVec<T>>(
+            PT_bsr_data, d_PT_vals);  // only store this matrix on the coarse grid
+    }
+    
 
     // CHECK_CUDA(cudaDeviceSynchronize());
     // auto time_08 = std::chrono::high_resolution_clock::now();

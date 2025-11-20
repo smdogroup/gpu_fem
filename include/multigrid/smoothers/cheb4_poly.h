@@ -352,6 +352,64 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
 
     }  // end of smoothDefect function
 
+    // void smoothMatrix(BsrMat<DeviceVec<T>> &prolong_mat, BsrMat<DeviceVec<T>> &Z_mat, int n_iters) {
+    //     // smooth the prolongation matrix using Kmat and Dinv mat, Z_mat is temp matrix for smoothing process
+    //     // TODO : add option if we want to do fewer smoothing steps (if using higher-order)?
+
+    //     for (int iter = 0; iter < n_iters; iter++) {
+    //         // number of smoothing steps
+
+    //         // reset z and zprev to zero (cause new smooth solve her)
+    //         cudaMemset(d_z, 0.0, N * sizeof(T));
+    //         cudaMemset(d_zprev, 0.0, N * sizeof(T));
+
+    //         // NOTE : I've rewritten the recursion with d = b - A*x_k the defect
+    //         //   and z_k = delta(x_k) helping to update the defect (as standard MG smoother would)
+    //         //   still only does one A*() mat-vec product and one Dinv*() mat-vec product each
+
+    //         // iteration starts by first computing z_1 so k=1 (as z_0 = 0)
+    //         for (int k = 1; k < ORDER + 1;
+    //              k++) {  // order = 4 is default fourth-order chebyshev from template parameter
+    //             // then compute D_{L1}^{-1} * residual (the l1-jacobi preconditioner) into the temp
+    //             // vec
+    //             //   where D_{L1}^{-1} was LU factored and then computed as a linear operator so we
+    //             //   can do mat-vec mult here!
+    //             T a = omega, b = 0.0;  // b = 0 so adds to replace d_temp (with scalar of omega,
+    //                                    // should be omega = 1.0 by default in D_{L1} jacobi)
+    //             CHECK_CUSPARSE(cusparseDbsrmv(
+    //                 cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
+    //                 nnodes, nnodes, diag_inv_nnzb, &a, descrDinvMat, d_dinv_vals.getPtr(),
+    //                 d_diag_rowp, d_diag_cols, block_dim, d_defect.getPtr(), &b, d_temp));
+
+    //             // then compute the recursion of zprev into z
+    //             //  first re-zero new z
+    //             cudaMemset(d_z, 0.0, N * sizeof(T));
+    //             //  then add old z into it with the prescribed scalar
+    //             a = (2.0 * k - 3.0) / (2.0 * k + 1.0);
+    //             CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_zprev, 1, d_z, 1));
+    //             // then add preconditioned residual into it too
+    //             a = (8.0 * k - 4.0) / (2.0 * k + 1.0);
+    //             CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_temp, 1, d_z, 1));
+
+    //             // then copy d_z into the previous value (for next iteration)
+    //             CHECK_CUDA(cudaMemcpy(d_zprev, d_z, N * sizeof(T), cudaMemcpyDeviceToDevice));
+
+    //             // and finally update the solution using the current d_z vector
+    //             a = 1.0;
+    //             CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_z, 1, d_soln.getPtr(), 1));
+
+    //             // update the defect by z_k = delta(x_k), so defect -= A * z_k
+    //             a = -1.0, b = 1.0;
+    //             CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
+    //                                           CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes, nnodes,
+    //                                           kmat_nnzb, &a, descrKmat, d_kmat_vals, d_kmat_rowp,
+    //                                           d_kmat_cols, block_dim, d_z, &b, d_defect.getPtr()));
+
+    //         }  // end of chebyshev recursion
+    //     }
+
+    // }  // end of smoothMatrix function
+
     // data
     Assembler assembler;
     int N, nelems, block_dim, nnodes;
