@@ -57,7 +57,7 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 }
 
 template <typename T, class Assembler>
-void gmres_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) {
+void gmres_solve(int nxe, double SR, int ORDER, int nsmooth, T omega, T pressure = 5.0e7) {
     /* chebyshev fourth-order jacobi smoother used as preconditioner for GMRES method */
 
     using Basis = typename Assembler::Basis;
@@ -68,13 +68,7 @@ void gmres_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) {
     const bool L1_JACOBI = false; // works better right now
     // const bool L1_JACOBI = true; 
 
-    // polynomial order of the chebyshev polynomial smoother
-    // const int ORDER = 1;
-    // const int ORDER = 2;
-    // const int ORDER = 4; // preferred? works better than ORDER=1,2
-    const int ORDER = 8; // needs lower omega than ORDER 4 for some reason?
-    
-    using Smoother = ChebyshevPolynomialSmoother<Assembler, L1_JACOBI, ORDER>; // 4th order chebyshev polynomial smoother
+    using Smoother = ChebyshevPolynomialSmoother<Assembler, L1_JACOBI>; // 4th order chebyshev polynomial smoother
     using Prolongation = StructuredProlongation<Assembler, PLATE>; // technically don't need this here.. but GMRES solver uses grid right now..
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
 
@@ -132,7 +126,7 @@ void gmres_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) {
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
-    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, nsmooth);
+    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER, nsmooth);
     auto prolongation = new Prolongation(assembler);
     auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
     
@@ -239,7 +233,7 @@ void gmres_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) {
 
 
 template <typename T, class Assembler>
-void pcg_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) {
+void pcg_solve(int nxe, double SR, int ORDER, int nsmooth, T omega, T pressure = 5.0e7) {
     /* chebyshev fourth-order jacobi smoother used as preconditioner for GMRES method */
 
     using Basis = typename Assembler::Basis;
@@ -249,14 +243,8 @@ void pcg_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) {
     // (L1 jacobi may be advantagous as always contraction, but doesn't well here?)
     const bool L1_JACOBI = false; // works better right now
     // const bool L1_JACOBI = true; 
-
-    // polynomial order of the chebyshev polynomial smoother
-    // const int ORDER = 1;
-    // const int ORDER = 2;
-    // const int ORDER = 4; // preferred? works better than ORDER=1,2
-    const int ORDER = 8; // needs lower omega than ORDER 4 for some reason?
     
-    using Smoother = ChebyshevPolynomialSmoother<Assembler, L1_JACOBI, ORDER>; // 4th order chebyshev polynomial smoother
+    using Smoother = ChebyshevPolynomialSmoother<Assembler, L1_JACOBI>; // 4th order chebyshev polynomial smoother
     using Prolongation = StructuredProlongation<Assembler, PLATE>; // technically don't need this here.. but GMRES solver uses grid right now..
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
 
@@ -312,7 +300,7 @@ void pcg_solve(int nxe, double SR, int nsmooth, T omega, T pressure = 5.0e7) {
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
-    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, nsmooth);
+    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER, nsmooth);
     auto prolongation = new Prolongation(assembler);
     auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
     
@@ -541,11 +529,11 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(int solve_mode, int nxe, double SR, int nsmooth, T omega, T load_mag = 5.0e7) {
+void gatekeeper_method(int solve_mode, int nxe, double SR, int ORDER, int nsmooth, T omega, T load_mag = 5.0e7) {
     if (solve_mode == 2) {
-        gmres_solve<T, Assembler>(nxe, SR, nsmooth, omega, load_mag);
+        gmres_solve<T, Assembler>(nxe, SR, nsmooth, ORDER, omega, load_mag);
     } else if (solve_mode == 1) {
-        pcg_solve<T, Assembler>(nxe, SR, nsmooth, omega, load_mag);
+        pcg_solve<T, Assembler>(nxe, SR, nsmooth, ORDER, omega, load_mag);
     } else {
         solve_direct<T, Assembler>(nxe, SR, load_mag);
     }
@@ -559,8 +547,13 @@ int main(int argc, char **argv) {
     int nxe = 64; // default value (three grids)
     double SR = 10.0; // default, the less slender it is, solves much faster
     double pressure = 8.0e6;
-    int nsmooth = 4; // number of times to apply the smoother
+    int nsmooth = 2; // number of times to apply the smoother
+    int ORDER = 8; // order of the polynomial smother
     double omega = 0.3; // TODO : implement more robust spectral norm scaling using CG
+
+    // for higher slenderness increase number of smoothing steps
+    // e.g. : ORDER = 8, nsmooth = 50, SR = 50.0, omega = 0.3, nxe = 128
+    // also TODO : need max eigval estimation from CG solver
 
     // CFI4 smooths a bit better
     // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
@@ -589,6 +582,13 @@ int main(int argc, char **argv) {
                 nsmooth = std::atoi(argv[++i]);
             } else {
                 std::cerr << "Missing value for --nsmooth\n";
+                return 1;
+            }
+        } else if (strcmp(arg, "--order") == 0) {
+            if (i + 1 < argc) {
+                ORDER = std::atoi(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --order\n";
                 return 1;
             }
         } else if (strcmp(arg, "--sr") == 0) {
@@ -639,15 +639,15 @@ int main(int argc, char **argv) {
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 2>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(solve_mode, nxe, SR, nsmooth, omega, pressure);
+        gatekeeper_method<T, Assembler>(solve_mode, nxe, SR, ORDER, nsmooth, omega, pressure);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(solve_mode, nxe, SR, nsmooth, omega, pressure);
+        gatekeeper_method<T, Assembler>(solve_mode, nxe, SR, ORDER, nsmooth, omega, pressure);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(solve_mode, nxe, SR, nsmooth, omega, pressure);
+        gatekeeper_method<T, Assembler>(solve_mode, nxe, SR, ORDER, nsmooth, omega, pressure);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }
