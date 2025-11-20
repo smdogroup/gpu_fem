@@ -39,8 +39,7 @@ class MultilevelKcycleSolver {
 
     int get_num_iterations() { return outer_solver->get_num_iterations(); }
 
-    bool solve(DeviceVec<T> rhs, DeviceVec<T> soln) {
-        bool check_conv = true;  // only checks conv on outer solver
+    bool solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = true) {
         return outer_solver->solve(rhs, soln, check_conv);
     }
 
