@@ -86,8 +86,12 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     const bool is_bsr = true; // need this one if want to smooth prolongation
     // const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
     using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
-    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>; // scales by one each time
+    
+    // in linear case (CFI4 + line search gets around locking issue, cause needs to be CFI9 order or greater to avoid locking, thus improving high slender perf)
+    // in nonlinear case though (Vcycle line search breaks down at high NL and CFI4 can't be used, so need MITC4 and no line search for now more robust)
+    // I had slowly realized that omega larger to 1 (then just omega_LS = 1 aka no rescaling was better)
+    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>; // scales by one each time
     // wondering if NONE may help the Vcycle in hard NL case
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
@@ -618,6 +622,7 @@ int main(int argc, char **argv) {
     // int ORDER = 8; // default chebyshev order
     // double omega = 0.15; // default omega (needs to be below spectral radius/2 probably for guaranteed conv), want omega = 0.1 or omega = 0.15 before spectral radius norm
     
+    // smaller meshes do better with ORDER = 8 or 6 actually (20% speedup, but not L4 mesh)
     // int ORDER = 8; // default chebyshev order
     int ORDER = 4;
     double omega = 0.3; // after spectral radius norm (which appears to work as omega > 1 diverges, omega < 1 conv)
