@@ -275,7 +275,7 @@ class InexactNewtonSolver {
         Fe_nrm *= lambda;
         
         bool restart_design = false;
-        if (state_nrm > 0.0 and load_nrm > 0.0) {
+        if (state_nrm > 0.0 and Fe_nrm > 0.0) {
 
             /* compute the energy inner products about current state + external loads */
             T FeUe, FeUi, FiUe;

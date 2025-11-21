@@ -15,9 +15,8 @@ class NonlinearContinuationSolver {
         nvars = assembler.get_num_vars();
         use_predictor = use_predictor_;
         debug = debug_;
-        restart_design = false; // by default not restarting from previous design
-
-        // circular storage of predictor history
+    
+	// circular storage of predictor history
         if (use_predictor) {
             n_predictor = 4;  // num predictor states to hold
             u_hist = DeviceVec<T>(n_predictor * nvars).getPtr();
@@ -74,12 +73,19 @@ class NonlinearContinuationSolver {
                 if (restart_design) {
                     // no safe state to go back to, so restart to zero disps
                     printf("first restart step failed, going back to zero disps\n");
-
-                }
-                prev_state.copyValuesTo(state);  // reset state
-                lambda -= dlambda;               // go back to prev lambda
-                dlambda *= 0.5;                  // reduce step size
-            } else {
+                    state.zeroValues();
+		    lambda = 0.0, dlambda = lambda0;
+                } else if (icont < (N_STEPS - 1) and abs(dlambda) > MIN_STEP) {
+		    // then proceed with linear solve (not last step + dlambda not too small)
+		    // just shrink step size
+                    prev_state.copyValuesTo(state);  // reset state
+                    lambda -= dlambda;               // go back to prev lambda
+                    dlambda *= 0.5;                  // reduce step size
+                } else {
+		    printf("inner solver FAILED\n");
+		    break;
+		}
+	    } else {
                 // inner solve passed
                 if (lambda == lambdaf) {
                     // we succeeded the whole solve, break and exit
@@ -185,8 +191,8 @@ class NonlinearContinuationSolver {
     InnerSolver *inner_solver;
     Assembler assembler;
     int nvars;
-    bool use_predictor, debug, restart_design;
-    T min_step = 0.01; // min step size for lambda (fails if hits this)
+    bool use_predictor, debug;
+    T MIN_STEP = 0.01; // min step size for lambda (fails if hits this)
 
     cublasHandle_t &cublasHandle;
 
