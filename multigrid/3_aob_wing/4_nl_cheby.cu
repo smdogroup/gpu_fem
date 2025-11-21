@@ -627,6 +627,8 @@ int main(int argc, char **argv) {
 
     // less slender harder to buckle and can step into NL better (SR depends on wing length too, uCRM can be a bit more slender maybe because of the better narrower design, less likely to buckle, like beam)
     // double force = 2e7; // go up to 4e7 if want deeper NL response
+    
+    // can go up to 8e7 and solve now on L2, L3, and L4 meshes successfully with GMG!
     double force = 4e7;
     double SR = 10.0; // so that uses optimal design from AOB paper
 
