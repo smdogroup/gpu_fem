@@ -15,6 +15,7 @@ class NonlinearContinuationSolver {
         nvars = assembler.get_num_vars();
         use_predictor = use_predictor_;
         debug = debug_;
+        restart_design = false; // by default not restarting from previous design
 
         // circular storage of predictor history
         if (use_predictor) {
@@ -25,27 +26,25 @@ class NonlinearContinuationSolver {
     }
 
     // need func to set new RHS sometimes?
-
     bool solve(Vec &u_inout, T lambda0 = 0.2, T inner_atol = 1e-8, T lambdaf = 1.0,
-               T inner_crtol = 1e-3, T inner_frtol = 1e-8) {
+               T inner_crtol = 1e-3, T inner_frtol = 1e-8, int N_STEPS = 20) {
+        
+        // basic initialization
+        bool fail = true;
         u_inout.copyValuesTo(state);  // totally permuted
-
-        // TBD add energy min restart and other options
-        // energy_min_restart
-
-        resetPredictor();
-
-        // set (u,lam) = (0,0) as iniial
-
+        // set initial lambda and step size (default for zero disps)
         lambda = lambda0;
         T dlambda = lambda0;  // initial step size
-        bool fail = true;
 
-        // for (int icont = 0; icont < 5; icont++) {
-        for (int icont = 0; icont < 20; icont++) {
+        // modify initial load factors for aerostruct/optimization design restarts
+        // if init disps = 0, no modification is done
+        bool restart_design = inner_solver->compute_optimal_restart(lambda0, lambdaf, state, lambda, dlambda);
+
+        // then reset predictor and proceed to continuation solve
+        resetPredictor();
+        for (int icont = 0; icont < N_STEPS; icont++) {
             // save u0 to go back to if inner solver fails
             state.copyValuesTo(prev_state);
-
             printf("cont step %d => lambda %.4e\n", icont, lambda);
 
             // use nonlinear predictor (only really uses it if >= 3 states currently)
@@ -71,6 +70,12 @@ class NonlinearContinuationSolver {
             if (!inner_conv) {
                 resetPredictor();
                 printf("reset the state, lin solve failed\n");
+                // a couple of checks on how to best handle lin solve failure
+                if (restart_design) {
+                    // no safe state to go back to, so restart to zero disps
+                    printf("first restart step failed, going back to zero disps\n");
+
+                }
                 prev_state.copyValuesTo(state);  // reset state
                 lambda -= dlambda;               // go back to prev lambda
                 dlambda *= 0.5;                  // reduce step size
@@ -92,6 +97,9 @@ class NonlinearContinuationSolver {
                     recordForPredictor(lambda, state);
                 }
             }
+
+            // after first load step, turn off restart design (we do have safe state to go back to)
+            restart_design = false;
 
             // clip load step size then update load factor
             dlambda = std::clamp(dlambda, 1e-4, lambdaf - lambda);
@@ -177,7 +185,8 @@ class NonlinearContinuationSolver {
     InnerSolver *inner_solver;
     Assembler assembler;
     int nvars;
-    bool use_predictor, debug;
+    bool use_predictor, debug, restart_design;
+    T min_step = 0.01; // min step size for lambda (fails if hits this)
 
     cublasHandle_t &cublasHandle;
 
