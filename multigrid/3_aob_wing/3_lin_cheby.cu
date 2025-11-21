@@ -184,6 +184,9 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
         auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
         auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
 
+	// testing this new feature out
+        smoother->setup_cg_lanczos(grid.d_defect);
+
         if (is_kcycle) {
             kmg->grids.push_back(grid);
         } else {
@@ -386,11 +389,17 @@ int main(int argc, char **argv) {
     bool is_multigrid = true;
     // bool is_debug = false;
     double SR = 300.0;
-    int nsmooth = 2; // may need more here (esp for MITC elements, but CFI can use less)
-    int ninnercyc = 2; // inner V-cycles to precond K-cycle
+    // low SR can use less smoothing and inner cyc
+    int nsmooth = 1; // may need more here (esp for MITC elements, but CFI can use less)
+    int ninnercyc = 1; // inner V-cycles to precond K-cycle
+    // omega = 0.1 or 0.15 before spectral radius
+    // but omega < 1, particularly omega = 0.3 tends to conv fastest for me
     double omega = 0.3; // starting omega for AOB wing
     std::string cycle_type = "K"; // "V", "F", "W", "K"
-    std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
+    
+    // MITC4 loses some performance, CFI4 faster for linear (but can't use for NL cause locking needs line searches)
+    std::string elem_type = "MITC4";
+    // std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {

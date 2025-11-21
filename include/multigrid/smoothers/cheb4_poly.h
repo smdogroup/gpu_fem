@@ -4,7 +4,7 @@
 #include "linalg/vec.h"
 
 // in order to estimate CG-Lanczos coefficients
-#include "LAPACKe.h"
+#include "lapacke.h"
 #include <vector>
 
 /* fourth order chebyshev polynomial smoother*/
@@ -52,7 +52,7 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
         buildDiagInvMat<startup>();
     }
 
-    void setup_cg_lanczos(DeviceVec<T> loads, int N_LANCZOS_) {
+    void setup_cg_lanczos(DeviceVec<T> loads, int N_LANCZOS_ = 10) {
         /* setup cg lanczos in order to do spectral radius estimates for more robustness */
         CG_LANCZOS = true;
         // assumes loads are in solve order here
@@ -376,25 +376,30 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
     /* CG-lanczos spectral radius section */
     void compute_spectral_radius() {
 
+	// temporarily rename some temp vecs/pointers for CG style coefficients
+	T *d_x = d_inner_soln;
+	T *d_p = d_temp;
+	T *d_w = d_temp2; 
+	// lastly d_z already covered
+
         /* first run n_lanczos steps of CG (with only jacobi preconditioner) */
         // code reused from PCG (since don't want duplicate memory by extra PCG object, and BaseSolver makes it so I can't easily call it as jacobi precond)
         // I also don't have the grid object to easily make PCG, anyways could generalize / cleanup later, just get this working for now
-        cudaMemset(d_inner_soln, 0.0, N * sizeof(T));
+        cudaMemset(d_x, 0.0, N * sizeof(T));
         cudaMemcpy(d_resid, d_lanczos_loads_vec.getPtr(), N * sizeof(T), cudaMemcpyDeviceToDevice);
         T rho_prev, rho;  // coefficients that we need to remember
         // inner loop
         for (int j = 0; j < N_LANCZOS; j++) {
-            n_steps = j + 1;
             // compute z = Dinv*r
             T a = 1.0, b = 0.0;
             CHECK_CUSPARSE(cusparseDbsrmv(
                     cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
                     nnodes, nnodes, diag_inv_nnzb, &a, descrDinvMat, d_dinv_vals.getPtr(),
                     d_diag_rowp, d_diag_cols, block_dim, d_resid, &b, d_z));
-            // compute dot products
+            // compute dot products, rho = <r, z>
             CHECK_CUBLAS(cublasDdot(cublasHandle, N, d_resid, 1, d_z, 1, &rho));
             if (j == 0) {
-                // first iteration, p = z
+                // first iteration, p := z
                 cudaMemcpy(d_p, d_z, N * sizeof(T), cudaMemcpyDeviceToDevice);
             } else {
                 // compute beta and record it
@@ -410,8 +415,8 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
             // compute w = A * p
             a = 1.0, b = 0.0;
             CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
-                                          CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb, &a,
-                                          descrK, d_vals, d_rowp, d_cols, block_dim, d_p, &b, d_w));
+                                          CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes, nnodes, kmat_nnzb, &a,
+                                          descrKmat, d_kmat_vals, d_kmat_rowp, d_kmat_cols, block_dim, d_p, &b, d_w));
             // compute alpha = <r,z> / <w,p> = rho / <w,p>
             T wp0;
             CHECK_CUBLAS(cublasDdot(cublasHandle, N, d_w, 1, d_p, 1, &wp0));
@@ -457,6 +462,8 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
         }
         // and set this as spectral radius estimate (recommend omega = 0.9 or something so we are consrevative)
         spectral_radius = max_eigval;
+	// print current max spectral radius for DEBUG
+	// printf("spectral radius %.8e\n", spectral_radius);
     }
 
     /* prolong matrix-smoothing area (AMG) */

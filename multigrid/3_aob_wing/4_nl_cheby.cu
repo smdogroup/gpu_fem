@@ -219,6 +219,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
         auto grid = GRID(assembler, prolongation, smoother, kmat, loads, 
             cublasHandle, cusparseHandle, omega_min, omega_max);
 
+        smoother->setup_cg_lanczos(grid.d_defect);
+
         if (is_kcycle) {
             kmg->grids.push_back(grid);
         } else {
@@ -609,12 +611,16 @@ int main(int argc, char **argv) {
     bool is_multigrid = true;
     // bool is_debug = false;
    
+    // OLD NOTES (before I computed spectral radius, which I do now)
     // L2 and L3 mesh rn prefer ORDER = 4 and omega = 0.15
     // L4 mesh (slightly worse spectral radius I guess), needs omega = 0.1 and ORDER = 8 (fastest)
-
     // nsmooth = 2 and ORDER = 4 is 20% slower than ORDER = 8, nsmooth = 1 (better to just go higher order polynomial)
-    int ORDER = 8; // default chebyshev order
-    double omega = 0.15; // default omega (needs to be below spectral radius/2 probably for guaranteed conv)
+    // int ORDER = 8; // default chebyshev order
+    // double omega = 0.15; // default omega (needs to be below spectral radius/2 probably for guaranteed conv), want omega = 0.1 or omega = 0.15 before spectral radius norm
+    
+    // int ORDER = 8; // default chebyshev order
+    int ORDER = 4;
+    double omega = 0.3; // after spectral radius norm (which appears to work as omega > 1 diverges, omega < 1 conv)
     // line search breaking down a lot..
     double omegaLS_min = 1.0; // default min line search omega
     double omegaLS_max = 1.0;
