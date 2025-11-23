@@ -811,7 +811,7 @@ class MITCShellAssembler
     }  // end of method add_element_quadpt_residual
 
     template <class Data>
-    __HOST_DEVICE__ static void compute_element_quadpt_strains(
+    __HOST_DEVICE__ static void _compute_element_quadpt_strains(
         const int iquad, const T xpts[xpts_per_elem], const T vars[dof_per_elem],
         const Data &physData, A2D::Mat<T, 3, 3> &u0x, A2D::Mat<T, 3, 3> &u1x,
         A2D::SymMat<T, 3> &e0ty, A2D::Vec<T, 1> &et) {
@@ -866,7 +866,7 @@ class MITCShellAssembler
         A2D::Vec<T, 1> et;
 
         // get strains and then failure index
-        compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x, u1x, e0ty, et);
+        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x, u1x, e0ty, et);
 
         Phys::template computeFailureIndex(physData, u0x, u1x, e0ty, et, rhoKS, safetyFactor,
                                            fail_index);
@@ -884,7 +884,7 @@ class MITCShellAssembler
         A2D::SymMat<T, 3> e0ty;
         A2D::Vec<T, 1> et;
 
-        compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x, u1x, e0ty, et);
+        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x, u1x, e0ty, et);
 
         Phys::template computeFailureIndexDVSens(physData, u0x, u1x, e0ty, et, rhoKS, safetyFactor,
                                                  fail_sens, loc_dv_sens);
@@ -1007,7 +1007,7 @@ class MITCShellAssembler
         T scale = 1.0;
 
         // get strains and then failure index
-        compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x.value(), u1x.value(),
+        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x.value(), u1x.value(),
                                              e0ty.value(), et.value());
 
         // compute energy + energy-dispGrad sensitivites with physics
@@ -1041,7 +1041,7 @@ class MITCShellAssembler
         T scale = 1.0;
 
         // get strains and then failure index
-        compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x.value(), u1x.value(),
+        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x.value(), u1x.value(),
                                              e0ty.value(), et.value());
 
         // compute energy + energy-dispGrad sensitivites with physics

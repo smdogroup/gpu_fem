@@ -3,17 +3,14 @@
 #include "../a2d/a2dshellstrain1.h"
 #include "../a2d/a2disostress.h"
 
-#include "../data/isotropic.h"
+#include "../data/iso_stiff.h"
+#include "isotropic_shell.h"
 #include "a2dcore.h"
 
 template <typename T, class Data_, bool isNonlinear = false>
-class IsotropicShell {
+class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
    public:
     using Data = Data_;
-
-    // ensure the data is only allowed to be ShellIsotropicData
-    // static_assert(std::is_same<Data_, ShellIsotropicData>::value,
-    //               "Error IsotropicShell physics class must use Data class 'ShellIsotropicData'");
 
     // u, v, w, thx, thy, thz
     static constexpr int32_t vars_per_node = 6;
@@ -21,150 +18,67 @@ class IsotropicShell {
     static constexpr A2D::ShellStrainType STRAIN_TYPE =
         isNonlinear ? A2D::ShellStrainType::NONLINEAR : A2D::ShellStrainType::LINEAR;
     static constexpr bool is_nonlinear = isNonlinear;
-    static constexpr int num_dvs = 1;
+    static constexpr int num_dvs = 4;
 
     __HOST_DEVICE__ static void computeTyingStress(const T &scale, const Data &data, A2D::SymMat<T, 3> &e, A2D::SymMat<T, 3> &s) {
         /* compute membrane + trv shear stresses from the tying strains */
 
-        T C[6];
-        Data::evalTangentStiffness2D(data.E, data.nu, C);
-        // [C[0], C[1], C[2]]
-        // [C[1], C[3], C[4]]
-        // [C[2], C[4], C[5]]
+        /* 1) panel contributions to tying stress */
+        IsotropicShell<T, Data_, isNonlinear>::computeTyingStress(scale, data, e, s);
 
-        // recall strain + stresses indices
-        // 0 - e11, 1 - e12, 2 - e13, 3 - e22, 4 - e23, 5 - e33 (e33 = 0 cause inextensible)
-        // membrane strains = [e[0], e[3], e[1]]
-        // trv shear strains = [e[2], e[4]]
+        /* 2) stiffener stiffness contributions */
+        // e11_stiff = E * A / stiffPitch
+        T scaled_A11 = scale * data.getStiffenerArea() / data.stiffPitch;
+        s[0] += scaled_A11 * e[0];
 
-        // compute membrane stresses or in-plane loads, N = A * em
-        s[0] = C[0] * e[0] + C[1] * e[3] + C[2] * e[1];
-        s[3] = C[1] * e[0] + C[3] * e[3] + C[4] * e[1];
-        s[1] = C[2] * e[0] + C[4] * e[3] + C[5] * e[1];
-        s[0] *= data.thick * scale;
-        s[3] *= data.thick * scale;
-        s[1] *= data.thick * scale;
-
-        // compute trv shear stresses, Q = As * es
-        T As = Data::getTransShearCorrFactor() * data.thick * scale * C[5];
-        s[2] = As * e[2];
-        s[4] = As * e[4];
+        // trv shear stiffnesses
+        T scaled_A44 = Data::getTransShearCorrFactor() * scaled_A11;
+        s[2] += scaled_A44 * e[2];
+        s[4] += scaled_A44 * e[4];
     }
 
     __HOST_DEVICE__ static void computeBendingStress(const T &scale, const Data &data, const A2D::Vec<T, 3> &e, A2D::Vec<T, 3> &s) {
         /* compute membrane + trv shear stresses from the tying strains */
 
-        T C[6];
-        Data::evalTangentStiffness2D(data.E, data.nu, C);
-        // [C[0], C[1], C[2]]
-        // [C[1], C[3], C[4]]
-        // [C[2], C[4], C[5]]
+        /* 1) panel bending stiffness contributions */
 
-        // compute membrane stresses or in-plane loads, N = A * em
-        s[0] = C[0] * e[0] + C[1] * e[1] + C[2] * e[2];
-        s[1] = C[1] * e[0] + C[3] * e[1] + C[4] * e[2];
-        s[2] = C[2] * e[0] + C[4] * e[1] + C[5] * e[2];
-        T I = data.getPanelIzz();
-        s[0] *= I * scale;
-        s[1] *= I * scale;
-        s[2] *= I * scale;
+        // TODO : take about the centroid so B = 0, needs modification here
+        // probably won't be able to call the previous method directly
+        IsotropicShell<T, Data_, isNonlinear>::computeBendingStress(scale, data, e, s);
+
+        /* 2) stiffener stiffness contributions */
+        // M11 = E * I / sp * k11 (axial bending moment from bending stress)
+        // TODO : also need modification so B = 0 here too (take about overall centroid)
+        T stiff_D11 = data.E * data.getStiffenerI11(); // includes sp norm
+        s[0] += scale * stiff_D11 * e[0];
     }
 
     __HOST_DEVICE__ static void computeDrillStress(const T &scale, const Data &data, const T ed[1], T sd[1]) {
+
+        // panel contribution to drill stress
+        IsotropicShell<T, Data_, isNonlinear>::computeDrillStress(scale, data, ed, sd);
+
+        // stiffener contribution to drill stress
         T G = data.E / 2.0 / (1.0 + data.nu);
-        T As = Data::getTransShearCorrFactor() * G * data.thick; 
-        T drill = Data::getDrillingRegularization() * As;
-        sd[0] = scale * drill * ed[0];
+        T ks_drill = Data::getTransShearCorrFactor() * Data::getDrillingRegularization();
+        T stiff_A66 = scale * ks_drill * G * data.getStiffenerArea() / data.stiffPitch;
+        sd[0] += scale * stiff_A66 * ed[0];
     }
-
-    template <typename T2>
-    __HOST_DEVICE__ static void computeStrainEnergy(const Data physData, const T scale,
-                                                    A2D::ADObj<A2D::Mat<T2, 3, 3>> &u0x,
-                                                    A2D::ADObj<A2D::Mat<T2, 3, 3>> &u1x,
-                                                    A2D::ADObj<A2D::SymMat<T2, 3>> &e0ty,
-                                                    A2D::ADObj<A2D::Vec<T2, 1>> &et,
-                                                    A2D::ADObj<T2> &Uelem) {
-        A2D::ADObj<A2D::Vec<T2, 9>> E, S;
-        A2D::ADObj<T2> ES_dot;
-
-        // use stack to compute shell strains, stresses and then to strain energy
-        auto strain_energy_stack =
-            A2D::MakeStack(A2D::ShellStrain<STRAIN_TYPE>(u0x, u1x, e0ty, et, E),
-                           A2D::IsotropicShellStress<T, Data>(
-                               physData.E, physData.nu, physData.thick, physData.tOffset, E, S),
-                           // A2D::VecScale(1.0, E, S), // debugging statement
-                           A2D::VecDot(E, S, ES_dot), A2D::Eval(T2(0.5 * scale) * ES_dot, Uelem));
-        // printf("Uelem = %.8e\n", Uelem.value());
-
-    }  // end of computeStrainEnergy
-
-    // could template by ADType = ADObj or A2DObj later to allow different
-    // derivative levels maybe
-    template <typename T2>
-    __HOST_DEVICE__ static void computeWeakRes(const Data &physData, const T &scale,
-                                               A2D::ADObj<A2D::Mat<T2, 3, 3>> &u0x,
-                                               A2D::ADObj<A2D::Mat<T2, 3, 3>> &u1x,
-                                               A2D::ADObj<A2D::SymMat<T2, 3>> &e0ty,
-                                               A2D::ADObj<A2D::Vec<T2, 1>> &et) {
-        // using ADVec = A2D::ADObj<A2D::Vec<T2,9>>;
-        A2D::ADObj<A2D::Vec<T2, 9>> E, S;
-        A2D::ADObj<T2> ES_dot, Uelem;
-        // isotropicShellStress expression uses many fewer floats than storing ABD
-        // matrix
-
-        // use stack to compute shell strains, stresses and then to strain energy
-        auto strain_energy_stack =
-            A2D::MakeStack(A2D::ShellStrain<STRAIN_TYPE>(u0x, u1x, e0ty, et, E),
-                           A2D::IsotropicShellStress<T, Data>(
-                               physData.E, physData.nu, physData.thick, physData.tOffset, E, S),
-                           // no 1/2 here to match TACS formulation (just scales eqns) [is removing
-                           // the 0.5 correct?]
-                           A2D::VecDot(E, S, ES_dot), A2D::Eval(T2(scale) * ES_dot, Uelem));
-        // printf("Uelem = %.8e\n", Uelem.value());
-
-        Uelem.bvalue() = 1.0;
-        strain_energy_stack.reverse();
-        // bvalue outputs stored in u0x, u1x, e0ty, et and are backpropagated
-    }  // end of computeWeakRes
-
-    template <typename T2>
-    __HOST_DEVICE__ static void computeWeakJacobianCol(const Data &physData, const T &scale,
-                                                       A2D::A2DObj<A2D::Mat<T2, 3, 3>> &u0x,
-                                                       A2D::A2DObj<A2D::Mat<T2, 3, 3>> &u1x,
-                                                       A2D::A2DObj<A2D::SymMat<T2, 3>> &e0ty,
-                                                       A2D::A2DObj<A2D::Vec<T2, 1>> &et) {
-        // computes a projected Hessian (or jacobian column)
-
-        // using ADVec = A2D::ADObj<A2D::Vec<T2,9>>;
-        A2D::A2DObj<A2D::Vec<T2, 9>> E, S;
-        A2D::A2DObj<T2> ES_dot, Uelem;
-
-        // use stack to compute shell strains, stresses and then to strain energy
-        auto strain_energy_stack =
-            A2D::MakeStack(A2D::ShellStrain<STRAIN_TYPE>(u0x, u1x, e0ty, et, E),
-                           A2D::IsotropicShellStress<T, Data>(
-                               physData.E, physData.nu, physData.thick, physData.tOffset, E, S),
-                           // no 1/2 here to match TACS formulation (just scales eqns) [is removing
-                           // the 0.5 correct?]
-                           A2D::VecDot(E, S, ES_dot), A2D::Eval(T2(scale) * ES_dot, Uelem));
-        // note TACS differentiates based on 2 * Uelem here.. hmm
-        // printf("Uelem = %.8e\n", Uelem.value());
-
-        Uelem.bvalue() = 1.0;
-        strain_energy_stack.hproduct();  // computes projected hessians
-        // bvalue outputs stored in u0x, u1x, e0ty, et and are backpropagated
-    }  // end of JacobianCol
 
     __HOST_DEVICE__ static void getMassMoments(const Data &physData, T moments[]) {
         // for mass residual + jacobian (unsteady analyses)
-        const T &rho = physData.rho;
-        const T &t = physData.thick;
-        const T &tOffset = physData.tOffset;
 
-        // taken from TACSIsoShellConstitutive.cpp (evalMassMoments)
-        moments[0] = rho * t;
-        moments[1] = -rho * t * t * tOffset;
-        moments[2] = rho * t * t * t * (tOffset * tOffset + 1.0 / 12.0);
+        // panel contribution to mass moments
+        IsotropicShell<T, Data_, isNonlinear>::getMassMoments(physData, moments);
+
+        // stiffener contribution to mass moments
+        const T &rho = physData.rho;
+        const T &sp = physData.stiffPitch;
+
+        // TODO : add thick offset part to this also?
+        // and take about centroid so B neq 0
+        moments[0] += rho * data.getStiffenerArea() / sp;
+        moments[2] += rho * data.getStiffenerI11();
     }
 
     template <typename T2>
@@ -175,11 +89,12 @@ class IsotropicShell {
                                                       A2D::ADObj<A2D::Vec<T2, 1>> &et,
                                                       A2D::ADObj<A2D::Vec<T2, 9>> &E,
                                                       A2D::ADObj<A2D::Vec<T2, 9>> &S) {
-        // use stack to compute shell strains, stresses and then to strain energy
-        auto strain_energy_stack =
-            A2D::MakeStack(A2D::ShellStrain<STRAIN_TYPE>(u0x, u1x, e0ty, et, E),
-                           A2D::IsotropicShellStress<T, Data>(
-                               physData.E, physData.nu, physData.thick, physData.tOffset, E, S));
+
+        // call panel contribution
+        IsotropicShell<T, Data_, isNonlinear>::computeQuadptStresses(physData, scale, u0x, u1x, e0ty, et, E, S);
+
+        // TODO : add stiffener contributions here
+        //   when not added (only affects visualized stresses, not strains), and no affect on optimization
     }  // end of computeQuadptStrains
 
     template <typename T2>

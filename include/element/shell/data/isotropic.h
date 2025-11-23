@@ -37,6 +37,14 @@ class ShellIsotropicData {
                                        T tOffset_ = 0.0)
         : E(E_), nu(nu_), thick(thick_), ys(ys_), rho(rho_), tOffset(tOffset_) {}
 
+
+    __HOST_DEVICE__ virtual T getPanelIzz() {
+        return thick * thick * thick / 12.0; 
+    }
+    __HOST_DEVICE__ T getPanelIzzSens() {
+        return thick * thick / 4.0;
+    }
+
     // constitutive methods
     __HOST_DEVICE__ static void evalTangentStiffness2D(const T E_, const T nu_, T C[]) {
         // isotropic C matrix for stress = C * strain in-plane with no twist
@@ -61,14 +69,14 @@ class ShellIsotropicData {
         // Nij = A * Eij, thick deriv is dNij = C * Eij
         A2D::SymMatVecCoreScale3x3<T, false>(1.0, C, strain, dstress);
         // Nij += B * kij; deriv is dNij += C * -2 * thick * tOffset
-        A2D::SymMatVecCoreScale3x3<T, true>(-2.0 * thick * tOffset, C, &strain[3], dstress);
+        // A2D::SymMatVecCoreScale3x3<T, true>(-2.0 * thick * tOffset, C, &strain[3], dstress);
         // Mij = B * Eij, deriv is dMij = C * 2 * -thick * tOffset
-        A2D::SymMatVecCoreScale3x3<T, false>(-2.0 * thick * tOffset, C, strain, &dstress[3]);
+        // A2D::SymMatVecCoreScale3x3<T, false>(-2.0 * thick * tOffset, C, strain, &dstress[3]);
         // Mij += D * kij; deriv is dD/dx = (t^2/4 + tOffset^2 * 3 * thick^2) * C
-        T dI = thick * thick / 4.0;
+        T dI = getPanelIzzSens();
         A2D::SymMatVecCoreScale3x3<T, true>(dI, C, &strain[3], &dstress[3]);
-        A2D::SymMatVecCoreScale3x3<T, true>(3.0 * thick * thick * tOffset * tOffset, C, &strain[3],
-                                            &dstress[3]);
+        // A2D::SymMatVecCoreScale3x3<T, true>(3.0 * thick * thick * tOffset * tOffset, C, &strain[3],
+        //                                     &dstress[3]);
 
         // compute transverse shear components
         T dAs = getTransShearCorrFactor() * C[5];
