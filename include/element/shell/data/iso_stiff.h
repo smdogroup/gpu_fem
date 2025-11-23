@@ -19,7 +19,7 @@ class StiffenedIsotropicShellData : public ShellIsotropicData<T, ref_axis> {
                                        T stiffPitch_, T refAxis_[], T rho_ = 1.0,
                                        T ys_ = 1.0, T tOffset_ = 0.0) :
     stiffHeight(stiffHeight_), stiffThick(stiffThick_),
-    stiffPitch(stiffPitch_), ShellIsotropicData<T, ref_axis>(E_, nu_, thick_, refAxis_, rho_, ys_, tOffset_) {}
+    stiffPitch(stiffPitch_), panelLength(1.0), ShellIsotropicData<T, ref_axis>(E_, nu_, thick_, refAxis_, rho_, ys_, tOffset_) {}
 
     // constructor without refAxis input
     template <bool U = has_ref_axis, typename std::enable_if<U, int>::type = 0>
@@ -27,7 +27,7 @@ class StiffenedIsotropicShellData : public ShellIsotropicData<T, ref_axis> {
                                        T stiffPitch_, T rho_ = 1.0,
                                        T ys_ = 1.0, T tOffset_ = 0.0) :
     stiffHeight(stiffHeight_), stiffThick(stiffThick_),
-    stiffPitch(stiffPitch_), ShellIsotropicData<T, ref_axis>(E_, nu_, thick_, rho_, ys_, tOffset_) {}
+    stiffPitch(stiffPitch_), panelLength(1.0), ShellIsotropicData<T, ref_axis>(E_, nu_, thick_, rho_, ys_, tOffset_) {}
 
     __HOST_DEVICE__ void set_design_variables(T loc_dvs[]) { 
         thick = loc_dvs[0];
@@ -181,7 +181,7 @@ class StiffenedIsotropicShellData : public ShellIsotropicData<T, ref_axis> {
 
     __HOST_DEVICE__ T evalFailure(const T &rhoKS, const T &safetyFactor, const T e[9]) const {
         // von Mises failure index, use ks max for to pand bottom stresses
-        T fails[3]; // 1) panel strength, 2) global buckling, 3) local buckling
+        T fails[3]; // 1) panel strength, 2) local buckling, 3) global buckling
 
 	/* 1) panel strength failure */
 	// smeared stiffener doesn't affect top+bottom panel stress (only function of panel props)
@@ -189,40 +189,38 @@ class StiffenedIsotropicShellData : public ShellIsotropicData<T, ref_axis> {
 	T panel_strength_fail = ShellIsotropicData<T, ref_axis>::evalFailure(rhoKS, safetyFactor, e);
         fails[0] = panel_strength_fail;
 
-        // TODO : now want to compute panel buckling failure here, prob not gonna do stiffener stress yet (just stiffAR consr)
-        /* 2) global panel buckling failure */
-	//    2.1) compute current in-plane loads
-	T A11 = E * thick / (1 - nu * nu);
-	T A12 = A11 * nu;
-	// add stiffener smearing to it
-	A11 += E * stiffHeight * stiffThick / stiffPitch;
-	T A66 = A11 * (1 + nu) / 2.0; 
+        
+        /* 2 and 3 pre) compute in-plane loads */
+	T A11 = E * thick / (1 - nu * nu); 
+        T A66 = A11 * (1 - nu) / 2.0;
+	A11 += E * stiffHeight * stiffThick / stiffPitch; // add smeared stiffener stiffness
+	// e[0] = e11, e[3] = e22, e[1] = e12
+        T N11 = A11 * (e[0] + nu * e[3]), N12 = A66 * e[1];
+        
+        /* 2) local buckling failure */
+	const T pi = 3.14159265358979323846;
+        T N11_hat = N11 / pi / pi, N12_hat = N12 / pi / pi;
+	T sp2 = stiffPitch * stiffPitch, D_loc = E * getPanelIzz();
+        T loc_axial = -N11_hat * sp2 / D_loc / 4.0;
+	T loc_shear = N12_hat * sp2 / D_loc / 5.374;
+	fails[1] = loc_axial + loc_shear * loc_shear;
+	fails[1] *= safetyFactor;
 
-        T N11 = A11 * e[0] + A12 * e[1];
-        T N12 = A66 * e[2];
-
-        //    2.2) compute the critical loads and global buckling failure
-	T D_loc = E * getPanelIzz(); // unstiff (save for later)
-	T D_gaxial = D_local + E * getStiffenerIzz();
-	T D_gshear = E * getPanelIzz() * 4.7 + E * getStiffenerIzz() * 0.5;
-	// add stiffener smearing (for D22 which will be for shear
-	// see Appendix G in paper "Machine Learning to Improve Buckling Predictions for Structural Optimization of Stiffened Structures"
-	T pi = 3.14159265;
-	T N11_gcr = pi * pi * D_gaxial / length / length;
-	T N12_gcr = pi * pi * D_gshear / length / length;
-        // now compute combined failure criterion
-	T gshear = N12 / N12_gcr;
-	fails[1] = (-N11 / N11_gcr) + gshear * gshear;
-
-	/* 3) compute local buckling failure */
-	// TODO : do we need local in-plane loads using unstiffened A11, A12 props? check
-        T N11_lcr = pi * pi * D_loc / stiffPitch / stiffPitch;
-	T N12_lcr = N11_lcr * 4.7; // TODO : not sure about this one yet (double check)
-	T lshear = N12 / N12_lcr;
-	fails[2] = (-N11 / N11_lcr) + lshear * lshear;
+	/* 3) global buckling failure */
+	T a2 = panelLength * panelLength;
+	T D_axial = D_loc + E * getStiffenerIzz();
+	T D_shear = D_loc + 0.5 / 4.7 * E * getStiffenerIzz();
+	T glob_axial = -N11_hat * a2 / D_axial / 1.0; // no 2+2*xi (rho0^{-2} term dominates
+        T glob_shear = N12_hat * a2 / D_shear / 4.7; // less stiffening effect (but still some)
+	fails[2] = glob_axial + glob_shear * glob_shear;
+        fails[2] *= safetyFactor;
 
         /* 4) compute combined failure criterion among all three fail modes */
-	// TODO : using ks function	
+	T max12 = (fails[0] > fails[1]) ? fails[0] : fails[1];
+        T max = (max12 > fails[2]) ? max12 : fails[2];
+        T ks_sum = exp(rhoKS * (fails[0] - max)) + exp(rhoKS * (fails[1] - max)) + exp(rhoKS * (fails[2] - max));
+        T ks_fail = log(ks_sum) / rhoKS;
+        return ks_fail;	
     }
 
     __HOST_DEVICE__ void evalFailureDVSens(const T &rhoKS, const T &safetyFactor, const T e[9],
@@ -236,8 +234,8 @@ class StiffenedIsotropicShellData : public ShellIsotropicData<T, ref_axis> {
 	// TODO : add panel buckling constraint + then overall failure
     }
 
-    __HOST_DEVICE__ void evalFailureStrainSens(const T &scale, const T &rhoKS,
-                                               const T &safetyFactor, const T e[9], T er[9]) const {
+    __HOST_DEVICE__ void evalFailureStrainSens(const T &scale, const T &rhoKS, const T &safetyFactor, 
+		                               const T e[9], T er[9]) const {
         /* compute dsigma_KS/dstrain */
       
         // panel strength only depends on panel props, so can call unstiff panel method here
@@ -250,5 +248,6 @@ class StiffenedIsotropicShellData : public ShellIsotropicData<T, ref_axis> {
 
     // private:
     T stiffHeight, stiffThick, stiffPitch;
-    //T panelLength, panelWidth;
+    T panelLength;
+    // T panelWidth;
 };
