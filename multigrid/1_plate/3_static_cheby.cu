@@ -365,7 +365,6 @@ int main(int argc, char **argv) {
 
     // type specifications here
     using T = double;   
-    using Quad = QuadLinearQuadrature<T>;
     using Director = LinearizedRotation<T>;
     constexpr bool has_ref_axis = false;
     constexpr bool is_nonlinear = false;
@@ -374,14 +373,17 @@ int main(int argc, char **argv) {
 
     printf("plate mesh with %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
     if (elem_type == "MITC4") {
+        using Quad = QuadLinearQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, omega, cycle_type);
     } else if (elem_type == "CFI4") {
+        using Quad = QuadLinearQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, omega, cycle_type);
     } else if (elem_type == "CFI9") {
+        using Quad = QuadQuadraticQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, omega, cycle_type);

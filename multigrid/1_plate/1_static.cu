@@ -103,7 +103,7 @@ void multigrid_plate_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::
         int nxe_per_comp = c_nxe / 4, nye_per_comp = c_nye/4; // for now (should have 25 grids)
         auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
         double Q = 1.0; // load magnitude
-        T *my_loads = getPlateLoads<T, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -234,7 +234,7 @@ void direct_plate_solve(int nxe, double SR) {
 
     // get the loads
     double Q = 1.0; // load magnitude
-    T *my_loads = getPlateLoads<T, Physics>(nxe, nye, Lx, Ly, Q);
+    T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nye, Lx, Ly, Q);
 
     auto loads = assembler.createVarsVec(my_loads);
     assembler.apply_bcs(loads);
@@ -355,7 +355,7 @@ int main(int argc, char **argv) {
 
     // type specifications here
     using T = double;   
-    using Quad = QuadLinearQuadrature<T>;
+   
     using Director = LinearizedRotation<T>;
     constexpr bool has_ref_axis = false;
     constexpr bool is_nonlinear = false;
@@ -364,14 +364,17 @@ int main(int argc, char **argv) {
 
     printf("plate mesh with %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
     if (elem_type == "MITC4") {
+         using Quad = QuadLinearQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type);
     } else if (elem_type == "CFI4") {
+         using Quad = QuadLinearQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type);
     } else if (elem_type == "CFI9") {
+         using Quad = QuadQuadraticQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type);

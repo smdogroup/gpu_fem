@@ -10,7 +10,7 @@
 template <class Assembler>
 Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E, double nu,
                                double thick, double rho = 2500, double ys = 350e6,
-                               int nxe_per_comp = 1, int nye_per_comp = 1) { 
+                               int nxe_per_comp = 1, int nye_per_comp = 1) {
     using T = typename Assembler::T;
     using Basis = typename Assembler::Basis;
     using Geo = typename Assembler::Geo;
@@ -99,7 +99,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
 
     // printf("bcs: ");
     // printVec<int>(my_bcs.size(), bcs.getPtr());
-    int n = order + 1; // num local nodes
+    int n = order + 1;  // num local nodes
 
     // now initialize the element connectivity
     int N = Basis::num_nodes * num_elements;
@@ -109,7 +109,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
             int ielem = nxe * iye + ixe;
 
             // no sorted order like in MITC?
-            for (int iloc = 0; iloc < n * n ; iloc++) {
+            for (int iloc = 0; iloc < n * n; iloc++) {
                 int ilx = iloc % n, ily = iloc / n;
                 int ix = order * ixe + ilx;
                 int iy = order * iye + ily;
@@ -208,7 +208,7 @@ T *getPlatePointLoad(int nxe, int nye, double Lx, double Ly, double load_mag) {
 
 template <typename T, class Phys>
 T *getPlateNonlinearLoads(int nxe, int nye, double Lx, double Ly, double load_mag,
-                 double in_plane_frac = 0.0) {
+                          double in_plane_frac = 0.0) {
     /*
     make a rectangular plate mesh of shell elements
     simply supported with transverse constrant distributed load
@@ -267,8 +267,8 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
     int nny = order * nye + 1;
     int num_nodes = nnx * nny;
 
-    T dx = Lx / nxe;
-    T dy = Ly / nye;
+    T dx = Lx / (nnx - 1);
+    T dy = Ly / (nny - 1);
 
     double PI = 3.1415926535897;
 
@@ -289,7 +289,10 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
             T th = atan2(y, x);
             T nodal_load = load_mag * sin(5.0 * PI * r) * cos(4.0 * th);
 
-            my_loads[Phys::vars_per_node * inode + 2] = nodal_load; // * dx * dy;
+            if (ix % order == 0 && iy % order == 0) {
+                // don't put loads on mid-side nodes etc of higher order (weird results)
+                my_loads[Phys::vars_per_node * inode + 2] = nodal_load;  // * dx * dy;
+            }
         }
     }
     return my_loads;
@@ -326,7 +329,7 @@ T *getPlateSineLoads(int nxe, int nye, double Lx, double Ly, int m, int n, doubl
             T x = ix * dx, y = iy * dy;
             T nodal_load = load_mag * sin(m * PI * x / Lx) * sin(n * PI * y / Ly);
 
-            my_loads[Phys::vars_per_node * inode + 2] = nodal_load; // * dx * dy;
+            my_loads[Phys::vars_per_node * inode + 2] = nodal_load;  // * dx * dy;
         }
     }
     return my_loads;
@@ -334,9 +337,10 @@ T *getPlateSineLoads(int nxe, int nye, double Lx, double Ly, int m, int n, doubl
 
 template <class Assembler>
 Assembler createPlateDistortedAssembler(int nxe, int nye, double Lx, double Ly, double E, double nu,
-                               double thick, double rho = 2500, double ys = 350e6,
-                               int nxe_per_comp = 1, int nye_per_comp = 1, int m = 1, int n = 1,
-                               double x_frac = 0.0, double y_frac = 0.0, double shear_frac = 0.0) {
+                                        double thick, double rho = 2500, double ys = 350e6,
+                                        int nxe_per_comp = 1, int nye_per_comp = 1, int m = 1,
+                                        int n = 1, double x_frac = 0.0, double y_frac = 0.0,
+                                        double shear_frac = 0.0) {
     using T = typename Assembler::T;
     using Basis = typename Assembler::Basis;
     using Geo = typename Assembler::Geo;
@@ -523,7 +527,8 @@ Assembler createPlateDistortedAssembler(int nxe, int nye, double Lx, double Ly, 
 template <class Assembler>
 Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E, double nu,
                                   double thick, bool imperfection = false, int imp_x = 5,
-                                  int imp_hoop = 4, double rho = 2500, double ys = 350e6, int nx_comp = 1, int ny_comp = 1) {
+                                  int imp_hoop = 4, double rho = 2500, double ys = 350e6,
+                                  int nx_comp = 1, int ny_comp = 1) {
     using T = typename Assembler::T;
     using Basis = typename Assembler::Basis;
     using Geo = typename Assembler::Geo;
@@ -549,18 +554,18 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
     }
     // rest of nodes on xneg hoop are simply supported and with no axial disp
     for (int ih = 0; ih < nnh; ih++) {
-        int inode_L = ih * nnx;           // xneg node
-        int inode_R = inode_L + nnx - 1;  // xpos node
-        if (inode_L != 0) {               // xneg nodes
-            for (int idof = 0; idof < 3; idof++) { // simply supported
-            // for (int idof = 0; idof < 6; idof++) {  // clamped
+        int inode_L = ih * nnx;                     // xneg node
+        int inode_R = inode_L + nnx - 1;            // xpos node
+        if (inode_L != 0) {                         // xneg nodes
+            for (int idof = 0; idof < 3; idof++) {  // simply supported
+                // for (int idof = 0; idof < 6; idof++) {  // clamped
                 // constrain u,v,w disp on xneg edge
                 if (inode_L != 0) my_bcs.push_back(6 * inode_L + idof);
             }
         }
         // xpos nodes
-        for (int idof = 1; idof < 3; idof++) { // simply supported
-        // for (int idof = 0; idof < 6; idof++) {  // clamped
+        for (int idof = 1; idof < 3; idof++) {  // simply supported
+            // for (int idof = 0; idof < 6; idof++) {  // clamped
             // only constraint v,w on xpos edge (TODO : later make disp control here)
             my_bcs.push_back(6 * inode_R + idof);
         }
@@ -714,9 +719,12 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
                 // rose shape in hoop, chirp in x direction
                 T x_hat = x / L;
                 T th_hat = th / 2 / M_PI;
-                // T mag = load_mag * (0.7 * cos(5 * th) + 0.3 * cos(10 * th + 3.14159 / 6.0)) * sin(2 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
-                T mag = load_mag * (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) + 0.7 * cos(10 * th + 3.14159 / 6.0 + 5.3 * M_PI * x_hat)) * 
-                    sin(5 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
+                // T mag = load_mag * (0.7 * cos(5 * th) + 0.3 * cos(10 * th + 3.14159 / 6.0)) *
+                // sin(2 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
+                T mag = load_mag *
+                        (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
+                         0.7 * cos(10 * th + 3.14159 / 6.0 + 5.3 * M_PI * x_hat)) *
+                        sin(5 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
 
                 // y and z transverse loads in radial direction only
                 my_loads[Phys::vars_per_node * inode + 1] = sin(th) * mag;

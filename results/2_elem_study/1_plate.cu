@@ -381,12 +381,22 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     // compare to pure linear solve (to see how nonlinear)
     // ==================================
 
+    printf("add jacobian\n");
     assembler.add_jacobian_fast(kmat);
     assembler.apply_bcs(kmat);
+    CHECK_CUDA(cudaDeviceSynchronize());
+    printf("\tdone with jacobian\n");
+    // return;
+
+    printf("try linear solve\n");
     CUSPARSE::direct_LU_solve(kmat, loads, soln);
+    printf("\tdone with linear solve\n");
+
     T lin_max_disp = get_max_disp(soln);
     auto h_soln = soln.createHostVec();
+    printf("print solution\n");
     printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/plate_lin.vtk");
+    printf("\tprinted solution\n");
     
 
     // new nonlinear solver
@@ -457,7 +467,8 @@ int main(int argc, char **argv) {
     int ninnercyc = 1;
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
-    std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
+    // std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
+    std::string elem_type = "CFI9"; 
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -533,7 +544,6 @@ int main(int argc, char **argv) {
 
     // type specifications here
     using T = double;   
-    using Quad = QuadLinearQuadrature<T>;
     using Director = LinearizedRotation<T>;
     constexpr bool has_ref_axis = false;
     constexpr bool is_nonlinear = true; // this is a nonlinear GMG case
@@ -542,14 +552,19 @@ int main(int argc, char **argv) {
 
     printf("plate mesh with geomNL %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
     if (elem_type == "MITC4") {
+        using Quad = QuadLinearQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI4") {
+        using Quad = QuadLinearQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI9") {
+        // probably do need quadratic, but need to fix assembly issues with 9 quadpts
+        using Quad = QuadQuadraticQuadrature<T>;
+        // using Quad = QuadLinearQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);

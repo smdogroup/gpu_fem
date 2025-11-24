@@ -54,15 +54,27 @@ class MITCShellAssembler
     void add_jacobian_fast(Mat &mat) {
         // method for testing out faster jacobian GPU
 
-        mat.zeroValues();
-        dim3 block(num_quad_pts, dof_per_elem,
+        int cols_per_elem = (Quadrature::num_quad_pts <= 4) ? 24 : 9;
+        dim3 block(num_quad_pts, cols_per_elem,
                    elems_per_block);  // better order for consecutive threads and mem reads
-        int nblocks = (this->num_elements + elems_per_block - 1) / elems_per_block;
+        int elem_cols_per_block = cols_per_elem * elems_per_block;
+        int nblocks =
+            (this->num_elements * dof_per_elem + elem_cols_per_block - 1) / elem_cols_per_block;
         dim3 grid(nblocks);
 
         k_add_jacobian_fast<T, elems_per_block, Assembler, Data, Vec_, Mat><<<grid, block>>>(
-            this->num_vars_nodes, this->num_elements, this->elem_components, this->geo_conn,
-            this->vars_conn, this->xpts, this->vars, this->compData, mat);
+            this->num_vars_nodes, this->num_elements, cols_per_elem, this->elem_components,
+            this->geo_conn, this->vars_conn, this->xpts, this->vars, this->compData, mat);
+
+        // mat.zeroValues();
+        // dim3 block(num_quad_pts, dof_per_elem,
+        //            elems_per_block);  // better order for consecutive threads and mem reads
+        // int nblocks = (this->num_elements + elems_per_block - 1) / elems_per_block;
+        // dim3 grid(nblocks);
+
+        // k_add_jacobian_fast<T, elems_per_block, Assembler, Data, Vec_, Mat><<<grid, block>>>(
+        //     this->num_vars_nodes, this->num_elements, this->elem_components, this->geo_conn,
+        //     this->vars_conn, this->xpts, this->vars, this->compData, mat);
 
         CHECK_CUDA(cudaDeviceSynchronize());
         // #endif

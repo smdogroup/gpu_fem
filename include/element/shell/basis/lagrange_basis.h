@@ -8,7 +8,7 @@ class LagrangeQuadBasis {
    public:
     using Quadrature = Quadrature_;
     static constexpr int32_t order = _order;
-    static constexpr int32_t nx = order + 1; 
+    static constexpr int32_t nx = order + 1;
 
     // Required for loading solution data
     static constexpr int32_t num_nodes = nx * nx;
@@ -40,7 +40,7 @@ class LagrangeQuadBasis {
         static constexpr int32_t spatial_dim = 3;
 
         // Required for knowning number of spatial coordinates per node
-        static constexpr int32_t num_nodes = 4;
+        static constexpr int32_t num_nodes = nx * nx;
 
         // Number of quadrature points
         static constexpr int32_t num_quad_pts = Quadrature::num_quad_pts;
@@ -58,11 +58,11 @@ class LagrangeQuadBasis {
         }
     }
 
-    template <int tyingnx>
+    template <int tying_order>
     __HOST_DEVICE__ static void lagrangeLobatto1D_tying(const T u, T *N) {
-        if constexpr (tyingnx == 1) {
+        if constexpr (tying_order == 1) {
             N[0] = 1.0;
-        } else if constexpr (tyingnx == 2) {
+        } else if constexpr (tying_order == 2) {
             N[0] = 0.5 * (1.0 - u);
             N[1] = 0.5 * (1.0 + u);
         }

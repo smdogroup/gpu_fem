@@ -208,8 +208,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level,
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
         // build smoother and prolongations
-        bool smooth_debug = true;
-        // bool smooth_debug = false;
+        // bool smooth_debug = true;
+        bool smooth_debug = false;
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER, 1, smooth_debug);
         int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
         // int ELEM_MAX = 4;
