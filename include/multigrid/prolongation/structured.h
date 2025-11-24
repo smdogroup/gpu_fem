@@ -1,12 +1,12 @@
 // class types for different coarse-fine or prolongation operators
 // the restriction is often the transpose or row-normalized transpose for geom multigrid
 #pragma once
-#include "linalg/vec.h"
 #include "_structured.cuh"
+#include "linalg/vec.h"
 
 template <class Assembler, ProlongationGeom geom>
 class StructuredProlongation {
-  public:
+   public:
     using T = double;
     using Basis = typename Assembler::Basis;
     static constexpr int32_t order = Basis::order;
@@ -24,7 +24,7 @@ class StructuredProlongation {
 
     // no update required for structured prolongs
     void update_after_assembly() {}
-    
+
     void init_coarse_data(Assembler &coarse_assembler) {
         // has to be called separately (since coarse grid isn't made at same time as fine grid)
         d_coarse_iperm = coarse_assembler.getBsrData().iperm;
@@ -42,9 +42,9 @@ class StructuredProlongation {
         dim3 block(32);
         int nblocks_x = (nelems_fine + 31) / 32;
         dim3 grid(nblocks_x);
-        k_plate_prolongate<T, geom><<<grid, block>>>(order, nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm,
-                                               d_fine_iperm, coarse_soln_in.getPtr(),
-                                               dx_fine.getPtr(), d_weights);
+        k_plate_prolongate<T, Basis, geom>
+            <<<grid, block>>>(order, nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm,
+                              d_fine_iperm, coarse_soln_in.getPtr(), dx_fine.getPtr(), d_weights);
 
         /* ensure partition of unity by weight normalization */
         int nblock2 = (N_fine + 31) / 32;
@@ -54,7 +54,7 @@ class StructuredProlongation {
 
     template <bool normalize = false>
     void restrict_vec(DeviceVec<T> fine_vec_in, DeviceVec<T> coarse_vec_out) {
-        // zero weights to ensure partition of unity 
+        // zero weights to ensure partition of unity
         if constexpr (normalize) {
             cudaMemset(d_weights, 0.0, N_fine * sizeof(T));
         }
@@ -63,11 +63,12 @@ class StructuredProlongation {
         dim3 block(32);
         int nblocks_x = (nelems_fine + 31) / 32;
         dim3 grid(nblocks_x);
-        k_plate_restrict<T, geom><<<grid, block>>>(order, nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm,
-                                             d_fine_iperm, fine_vec_in.getPtr(),
-                                             coarse_vec_out.getPtr(), d_weights);
+        k_plate_restrict<T, Basis, geom><<<grid, block>>>(
+            order, nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm, d_fine_iperm,
+            fine_vec_in.getPtr(), coarse_vec_out.getPtr(), d_weights);
 
-        // now normalize by the weights so partition of unity remains (only for restricting soln in NL problems, not loads))
+        // now normalize by the weights so partition of unity remains (only for restricting soln in
+        // NL problems, not loads))
         if constexpr (normalize) {
             int nblock2 = (N_coarse + 31) / 32;
             dim3 grid2(nblock2);
@@ -75,7 +76,7 @@ class StructuredProlongation {
         }
     }
 
-  private:
+   private:
     int N_coarse, N_fine, nelems_coarse, nelems_fine;
     int nxe_coarse, nxe_fine;
     int *d_coarse_iperm, *d_fine_iperm;

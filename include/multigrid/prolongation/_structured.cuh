@@ -7,7 +7,7 @@ enum ProlongationGeom : int {
     CYLINDER
 };
 
-template <typename T, ProlongationGeom geom>
+template <typename T, class Basis, ProlongationGeom geom>
 __global__ static void k_plate_prolongate(const int order, const int nxe_coarse, const int nxe_fine, 
     const int nelems_fine, const int *d_coarse_iperm, const int *d_fine_iperm,
     const T *coarse_soln_in, T *dx_fine, T *d_fine_wts) {
@@ -29,28 +29,26 @@ __global__ static void k_plate_prolongate(const int order, const int nxe_coarse,
     int nx2 = nx * nx; // num nodes in each element
 
     for (int local_fine = 0; local_fine < nx2; local_fine++) {
-        int ix_f = order * ixe_f + local_fine % nx, iy_f = order * iye_f + local_fine / nx;
+        int ix_f = order * ixe_f + local_fine % nx, iy_f = order * iye_f + local_fine / nx;      
+
+        // compute the basis functions at the fine node
+        // starting corner node
+        int ix_f0 = order * ixe_c * 2, iy_f0 = order * iye_c * 2;
+        T pt[2];
+        pt[0] = -1.0 + 1.0 * (ix_f - ix_f0) / order;
+        pt[1] = -1.0 + 1.0 * (iy_f - iy_f0) / order;
+        T N[Basis::num_nodes];
+        Basis::getBasis(pt, N);
 
         for (int local_coarse = 0; local_coarse < nx2; local_coarse++) {
             int ix_c = order * ixe_c + local_coarse % nx, iy_c = order * iye_c + local_coarse / nx;
 
-            // now compute dx and dy between coarse and fine nodes..
-            int ix_cf = 2 * ix_c, iy_cf = 2 * iy_c;
-            int dx = abs(ix_cf - ix_f), dy = abs(iy_cf - iy_f);
-
-            // diff cases with adjacencies
-            int case1 = dx == 0 && dy == 0; // fine node matches coarse
-            int case2 = (dx == 1 && dy == 0) || (dx == 0 && dy == 1); // fine node on edge
-            int case3 = dx == 1 && dy == 1; // fine node in center of coarse elem
-
-            // scaling from FEA basis
-            T scale = case1 * 1.0 + case2 * 0.5 + case3 * 0.25;
-
+            T scale = N[local_coarse];     
             if (geom == CYLINDER) {
                 // loops back on itself in hoop direction
                 iy_f = iy_f % nxe_fine;
                 iy_c = iy_c % nxe_coarse;
-            }
+            }    
 
             // get fine and coarse indices now..
             int coarse_node = nx_c * iy_c + ix_c;
@@ -73,7 +71,7 @@ __global__ static void k_plate_prolongate(const int order, const int nxe_coarse,
 
 }
 
-template <typename T, ProlongationGeom geom>
+template <typename T, class Basis, ProlongationGeom geom>
 __global__ static void k_plate_restrict(const int order, const int nxe_coarse, const int nxe_fine, 
     const int nelems_fine, const int *d_coarse_iperm, const int *d_fine_iperm,
     const T *defect_fine_in, T *defect_coarse_out, T *d_coarse_wts) {
@@ -97,21 +95,19 @@ __global__ static void k_plate_restrict(const int order, const int nxe_coarse, c
     for (int local_fine = 0; local_fine < nx2; local_fine++) {
         int ix_f = order * ixe_f + local_fine % nx, iy_f = order * iye_f + local_fine / nx;
 
+        // compute the basis functions at the fine node
+        // starting corner node
+        int ix_f0 = order * ixe_c * 2, iy_f0 = order * iye_c * 2;
+        T pt[2];
+        pt[0] = -1.0 + 1.0 * (ix_f - ix_f0) / order;
+        pt[1] = -1.0 + 1.0 * (iy_f - iy_f0) / order;
+        T N[Basis::num_nodes];
+        Basis::getBasis(pt, N);
+
         for (int local_coarse = 0; local_coarse < nx2; local_coarse++) {
             int ix_c = order * ixe_c + local_coarse % nx, iy_c = order * iye_c + local_coarse / nx;
 
-            // now compute dx and dy between coarse and fine nodes..
-            int ix_cf = 2 * ix_c, iy_cf = 2 * iy_c;
-            int dx = abs(ix_cf - ix_f), dy = abs(iy_cf - iy_f);
-
-            // diff cases with adjacencies
-            int case1 = dx == 0 && dy == 0; // fine node matches coarse
-            int case2 = (dx == 1 && dy == 0) || (dx == 0 && dy == 1); // fine node on edge
-            int case3 = dx == 1 && dy == 1; // fine node in center of coarse elem
-
-            // scaling from FEA basis
-            T scale = case1 * 1.0 + case2 * 0.5 + case3 * 0.25;
-
+            T scale = N[local_coarse];
             if (geom == CYLINDER) {
                 // loops back on itself in hoop direction
                 iy_f = iy_f % nxe_fine;

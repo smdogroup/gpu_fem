@@ -50,6 +50,11 @@ class LagrangeQuadBasis {
     };  // end of class LinearQuadGeo
     using Geo = LinearQuadGeo;
 
+    // generic evalBasis call for interps in multigrid and FEA
+    __HOST_DEVICE__ static void getBasis(const T pt[2], T N[num_nodes]) {
+        lagrangeLobatto2D(pt[0], pt[1], N);
+    }
+
     // shape functions here
     __HOST_DEVICE__ static void lagrangeLobatto1D(const T u, T *N) {
         if constexpr (nx == 2) {

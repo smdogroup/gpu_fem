@@ -77,8 +77,11 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // using Smoother = MulticolorGSSmoother_V1<Assembler>;
     using Smoother = ChebyshevPolynomialSmoother<Assembler>;
     using Prolongation = StructuredProlongation<Assembler, PLATE>;
+    
+    // sometimes line search helps, sometimes not
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
     // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
+    
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
 
@@ -115,13 +118,15 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // T omegaMC = 0.75;
     // T omegaMC = 0.7;
 
-    // T omegaLS_min = 0.1, omegaLS_max = 2.0;
-    T omegaLS_min = 0.25, omegaLS_max = 2.0;
+    T omegaLS_min = 0.1, omegaLS_max = 2.0;
+    // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     // T omegaLS_min = 0.5, omegaLS_max = 2.0;
 
     // get nxe_min for not exactly power of 2 case
+    // int nxe_start = 32 / Basis::order;
+     int nxe_start = 64 / Basis::order; // higher load frequency here needs a bit finer mesh for coarsest grid
     // int pre_nxe_min = nxe > 16 ? 16 : 4; // 2x slower with this setting (takes more V-cycles)
-    int pre_nxe_min = nxe > 32 ? 32 : 4; // but on higher nxe, this one is more robust somehow
+    int pre_nxe_min = nxe > nxe_start ? nxe_start : 4; // but on higher nxe, this one is more robust somehow
     // int pre_nxe_min = nxe > 64 ? 64 : 4; // solved about 33% faster with this as coarsest grid (for nxe = 256, but prob need faster direct solver on GPU)
 
     int nxe_min = pre_nxe_min;
@@ -250,7 +255,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // 1) do a linear solve here
     // -------------------------------------------------------
 
+    kmg->set_print(true);
     kmg->solve();
+    kmg->set_print(false);
     int *d_perm = kmg->grids[0].d_perm;
     auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
     printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_mg_lin.vtk");
@@ -452,12 +459,11 @@ void gatekeeper_method(bool is_multigrid, int nxe, double SR, int nsmooth, int n
 int main(int argc, char **argv) {
     // input ----------
     bool is_multigrid = true;
-    int nxe = 256; // default value (three grids)
+    int nxe = 128;
     double SR = 100.0; // default, the less slender it is, solves much faster
     int n_vcycles = 50;
     double pressure = 8.0e6;
-
-    double omega = 0.3;
+    double omega = 0.9; // works better with omega near 1
 
     // int nsmooth = 2; // typically faster right now
     // int ninnercyc = 2; // inner V-cycles to precond K-cycle
@@ -564,7 +570,6 @@ int main(int argc, char **argv) {
     } else if (elem_type == "CFI9") {
         // probably do need quadratic, but need to fix assembly issues with 9 quadpts
         using Quad = QuadQuadraticQuadrature<T>;
-        // using Quad = QuadLinearQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);

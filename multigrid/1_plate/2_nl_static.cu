@@ -118,8 +118,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // T omegaLS_min = 0.5, omegaLS_max = 2.0;
 
     // get nxe_min for not exactly power of 2 case
+    int nxe_start = 32 / Basis::order;
     // int pre_nxe_min = nxe > 16 ? 16 : 4; // 2x slower with this setting (takes more V-cycles)
-    int pre_nxe_min = nxe > 32 ? 32 : 4; // but on higher nxe, this one is more robust somehow
+    int pre_nxe_min = nxe > nxe_start ? nxe_start : 4; // but on higher nxe, this one is more robust somehow
     // int pre_nxe_min = nxe > 64 ? 64 : 4; // solved about 33% faster with this as coarsest grid (for nxe = 256, but prob need faster direct solver on GPU)
 
     int nxe_min = pre_nxe_min;
