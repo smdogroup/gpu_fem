@@ -95,8 +95,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level,
     // in linear case (CFI4 + line search gets around locking issue, cause needs to be CFI9 order or greater to avoid locking, thus improving high slender perf)
     // in nonlinear case though (Vcycle line search breaks down at high NL and CFI4 can't be used, so need MITC4 and no line search for now more robust)
     // I had slowly realized that omega larger to 1 (then just omega_LS = 1 aka no rescaling was better)
-    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>; // scales by one each time
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>; // scales by one each time
     // wondering if NONE may help the Vcycle in hard NL case
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
@@ -139,7 +139,7 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level,
 
         // read the ESP/CAPS => nastran mesh for TACS
         TACSMeshLoader mesh_loader{comm};
-        std::string fname = "../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(i) + ".bdf";
+        std::string fname = "../../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(i) + ".bdf";
         mesh_loader.scanBDFFile(fname.c_str());
 
         // now set component data using new helper method
@@ -208,7 +208,9 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level,
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
         // build smoother and prolongations
-        auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
+        bool smooth_debug = true;
+        // bool smooth_debug = false;
+        auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER, 1, smooth_debug);
         int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
         // int ELEM_MAX = 4;
         auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
@@ -363,7 +365,7 @@ void solve_nonlinear_direct(MPI_Comm &comm, int level, double total_force) {
   auto start0 = std::chrono::high_resolution_clock::now();
 
   TACSMeshLoader mesh_loader{comm};
-  std::string fname = "../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+  std::string fname = "../../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
   mesh_loader.scanBDFFile(fname.c_str());
 
     // now set component data using new helper method
