@@ -759,7 +759,7 @@ int main(int argc, char **argv) {
 
     printf("AOB mesh with nonlinear %s elements, level %d and SR %.2e\n------------\n", elem_type.c_str(), level, SR);
     if (elem_type == "MITC4") {
-        using Basis = LagrangeQuadBasis<T, Quad, 2>;
+        using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, n_krylov, force);
     } else if (elem_type == "CFI4") {

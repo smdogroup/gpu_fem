@@ -192,7 +192,7 @@ int main(int argc, char **argv) {
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
     if (elem_type == 'MITC4') {
-        using Basis = LagrangeQuadBasis<T, Quad, 2>;
+        using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         plate_timings<T, Assembler>(nxe, SR);
     } else if (elem_type == 'CFI4') {

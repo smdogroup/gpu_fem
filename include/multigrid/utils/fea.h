@@ -10,11 +10,12 @@
 template <class Assembler>
 Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E, double nu,
                                double thick, double rho = 2500, double ys = 350e6,
-                               int nxe_per_comp = 1, int nye_per_comp = 1, int order = 1) { 
+                               int nxe_per_comp = 1, int nye_per_comp = 1) { 
     using T = typename Assembler::T;
     using Basis = typename Assembler::Basis;
     using Geo = typename Assembler::Geo;
     using Data = typename Assembler::Data;
+    int order = Basis::order;
 
     /*
     make a rectangular plate mesh of shell elements
@@ -250,7 +251,7 @@ T *getPlateNonlinearLoads(int nxe, int nye, double Lx, double Ly, double load_ma
     return my_loads;
 }
 
-template <typename T, class Phys>
+template <typename T, class Basis, class Phys>
 T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
     /*
     make a rectangular plate mesh of shell elements
@@ -261,8 +262,9 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
     */
 
     // number of nodes per direction
-    int nnx = nxe + 1;
-    int nny = nye + 1;
+    int order = Basis::order;
+    int nnx = order * nxe + 1;
+    int nny = order * nye + 1;
     int num_nodes = nnx * nny;
 
     T dx = Lx / nxe;

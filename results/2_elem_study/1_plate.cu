@@ -24,6 +24,7 @@
 // local multigrid imports
 #include "multigrid/grid.h"
 #include "multigrid/utils/fea.h"
+#include "multigrid/smoothers/cheb4_poly.h"
 #include "multigrid/smoothers/mc_smooth1.h"
 #include "multigrid/prolongation/structured.h"
 #include "multigrid/solvers/gmg.h"
@@ -68,15 +69,16 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 }
 
 template <typename T, class Assembler>
-void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string cycle_type, T pressure = 5.0e7) {
+void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string cycle_type, T omega, T pressure = 5.0e7) {
     // geometric multigrid method here..
     // need to make a number of grids..
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
-    const SCALER scaler  = LINE_SEARCH;
-    using Smoother = MulticolorGSSmoother_V1<Assembler>;
+    // using Smoother = MulticolorGSSmoother_V1<Assembler>;
+    using Smoother = ChebyshevPolynomialSmoother<Assembler>;
     using Prolongation = StructuredProlongation<Assembler, PLATE>;
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
+    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
 
@@ -111,7 +113,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // some important settings
     // T omegaMC = 1.5; // for GS-SOR
     // T omegaMC = 0.75;
-    T omegaMC = 0.7;
+    // T omegaMC = 0.7;
 
     // T omegaLS_min = 0.1, omegaLS_max = 2.0;
     T omegaLS_min = 0.25, omegaLS_max = 2.0;
@@ -142,7 +144,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         double uniform_force = pressure * 1.0 * 1.0;
         double nodal_loads = uniform_force / (c_nxe - 1) / (c_nye - 1);
         nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-        T *my_loads = getPlateLoads<T, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
+        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -179,9 +181,13 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
         // build smoother and prolongations..
-        auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC);
+        // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC);
+        int ORDER = 4;
+        auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
         auto prolongation = new Prolongation(assembler);
         auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, omegaLS_min, omegaLS_max);
+
+        smoother->setup_cg_lanczos(grid.d_defect);
         
         if (is_kcycle) {
             kmg->grids.push_back(grid);
@@ -219,7 +225,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     if (is_kcycle) {
         // int n_krylov = 500;
         // int n_krylov = 10;
-        int n_krylov = 20;
+        // int n_krylov = 20;
+        int n_krylov = 40;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omegaMC, atol, rtol, print_freq, print, double_smooth);    
     }
 
@@ -333,7 +340,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
     nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
     // T *my_loads = getPlatePointLoad<T, Physics>(c_nxe, c_nye, Lx, Ly, Q);
-    T *my_loads = getPlateLoads<T, Physics>(nxe, nye, Lx, Ly, nodal_loads);
+    T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nye, Lx, Ly, nodal_loads);
 
     // double Q = 1.0e5;
     // T *my_loads = getPlatePointLoad<T, Physics>(nxe, nye, Lx, Ly, Q);
@@ -423,9 +430,9 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(bool is_multigrid, int nxe, double SR, int nsmooth, int ninnercyc, std::string cycle_type, T load_mag = 5.0e7) {
+void gatekeeper_method(bool is_multigrid, int nxe, double SR, int nsmooth, int ninnercyc, std::string cycle_type, T omega, T load_mag = 5.0e7) {
     if (is_multigrid) {
-        multigrid_solve<T, Assembler>(nxe, SR, nsmooth, ninnercyc, cycle_type, load_mag);
+        multigrid_solve<T, Assembler>(nxe, SR, nsmooth, ninnercyc, cycle_type, omega, load_mag);
     } else {
         solve_direct<T, Assembler>(nxe, SR, load_mag);
     }
@@ -439,8 +446,14 @@ int main(int argc, char **argv) {
     int n_vcycles = 50;
     double pressure = 8.0e6;
 
-    int nsmooth = 2; // typically faster right now
-    int ninnercyc = 2; // inner V-cycles to precond K-cycle
+    double omega = 0.3;
+
+    // int nsmooth = 2; // typically faster right now
+    // int ninnercyc = 2; // inner V-cycles to precond K-cycle
+
+    // old GSMC settings
+    int nsmooth = 1;
+    int ninnercyc = 1;
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
     std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
@@ -466,6 +479,13 @@ int main(int argc, char **argv) {
                 SR = std::atof(argv[++i]);
             } else {
                 std::cerr << "Missing value for --SR\n";
+                return 1;
+            }
+        }  else if (strcmp(arg, "--omega") == 0) {
+            if (i + 1 < argc) {
+                omega = std::atof(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --omega\n";
                 return 1;
             }
         } else if (strcmp(arg, "--pressure") == 0) {
@@ -523,15 +543,15 @@ int main(int argc, char **argv) {
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, pressure);
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, pressure);
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, pressure);
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }

@@ -1,4 +1,4 @@
-include ../Makefile.in
+include ../../Makefile.in
 
 PY_EXT = $(shell python3-config --extension-suffix)
 CUDA_LINK := -lcublas -lcusparse -lcudart -lcusolver

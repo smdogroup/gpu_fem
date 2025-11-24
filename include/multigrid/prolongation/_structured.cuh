@@ -8,7 +8,7 @@ enum ProlongationGeom : int {
 };
 
 template <typename T, ProlongationGeom geom>
-__global__ static void k_plate_prolongate(const int nxe_coarse, const int nxe_fine, 
+__global__ static void k_plate_prolongate(const int order, const int nxe_coarse, const int nxe_fine, 
     const int nelems_fine, const int *d_coarse_iperm, const int *d_fine_iperm,
     const T *coarse_soln_in, T *dx_fine, T *d_fine_wts) {
     // prolongation for linear cquad4 shells in plate geometry (corrects for arbitrary reordering here..)
@@ -21,16 +21,18 @@ __global__ static void k_plate_prolongate(const int nxe_coarse, const int nxe_fi
     // TODO : on other meshes, use elem conn and some graph maps (not plate method here which is simpler)
 
     // write it first, then we'll add some device helper methods?
-    int nx_c = nxe_coarse + 1, nx_f = nxe_fine + 1;
+    int nx_c = order * nxe_coarse + 1, nx_f = order * nxe_fine + 1;
     int ixe_f = fine_elem % nxe_fine, iye_f = fine_elem / nxe_fine;
     int ixe_c = ixe_f / 2, iye_c = iye_f / 2;
     // int coarse_elem = nxe_coarse * iye_c + ixe_c;
+    int nx = order + 1;
+    int nx2 = nx * nx; // num nodes in each element
 
-    for (int local_fine = 0; local_fine < 4; local_fine++) {
-        int ix_f = ixe_f + local_fine % 2, iy_f = iye_f + local_fine / 2;
+    for (int local_fine = 0; local_fine < nx2; local_fine++) {
+        int ix_f = order * ixe_f + local_fine % nx, iy_f = order * iye_f + local_fine / nx;
 
-        for (int local_coarse = 0; local_coarse < 4; local_coarse++) {
-            int ix_c = ixe_c + local_coarse % 2, iy_c = iye_c + local_coarse / 2;
+        for (int local_coarse = 0; local_coarse < nx2; local_coarse++) {
+            int ix_c = order * ixe_c + local_coarse % nx, iy_c = order * iye_c + local_coarse / nx;
 
             // now compute dx and dy between coarse and fine nodes..
             int ix_cf = 2 * ix_c, iy_cf = 2 * iy_c;
@@ -72,7 +74,7 @@ __global__ static void k_plate_prolongate(const int nxe_coarse, const int nxe_fi
 }
 
 template <typename T, ProlongationGeom geom>
-__global__ static void k_plate_restrict(const int nxe_coarse, const int nxe_fine, 
+__global__ static void k_plate_restrict(const int order, const int nxe_coarse, const int nxe_fine, 
     const int nelems_fine, const int *d_coarse_iperm, const int *d_fine_iperm,
     const T *defect_fine_in, T *defect_coarse_out, T *d_coarse_wts) {
     // restriction for linear cquad4 shells in plate geometry (corrects for arbitrary reordering here..)
@@ -85,16 +87,18 @@ __global__ static void k_plate_restrict(const int nxe_coarse, const int nxe_fine
     // TODO : on other meshes, use elem conn and some graph maps (not plate method here which is simpler)
     
     // write it first, then we'll add some device helper methods?
-    int nx_c = nxe_coarse + 1, nx_f = nxe_fine + 1;
+    int nx_c = order * nxe_coarse + 1, nx_f = order * nxe_fine + 1;
     int ixe_f = fine_elem % nxe_fine, iye_f = fine_elem / nxe_fine;
     int ixe_c = ixe_f / 2, iye_c = iye_f / 2;
     // int coarse_elem = nxe_coarse * iye_c + ixe_c;
+    int nx = order + 1;
+    int nx2 = nx * nx;
 
-    for (int local_fine = 0; local_fine < 4; local_fine++) {
-        int ix_f = ixe_f + local_fine % 2, iy_f = iye_f + local_fine / 2;
+    for (int local_fine = 0; local_fine < nx2; local_fine++) {
+        int ix_f = order * ixe_f + local_fine % nx, iy_f = order * iye_f + local_fine / nx;
 
-        for (int local_coarse = 0; local_coarse < 4; local_coarse++) {
-            int ix_c = ixe_c + local_coarse % 2, iy_c = iye_c + local_coarse / 2;
+        for (int local_coarse = 0; local_coarse < nx2; local_coarse++) {
+            int ix_c = order * ixe_c + local_coarse % nx, iy_c = order * iye_c + local_coarse / nx;
 
             // now compute dx and dy between coarse and fine nodes..
             int ix_cf = 2 * ix_c, iy_cf = 2 * iy_c;

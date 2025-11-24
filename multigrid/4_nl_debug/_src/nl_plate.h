@@ -47,7 +47,7 @@ class NonlinearPlateGPUSolver {
     using Physics = IsotropicShell<T, Data, true>;
 
     // if want MITC basis
-    // using Basis = LagrangeQuadBasis<T, Quad, 2>;
+    // using Basis = LagrangeQuadBasis<T, Quad, 1>;
     // using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
 
     // if want chebyshev basis

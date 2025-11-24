@@ -47,7 +47,7 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth) {
     using T = double;   
     using Quad = QuadLinearQuadrature<T>;
     using Director = LinearizedRotation<T>;
-    using Basis = LagrangeQuadBasis<T, Quad, 2>;
+    using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Geo = Basis::Geo;
     constexpr bool has_ref_axis = false;
     constexpr bool is_nonlinear = false;
@@ -211,7 +211,7 @@ void solve_linear_direct(MPI_Comm &comm, int level, double SR) {
 
   using Quad = QuadLinearQuadrature<T>;
   using Director = LinearizedRotation<T>;
-  using Basis = LagrangeQuadBasis<T, Quad, 2>;
+  using Basis = LagrangeQuadBasis<T, Quad, 1>;
   using Geo = Basis::Geo;
 
   constexpr bool has_ref_axis = false;

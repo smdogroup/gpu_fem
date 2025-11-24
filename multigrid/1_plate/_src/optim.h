@@ -37,7 +37,7 @@ class TacsGpuMultigridSolver {
     // FEM typedefs
     using Quad = QuadLinearQuadrature<T>;
     using Director = LinearizedRotation<T>;
-    using Basis = LagrangeQuadBasis<T, Quad, 2>;
+    using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Data = ShellIsotropicData<T, false>;
     using Physics = IsotropicShell<T, Data, false>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;

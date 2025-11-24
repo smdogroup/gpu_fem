@@ -25,7 +25,7 @@ void run_linear_static(std::string ordering, std::string fill_type, bool LU_solv
 
     using Quad = QuadLinearQuadrature<T>;
     using Director = LinearizedRotation<T>;
-    using Basis = LagrangeQuadBasis<T, Quad, 2>;
+    using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Geo = Basis::Geo;
 
     constexpr bool has_ref_axis = false;

@@ -403,7 +403,7 @@ int main(int argc, char **argv) {
 
     // // for faster debugging and compile time, just uncomment this and comment below section out (only compiles a single element)
     // printf("AOB mesh with MITC4 elements, level %d and SR %.2e\n------------\n", level, SR);
-    // using Basis = LagrangeQuadBasis<T, Quad, 2>;
+    // using Basis = LagrangeQuadBasis<T, Quad, 1>;
     // using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
     // time_wing_multigrid<T, Assembler>(comm, level, SR, nsmooth, ninnercyc, cycle_type);
 
@@ -415,7 +415,7 @@ int main(int argc, char **argv) {
 
     // printf("AOB level %d mesh with %s elements, and SR %.2e\n------------\n", level, elem_type.c_str(), SR);
     // if (elem_type == "MITC4") {
-    //     using Basis = LagrangeQuadBasis<T, Quad, 2>;
+    //     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     //     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
     //     time_wing_multigrid<T, Assembler>(comm, level, SR, nsmooth, ninnercyc, cycle_type);
     // } else if (elem_type == "CFI4") {

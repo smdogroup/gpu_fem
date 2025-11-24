@@ -62,7 +62,7 @@ int main() {
     constexpr bool is_nonlinear = false;
     using Data = ShellIsotropicData<T, has_ref_axis>;
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
-    using Basis = LagrangeQuadBasis<T, Quad, 2>;
+    using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
 
     const SCALER scaler  = LINE_SEARCH;

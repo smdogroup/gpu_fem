@@ -43,7 +43,7 @@ void solve_linear(MPI_Comm &comm, bool full_LU = true) {
 
   using Quad = QuadLinearQuadrature<T>;
   using Director = LinearizedRotation<T>;
-  using Basis = LagrangeQuadBasis<T, Quad, 2>;
+  using Basis = LagrangeQuadBasis<T, Quad, 1>;
   using Geo = Basis::Geo;
 
   constexpr bool has_ref_axis = false;
@@ -152,7 +152,7 @@ void solve_nonlinear(MPI_Comm &comm) {
 
   using Quad = QuadLinearQuadrature<T>;
   using Director = LinearizedRotation<T>;
-  using Basis = LagrangeQuadBasis<T, Quad, 2>;
+  using Basis = LagrangeQuadBasis<T, Quad, 1>;
   using Geo = Basis::Geo;
 
   constexpr bool has_ref_axis = false;

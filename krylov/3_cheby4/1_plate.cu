@@ -637,7 +637,7 @@ int main(int argc, char **argv) {
 
     printf("plate mesh with geomNL %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
     if (elem_type == "MITC4") {
-        using Basis = LagrangeQuadBasis<T, Quad, 2>;
+        using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(solve_mode, nxe, SR, ORDER, nsmooth, omega, pressure);
     } else if (elem_type == "CFI4") {

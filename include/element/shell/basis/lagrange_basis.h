@@ -2,19 +2,20 @@
 #include "a2dcore.h"
 #include "quadrature.h"
 
-// technically order = 2 is linear.. change this later
-template <typename T, class Quadrature_, int order = 2>
+// technically nx = 2 is linear.. change this later
+template <typename T, class Quadrature_, int order = 1>
 class LagrangeQuadBasis {
    public:
     using Quadrature = Quadrature_;
+    static constexpr int32_t nx = order + 1; 
 
     // Required for loading solution data
-    static constexpr int32_t num_nodes = order * order;
+    static constexpr int32_t num_nodes = nx * nx;
     static constexpr int32_t param_dim = 2;
 
     // MITC method => number of tying points for each strain component
-    static constexpr int32_t mitcLevel2 = order * (order - 1);
-    static constexpr int32_t mitcLevel3 = (order - 1) * (order - 1);
+    static constexpr int32_t mitcLevel2 = nx * (nx - 1);
+    static constexpr int32_t mitcLevel3 = (nx - 1) * (nx - 1);
     static constexpr int32_t num_tying_components = 5;  // five gij components for tying strains
     static constexpr int32_t num_all_tying_points = 4 * mitcLevel2 + mitcLevel3;
 
@@ -50,24 +51,24 @@ class LagrangeQuadBasis {
 
     // shape functions here
     __HOST_DEVICE__ static void lagrangeLobatto1D(const T u, T *N) {
-        if constexpr (order == 2) {
+        if constexpr (nx == 2) {
             N[0] = 0.5 * (1.0 - u);
             N[1] = 0.5 * (1.0 + u);
         }
     }
 
-    template <int tyingOrder>
+    template <int tyingnx>
     __HOST_DEVICE__ static void lagrangeLobatto1D_tying(const T u, T *N) {
-        if constexpr (tyingOrder == 1) {
+        if constexpr (tyingnx == 1) {
             N[0] = 1.0;
-        } else if constexpr (tyingOrder == 2) {
+        } else if constexpr (tyingnx == 2) {
             N[0] = 0.5 * (1.0 - u);
             N[1] = 0.5 * (1.0 + u);
         }
     }
 
     __HOST_DEVICE__ static void lagrangeLobatto1DGrad(const T u, T *N, T *Nd) {
-        if constexpr (order == 2) {
+        if constexpr (nx == 2) {
             N[0] = 0.5 * (1.0 - u);
             N[1] = 0.5 * (1.0 + u);
 
@@ -79,15 +80,15 @@ class LagrangeQuadBasis {
 
     __HOST_DEVICE__ static void lagrangeLobatto2D(const T xi, const T eta, T *N) {
         // compute N_i(u) shape function values at each node
-        if constexpr (order == 2) {
-            T na[order], nb[order];
+        if constexpr (nx == 2) {
+            T na[nx], nb[nx];
             lagrangeLobatto1D(xi, na);
             lagrangeLobatto1D(eta, nb);
 
             // now compute 2D N_a(xi) * N_b(eta) for each node
-            for (int ieta = 0; ieta < order; ieta++) {
-                for (int ixi = 0; ixi < order; ixi++) {
-                    N[order * ieta + ixi] = na[ixi] * nb[ieta];
+            for (int ieta = 0; ieta < nx; ieta++) {
+                for (int ixi = 0; ixi < nx; ixi++) {
+                    N[nx * ieta + ixi] = na[ixi] * nb[ieta];
                 }
             }
         }
@@ -96,18 +97,18 @@ class LagrangeQuadBasis {
     __HOST_DEVICE__ static void lagrangeLobatto2DGrad(const T xi, const T eta, T *N, T *dNdxi,
                                                       T *dNdeta) {
         // compute N_i(u) shape function values at each node
-        if constexpr (order == 2) {
-            T na[order], nb[order];
-            T dna[order], dnb[order];
+        if constexpr (nx == 2) {
+            T na[nx], nb[nx];
+            T dna[nx], dnb[nx];
             lagrangeLobatto1DGrad(xi, na, dna);
             lagrangeLobatto1DGrad(eta, nb, dnb);
 
             // now compute 2D N_a(xi) * N_b(eta) for each node
-            for (int ieta = 0; ieta < order; ieta++) {
-                for (int ixi = 0; ixi < order; ixi++) {
-                    N[order * ieta + ixi] = na[ixi] * nb[ieta];
-                    dNdxi[order * ieta + ixi] = dna[ixi] * nb[ieta];
-                    dNdeta[order * ieta + ixi] = na[ixi] * dnb[ieta];
+            for (int ieta = 0; ieta < nx; ieta++) {
+                for (int ixi = 0; ixi < nx; ixi++) {
+                    N[nx * ieta + ixi] = na[ixi] * nb[ieta];
+                    dNdxi[nx * ieta + ixi] = dna[ixi] * nb[ieta];
+                    dNdeta[nx * ieta + ixi] = na[ixi] * dnb[ieta];
                 }
             }
         }
@@ -131,8 +132,8 @@ class LagrangeQuadBasis {
 
     __HOST_DEVICE__ static void getNodePoint(const int n, T pt[]) {
         // get xi, eta coordinates of each node point
-        pt[0] = -1.0 + (2.0 / (order - 1)) * (n % order);
-        pt[1] = -1.0 + (2.0 / (order - 1)) * (n / order);
+        pt[0] = -1.0 + (2.0 / (nx - 1)) * (n % nx);
+        pt[1] = -1.0 + (2.0 / (nx - 1)) * (n / nx);
     }
 
     template <int vars_per_node, int num_fields>
@@ -193,7 +194,7 @@ class LagrangeQuadBasis {
     }  // end of interpFieldsGrad method
 
     __HOST_DEVICE__ static void getTyingKnots(T red_knots[], T full_knots[]) {
-        if constexpr (order == 2) {
+        if constexpr (nx == 2) {
             red_knots[0] = 0.0;
             full_knots[0] = -1.0;
             full_knots[1] = 1.0;
@@ -203,73 +204,73 @@ class LagrangeQuadBasis {
     // section for tying point interpolations
     template <int icomp>
     __HOST_DEVICE__ static void getTyingPoint(const int n, T pt[]) {
-        T red_knots[order * (order - 1)], full_knots[order * order];
+        T red_knots[nx * (nx - 1)], full_knots[nx * nx];
         getTyingKnots(red_knots, full_knots);
 
         // use constexpr here to prevent warp divergence
         if constexpr (icomp == 0 || icomp == 4) {  // g11 or g13
             // 1-dir uses reduced knots for 1j strains
-            // also order*(order-1) matrix but order-1 columns
-            pt[0] = red_knots[n % (order - 1)];
-            pt[1] = full_knots[n / (order - 1)];
+            // also nx*(nx-1) matrix but nx-1 columns
+            pt[0] = red_knots[n % (nx - 1)];
+            pt[1] = full_knots[n / (nx - 1)];
         } else if constexpr (icomp == 1 || icomp == 3) {  // g22 or g23
             // 2-dir uses reduced knots for 2j strains
-            // also order*(order-1) matrix but order columns
-            pt[0] = full_knots[n % order];
-            pt[1] = red_knots[n / order];
+            // also nx*(nx-1) matrix but nx columns
+            pt[0] = full_knots[n % nx];
+            pt[1] = red_knots[n / nx];
         } else if constexpr (icomp == 2) {  // g12
             // 1-dir and 2-dir use reduced knots here
-            pt[0] = red_knots[n % (order - 1)];
-            pt[1] = red_knots[n / (order - 1)];
+            pt[0] = red_knots[n % (nx - 1)];
+            pt[1] = red_knots[n / (nx - 1)];
         }
     }
 
     template <int icomp>
     __HOST_DEVICE__ static void getTyingInterp(const T pt[], T N[]) {
         // get 1d knot vectors
-        // T red_knots[(order-1)], full_knots[order];
+        // T red_knots[(nx-1)], full_knots[nx];
         // getTyingKnots(red_knots, full_knots);
 
-        T na[order], nb[order];
-        lagrangeLobatto1D_tying<order>(pt[0], na);
-        lagrangeLobatto1D_tying<order>(pt[1], nb);
+        T na[nx], nb[nx];
+        lagrangeLobatto1D_tying<nx>(pt[0], na);
+        lagrangeLobatto1D_tying<nx>(pt[1], nb);
 
-        T nar[order], nbr[order];
-        lagrangeLobatto1D_tying<order - 1>(pt[0], nar);
-        lagrangeLobatto1D_tying<order - 1>(pt[1], nbr);
+        T nar[nx], nbr[nx];
+        lagrangeLobatto1D_tying<nx - 1>(pt[0], nar);
+        lagrangeLobatto1D_tying<nx - 1>(pt[1], nbr);
 
         if constexpr (icomp == 0) {
             // g11
-            for (int j = 0; j < order; j++) {
-                for (int i = 0; i < order - 1; i++, N++) {
+            for (int j = 0; j < nx; j++) {
+                for (int i = 0; i < nx - 1; i++, N++) {
                     N[0] = nar[i] * nb[j];
                 }
             }
         } else if constexpr (icomp == 2) {
             // g12
-            for (int j = 0; j < order - 1; j++) {
-                for (int i = 0; i < order - 1; i++, N++) {
+            for (int j = 0; j < nx - 1; j++) {
+                for (int i = 0; i < nx - 1; i++, N++) {
                     N[0] = nar[i] * nbr[j];
                 }
             }
         } else if constexpr (icomp == 4) {
             // g13
-            for (int j = 0; j < order; j++) {
-                for (int i = 0; i < order - 1; i++, N++) {
+            for (int j = 0; j < nx; j++) {
+                for (int i = 0; i < nx - 1; i++, N++) {
                     N[0] = nar[i] * nb[j];
                 }
             }
         } else if constexpr (icomp == 1) {
             // g22
-            for (int j = 0; j < order - 1; j++) {
-                for (int i = 0; i < order; i++, N++) {
+            for (int j = 0; j < nx - 1; j++) {
+                for (int i = 0; i < nx; i++, N++) {
                     N[0] = na[i] * nbr[j];
                 }
             }
         } else if constexpr (icomp == 3) {
             // g23
-            for (int j = 0; j < order - 1; j++) {
-                for (int i = 0; i < order; i++, N++) {
+            for (int j = 0; j < nx - 1; j++) {
+                for (int i = 0; i < nx; i++, N++) {
                     N[0] = na[i] * nbr[j];
                 }
             }

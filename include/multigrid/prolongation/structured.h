@@ -8,6 +8,8 @@ template <class Assembler, ProlongationGeom geom>
 class StructuredProlongation {
   public:
     using T = double;
+    using Basis = Assembler::Basis;
+    static constexpr int32_t order = Basis::order;
     static constexpr bool structured = true;
     static constexpr bool assembly = false;
 
@@ -40,7 +42,7 @@ class StructuredProlongation {
         dim3 block(32);
         int nblocks_x = (nelems_fine + 31) / 32;
         dim3 grid(nblocks_x);
-        k_plate_prolongate<T, geom><<<grid, block>>>(nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm,
+        k_plate_prolongate<T, geom><<<grid, block>>>(order, nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm,
                                                d_fine_iperm, coarse_soln_in.getPtr(),
                                                dx_fine.getPtr(), d_weights);
 
@@ -61,7 +63,7 @@ class StructuredProlongation {
         dim3 block(32);
         int nblocks_x = (nelems_fine + 31) / 32;
         dim3 grid(nblocks_x);
-        k_plate_restrict<T, geom><<<grid, block>>>(nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm,
+        k_plate_restrict<T, geom><<<grid, block>>>(order, nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm,
                                              d_fine_iperm, fine_vec_in.getPtr(),
                                              coarse_vec_out.getPtr(), d_weights);
 
