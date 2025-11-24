@@ -45,10 +45,12 @@ class ElementAssembler {
 
     ElementAssembler(int32_t num_geo_nodes_, int32_t num_vars_nodes_, int32_t num_elements_,
                      HostVec<int32_t> &geo_conn, HostVec<int32_t> &vars_conn, HostVec<T> &xpts,
-                     HostVec<int> &bcs, HostVec<Data> &physData, int32_t num_components_ = 0,
-                     HostVec<int> elem_component = HostVec<int>(0));
+                     HostVec<int> &bcs, HostVec<Data> &compData, int32_t num_components_ = 1,
+                     HostVec<int> elem_component = HostVec<int>(1));
     void moveBsrDataToDevice();
     static DerivedAssembler createFromBDF(TACSMeshLoader &mesh_loader, Data single_data);
+    static DerivedAssembler createFromBDFComponent(TACSMeshLoader &mesh_loader,
+                                                   HostVec<Data> comp_data_);
     __HOST__ void apply_bcs(Vec<T> &vec, bool can_print = false);
     void apply_bcs(Mat &mat, bool can_print = false);
 #ifdef USE_GPU
@@ -60,6 +62,7 @@ class ElementAssembler {
     void set_variables(Vec<T> &newVars);
     void set_acceleration(Vec<T> &newAccel);
     void set_design_variables(Vec<T> &newDVs);
+    void set_component_data(Vec<Data> &newCompData) { newCompData.copyValuesTo(compData); }
     void add_energy(T *glob_U, bool can_print = false);
     void add_residual(Vec<T> &res, bool can_print = false);
     void add_jacobian(Vec<T> &res, Mat &mat, bool can_print = false);
@@ -142,7 +145,7 @@ class ElementAssembler {
         elem_components.free();
         xpts.free();
         vars.free();
-        physData.free();
+        compData.free();
         bsr_data.free();
         dvs.free();
     }
@@ -158,7 +161,7 @@ class ElementAssembler {
     Vec<int> bcs, elem_components;
     Vec<T> xpts, vars, dvs;
     Vec<T> accel;
-    Vec<Data> physData;
+    Vec<Data> compData;
     BsrData bsr_data;
 };  // end of ElementAssembler class declaration
 
@@ -167,7 +170,7 @@ template <typename ElemGroup, typename T, typename Basis, typename Phys,
 ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::ElementAssembler(
     int32_t num_geo_nodes_, int32_t num_vars_nodes_, int32_t num_elements_,
     HostVec<int32_t> &geo_conn, HostVec<int32_t> &vars_conn, HostVec<T> &xpts, HostVec<int> &bcs,
-    HostVec<Data> &physData, int32_t num_components_, HostVec<int> elem_components)
+    HostVec<Data> &compData, int32_t num_components_, HostVec<int> elem_components)
     : num_geo_nodes(num_geo_nodes_),
       num_vars_nodes(num_vars_nodes_),
       num_elements(num_elements_),
@@ -198,7 +201,7 @@ ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::ElementAssembler(
     this->vars_conn = vars_conn.createDeviceVec();
     this->xpts = xpts.createDeviceVec();
     this->bcs = bcs.createDeviceVec();
-    this->physData = physData.createDeviceVec(false);
+    this->compData = compData.createDeviceVec(false);  // false means it just does copy no malloc
     this->elem_components = elem_components.createDeviceVec();
     this->dvs = DeviceVec<T>(ndvs);
 
@@ -209,7 +212,7 @@ ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::ElementAssembler(
     this->vars_conn = vars_conn;
     this->xpts = xpts;
     this->bcs = bcs;
-    this->physData = physData;
+    this->compData = compData;
     this->elem_components = elem_components;
     this->dvs = HostVec<T>(ndvs);
 
@@ -234,13 +237,38 @@ ElemGroup ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::createFromBDF(
     HostVec<int> bcs_vec(num_bcs, bcs);
     HostVec<int> elem_components_vec(num_elements, elem_components);
     HostVec<T> xpts_vec(spatial_dim * num_nodes, xpts);
-    HostVec<Data> physData_vec(num_elements, single_data);
+    HostVec<Data> compData_vec(num_components, single_data);
 
     // printf("num_components = %d\n", num_components);
 
     // call base constructor
     return ElemGroup(num_nodes, num_nodes, num_elements, elem_conn_vec, elem_conn_vec, xpts_vec,
-                     bcs_vec, physData_vec, num_components, elem_components_vec);
+                     bcs_vec, compData_vec, num_components, elem_components_vec);
+}
+
+template <typename ElemGroup, typename T, typename Basis, typename Phys,
+          template <typename> class Vec, template <typename> class Mat>
+ElemGroup ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::createFromBDFComponent(
+    TACSMeshLoader &mesh_loader, HostVec<Data> comp_data_) {
+    int vars_per_node = Phys::vars_per_node;  // input
+
+    int num_nodes, num_elements, num_bcs, num_components;
+    int *elem_conn, *bcs, *elem_components;
+    T *xpts;
+
+    mesh_loader.getAssemblerCreatorData(vars_per_node, num_nodes, num_elements, num_bcs,
+                                        num_components, elem_conn, bcs, elem_components, xpts);
+
+    // make HostVec objects here for Assembler
+    HostVec<int> elem_conn_vec(vars_nodes_per_elem * num_elements, elem_conn);
+    HostVec<int> bcs_vec(num_bcs, bcs);
+    HostVec<int> elem_components_vec(num_elements, elem_components);
+    HostVec<T> xpts_vec(spatial_dim * num_nodes, xpts);
+    // printf("num_components = %d\n", num_components);
+
+    // call base constructor
+    return ElemGroup(num_nodes, num_nodes, num_elements, elem_conn_vec, elem_conn_vec, xpts_vec,
+                     bcs_vec, comp_data_, num_components, elem_components_vec);
 }
 
 template <typename ElemGroup, typename T, typename Basis, typename Phys,
@@ -266,7 +294,7 @@ T ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::_compute_mass() {
     dim3 grid(nblocks);
 
     k_compute_mass<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, geo_conn, xpts, physData, d_mass.getPtr());
+        <<<grid, block>>>(num_elements, elem_components, geo_conn, xpts, compData, d_mass.getPtr());
 
     CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -288,7 +316,7 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::_compute_mass_DVsens
     dim3 grid(nblocks);
 
     k_compute_mass_DVsens<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, elem_components, geo_conn, xpts, physData, dfdx);
+        <<<grid, block>>>(num_elements, elem_components, geo_conn, xpts, compData, dfdx);
 
 #endif
 };
@@ -309,15 +337,15 @@ T ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::_compute_ks_failure(
     // first compute the max failure index (not KS), so we can prevent overflow
     DeviceVec<T> d_max_fail(1);
     k_compute_max_failure<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, rho_KS,
-                          safetyFactor, d_max_fail.getPtr());
+        <<<grid, block>>>(num_elements, elem_components, geo_conn, vars_conn, xpts, vars, compData,
+                          rho_KS, safetyFactor, d_max_fail.getPtr());
     T h_max_fail = d_max_fail.createHostVec()[0];
 
     // then do sum KS max fail
     DeviceVec<T> d_sum_ksfail(1);
     k_compute_ksfailure<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, rho_KS,
-                          safetyFactor, h_max_fail, d_sum_ksfail.getPtr());
+        <<<grid, block>>>(num_elements, elem_components, geo_conn, vars_conn, xpts, vars, compData,
+                          rho_KS, safetyFactor, h_max_fail, d_sum_ksfail.getPtr());
     // add back global non-smooth max (overflow prevention)
     T sumexp_ks_fail = d_sum_ksfail.createHostVec()[0];
     T h_ksmax_fail = h_max_fail + log(sumexp_ks_fail) / rho_KS;
@@ -355,14 +383,14 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::compute_visualizatio
     int nblocks = (num_elements + block.y - 1) / block.y;
     dim3 grid(nblocks);
 
-    k_vis_failure_index<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, fail_index);
+    k_vis_failure_index<T, ElemGroup, Data, elems_per_block, Vec><<<grid, block>>>(
+        num_elements, elem_components, geo_conn, vars_conn, xpts, vars, compData, fail_index);
 
-    k_vis_strains<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, strains);
+    k_vis_strains<T, ElemGroup, Data, elems_per_block, Vec><<<grid, block>>>(
+        num_elements, elem_components, geo_conn, vars_conn, xpts, vars, compData, strains);
 
-    k_vis_stresses<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, stresses);
+    k_vis_stresses<T, ElemGroup, Data, elems_per_block, Vec><<<grid, block>>>(
+        num_elements, elem_components, geo_conn, vars_conn, xpts, vars, compData, stresses);
 
 #endif
 };
@@ -388,8 +416,8 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::_compute_ks_failure_
         // first compute the max failure index (not KS), so we can prevent overflow
         DeviceVec<T> d_max_fail(1);
         k_compute_max_failure<T, ElemGroup, Data, elems_per_block, Vec>
-            <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, rho_KS,
-                              safetyFactor, d_max_fail.getPtr());
+            <<<grid, block>>>(num_elements, elem_components, geo_conn, vars_conn, xpts, vars,
+                              compData, rho_KS, safetyFactor, d_max_fail.getPtr());
         h_max_fail = d_max_fail.createHostVec()[0];
     }
 
@@ -399,15 +427,15 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::_compute_ks_failure_
         // second, do sum ks fail (needed for denom of KS derivs)
         DeviceVec<T> d_sum_ksfail(1);
         k_compute_ksfailure<T, ElemGroup, Data, elems_per_block, Vec>
-            <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, rho_KS,
-                              safetyFactor, h_max_fail, d_sum_ksfail.getPtr());
+            <<<grid, block>>>(num_elements, elem_components, geo_conn, vars_conn, xpts, vars,
+                              compData, rho_KS, safetyFactor, h_max_fail, d_sum_ksfail.getPtr());
         // add back global non-smooth max (overflow prevention)
         h_sumexp_ks_fail = d_sum_ksfail.createHostVec()[0];
     }
 
     // now compute the DVsens gradient
     k_compute_ksfailure_DVsens<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, elem_components, geo_conn, vars_conn, xpts, vars, physData,
+        <<<grid, block>>>(num_elements, elem_components, geo_conn, vars_conn, xpts, vars, compData,
                           rho_KS, safetyFactor, h_max_fail, h_sumexp_ks_fail, dfdx);
 
     CHECK_CUDA(cudaDeviceSynchronize());
@@ -438,8 +466,8 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::_compute_ks_failure_
         // first compute the max failure index (not KS), so we can prevent overflow
         DeviceVec<T> d_max_fail(1);
         k_compute_max_failure<T, ElemGroup, Data, elems_per_block, Vec>
-            <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, rho_KS,
-                              safetyFactor, d_max_fail.getPtr());
+            <<<grid, block>>>(num_elements, elem_components, geo_conn, vars_conn, xpts, vars,
+                              compData, rho_KS, safetyFactor, d_max_fail.getPtr());
         h_max_fail = d_max_fail.createHostVec()[0];
     }
 
@@ -449,16 +477,16 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::_compute_ks_failure_
         // second, do sum ks fail (needed for denom of KS derivs)
         DeviceVec<T> d_sum_ksfail(1);
         k_compute_ksfailure<T, ElemGroup, Data, elems_per_block, Vec>
-            <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, rho_KS,
-                              safetyFactor, h_max_fail, d_sum_ksfail.getPtr());
+            <<<grid, block>>>(num_elements, elem_components, geo_conn, vars_conn, xpts, vars,
+                              compData, rho_KS, safetyFactor, h_max_fail, d_sum_ksfail.getPtr());
         // add back global non-smooth max (overflow prevention)
         h_sumexp_ks_fail = d_sum_ksfail.createHostVec()[0];
     }
 
     // now compute the SVsens gradient
     k_compute_ksfailure_SVsens<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, rho_KS,
-                          safetyFactor, h_max_fail, h_sumexp_ks_fail, dfdu);
+        <<<grid, block>>>(num_elements, elem_components, geo_conn, vars_conn, xpts, vars, compData,
+                          rho_KS, safetyFactor, h_max_fail, h_sumexp_ks_fail, dfdu);
 
     CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -493,7 +521,7 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::_compute_adjResProdu
     // very similar kernel to the residual call
     // add into dfdx
     k_compute_adjResProduct<T, ElemGroup, Data, elems_per_block, Vec><<<grid, block>>>(
-        num_elements, elem_components, geo_conn, vars_conn, xpts, vars, physData, psi, dfdx);
+        num_elements, elem_components, geo_conn, vars_conn, xpts, vars, compData, psi, dfdx);
 
 #endif
 };
@@ -600,7 +628,7 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::set_acceleration(Vec
 template <typename ElemGroup, typename T, typename Basis, typename Phys,
           template <typename> class Vec, template <typename> class Mat>
 void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::set_design_variables(Vec<T> &newDVs) {
-// call kernel function to update the physData of each element, component by component
+// call kernel function to update the compData of each element, component by component
 #ifdef USE_GPU
 
     newDVs.copyValuesTo(dvs);
@@ -611,7 +639,7 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::set_design_variables
     dim3 grid(nblocks);
 
     k_set_design_variables<T, elems_per_block, Data, Vec>
-        <<<grid, block>>>(num_elements, newDVs, elem_components, physData);
+        <<<grid, block>>>(num_elements, newDVs, elem_components, compData);
 
     CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -638,12 +666,12 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::add_energy(T *glob_U
     dim3 grid(nblocks);
     constexpr int32_t elems_per_block = ElemGroup::energy_block.x;
 
-    k_add_energy<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, glob_U);
+    k_add_energy<T, ElemGroup, Data, elems_per_block, Vec><<<grid, block>>>(
+        num_elements, elem_components, geo_conn, vars_conn, xpts, vars, compData, glob_U);
     CHECK_CUDA(cudaDeviceSynchronize());
 #else   // USE_GPU
     ElemGroup::template add_energy_cpu<Data, Vec>(num_elements, geo_conn, vars_conn, xpts, vars,
-                                                  physData, glob_U);
+                                                  compData, glob_U);
 #endif  // USE_GPU
 
     // print timing data
@@ -676,13 +704,13 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::add_residual(Vec<T> 
     dim3 grid(nblocks);
     constexpr int32_t elems_per_block = ElemGroup::res_block.x;
 
-    k_add_residual<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, vars, physData, res);
+    k_add_residual<T, ElemGroup, Data, elems_per_block, Vec><<<grid, block>>>(
+        num_elements, elem_components, geo_conn, vars_conn, xpts, vars, compData, res);
 
     CHECK_CUDA(cudaDeviceSynchronize());
 #else   // USE_GPU
     ElemGroup::template add_residual_cpu<Data, Vec>(num_elements, geo_conn, vars_conn, xpts, vars,
-                                                    physData, res);
+                                                    compData, res);
 #endif  // USE_GPU
 
     // permute residual (new => old rows see tests/reordering/README.md)
@@ -721,8 +749,9 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat_>::add_jacobian(
     dim3 grid(nblocks);
     constexpr int32_t elems_per_block = ElemGroup::jac_block.x;
 
-    k_add_jacobian<T, ElemGroup, Data, elems_per_block, Vec, Mat><<<grid, block>>>(
-        num_vars_nodes, num_elements, geo_conn, vars_conn, xpts, vars, physData, res, mat);
+    k_add_jacobian<T, ElemGroup, Data, elems_per_block, Vec, Mat>
+        <<<grid, block>>>(num_vars_nodes, num_elements, elem_components, geo_conn, vars_conn, xpts,
+                          vars, compData, res, mat);
 
     CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -730,7 +759,7 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat_>::add_jacobian(
     // maybe a way to call add_residual as same method on CPU
     // with elems_per_block = 1
     ElemGroup::template add_jacobian_cpu<Data, Vec, Mat>(num_vars_nodes, num_elements, geo_conn,
-                                                         vars_conn, xpts, vars, physData, res, mat);
+                                                         vars_conn, xpts, vars, compData, res, mat);
 #endif
 
     // print timing data
@@ -761,8 +790,8 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::add_mass_residual(Ve
     dim3 grid(nblocks);
     constexpr int32_t elems_per_block = ElemGroup::res_block.x;
 
-    k_add_mass_residual<T, ElemGroup, Data, elems_per_block, Vec>
-        <<<grid, block>>>(num_elements, geo_conn, vars_conn, xpts, accel, physData, res);
+    k_add_mass_residual<T, ElemGroup, Data, elems_per_block, Vec><<<grid, block>>>(
+        num_elements, elem_components, geo_conn, vars_conn, xpts, accel, compData, res);
 
     CHECK_CUDA(cudaDeviceSynchronize());
 #endif  // USE_GPU
@@ -804,7 +833,7 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat_>::add_mass_jacobian(
     constexpr int32_t elems_per_block = ElemGroup::jac_block.x;
 
     k_add_mass_jacobian<T, ElemGroup, Data, elems_per_block, Vec, Mat><<<grid, block>>>(
-        num_vars_nodes, num_elements, geo_conn, vars_conn, xpts, accel, physData, res, mat);
+        num_vars_nodes, num_elements, geo_conn, vars_conn, xpts, accel, compData, res, mat);
 
     CHECK_CUDA(cudaDeviceSynchronize());
 #endif

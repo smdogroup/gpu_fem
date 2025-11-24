@@ -6,9 +6,9 @@
 // add_jacobian fast kernel
 // -------------------
 template <typename T, int elems_per_block, class ElemGroup, class Data, template <typename> class Vec, class Mat>
-__GLOBAL__ static void k_add_jacobian_fast(int32_t vars_num_nodes, int32_t num_elements,
+__GLOBAL__ static void k_add_jacobian_fast(int32_t vars_num_nodes, int32_t num_elements, Vec<int32_t> elem_comp, 
                                         Vec<int32_t> geo_conn, Vec<int32_t> vars_conn, Vec<T> xpts,
-                                        Vec<T> vars, Vec<Data> physData, Mat mat) {
+                                        Vec<T> vars, Vec<Data> compData, Mat mat) {
     using Geo = typename ElemGroup::Geo;
     using Basis = typename ElemGroup::Basis;
     using Phys = typename ElemGroup::Phys;
@@ -28,7 +28,7 @@ __GLOBAL__ static void k_add_jacobian_fast(int32_t vars_num_nodes, int32_t num_e
 
     const int32_t *_geo_conn = geo_conn.getPtr();
     const int32_t *_vars_conn = vars_conn.getPtr();
-    const Data *_phys_data = physData.getPtr();
+    const Data *_comp_data = compData.getPtr();
 
     __SHARED__ T block_xpts[elems_per_block][nxpts_per_elem];
     __SHARED__ T block_vars[elems_per_block][vars_per_elem];
@@ -44,8 +44,12 @@ __GLOBAL__ static void k_add_jacobian_fast(int32_t vars_num_nodes, int32_t num_e
     vars.copyElemValuesToShared(active_thread, tid_xy, nthreads_xy, Phys::vars_per_node,
                                 Basis::num_nodes, vars_elem_conn, block_vars[local_elem]);
      __syncthreads();
+    
 
-    if (tid_xy == 0) block_data[local_elem] = _phys_data[global_elem];
+    if (tid_xy == 0) {
+        int icomp = elem_comp[global_elem];
+        block_data[local_elem] = _comp_data[icomp];
+    }
     __syncthreads();
 
     int ideriv = threadIdx.y;
@@ -136,9 +140,9 @@ __GLOBAL__ static void k_add_jacobian_fast(int32_t vars_num_nodes, int32_t num_e
 
 
 template <typename T, int elems_per_block, class ElemGroup, class Data, template <typename> class Vec>
-__GLOBAL__ static void k_add_residual_fast(int32_t vars_num_nodes, int32_t num_elements,
+__GLOBAL__ static void k_add_residual_fast(int32_t vars_num_nodes, int32_t num_elements, Vec<int32_t> elem_comp,
                                         Vec<int32_t> geo_conn, Vec<int32_t> vars_conn, Vec<T> xpts,
-                                        Vec<T> vars, Vec<Data> physData, Vec<T> res) {
+                                        Vec<T> vars, Vec<Data> compData, Vec<T> res) {
     using Geo = typename ElemGroup::Geo;
     using Basis = typename ElemGroup::Basis;
     using Phys = typename ElemGroup::Phys;
@@ -157,7 +161,7 @@ __GLOBAL__ static void k_add_residual_fast(int32_t vars_num_nodes, int32_t num_e
 
     const int32_t *_geo_conn = geo_conn.getPtr();
     const int32_t *_vars_conn = vars_conn.getPtr();
-    const Data *_phys_data = physData.getPtr();
+    const Data *_comp_data = compData.getPtr();
 
     __SHARED__ T block_xpts[elems_per_block][nxpts_per_elem];
     __SHARED__ T block_vars[elems_per_block][vars_per_elem];
@@ -174,7 +178,10 @@ __GLOBAL__ static void k_add_residual_fast(int32_t vars_num_nodes, int32_t num_e
                                 Basis::num_nodes, vars_elem_conn, block_vars[local_elem]);
      __syncthreads();
 
-    if (threadIdx.x == 0) block_data[local_elem] = _phys_data[global_elem];
+    if (threadIdx.x == 0) {
+        int icomp = elem_comp[global_elem];
+        block_data[local_elem] = _comp_data[icomp];
+    }
     __syncthreads();
 
     int iquad = threadIdx.x;

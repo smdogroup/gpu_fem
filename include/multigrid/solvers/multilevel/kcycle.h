@@ -173,7 +173,7 @@ class MultilevelKcycleSolver {
         }
     }
 
-    void solve() { this->solve(grids[0].d_defect, grids[0].d_soln); }
+    bool solve() { return this->solve(grids[0].d_defect, grids[0].d_soln); }
 
     void free() {
         if (is_free) return;

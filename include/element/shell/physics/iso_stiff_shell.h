@@ -1,11 +1,10 @@
 #pragma once
 
-#include "../a2d/a2dshellstrain1.h"
 #include "../a2d/a2disostress.h"
-
+#include "../a2d/a2dshellstrain1.h"
 #include "../data/iso_stiff.h"
-#include "isotropic_shell.h"
 #include "a2dcore.h"
+#include "isotropic_shell.h"
 
 template <typename T, class Data_, bool isNonlinear = false>
 class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
@@ -20,7 +19,8 @@ class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
     static constexpr bool is_nonlinear = isNonlinear;
     static constexpr int num_dvs = 4;
 
-    __HOST_DEVICE__ static void computeTyingStress(const T &scale, const Data &data, A2D::SymMat<T, 3> &e, A2D::SymMat<T, 3> &s) {
+    __HOST_DEVICE__ static void computeTyingStress(const T &scale, const Data &data,
+                                                   A2D::SymMat<T, 3> &e, A2D::SymMat<T, 3> &s) {
         /* compute membrane + trv shear stresses from the tying strains */
 
         /* 1) panel contributions to tying stress */
@@ -37,7 +37,8 @@ class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
         s[4] += scaled_A44 * e[4];
     }
 
-    __HOST_DEVICE__ static void computeBendingStress(const T &scale, const Data &data, const A2D::Vec<T, 3> &e, A2D::Vec<T, 3> &s) {
+    __HOST_DEVICE__ static void computeBendingStress(const T &scale, const Data &data,
+                                                     const A2D::Vec<T, 3> &e, A2D::Vec<T, 3> &s) {
         /* compute membrane + trv shear stresses from the tying strains */
 
         /* 1) panel bending stiffness contributions */
@@ -49,12 +50,12 @@ class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
         /* 2) stiffener stiffness contributions */
         // M11 = E * I / sp * k11 (axial bending moment from bending stress)
         // TODO : also need modification so B = 0 here too (take about overall centroid)
-        T stiff_D11 = data.E * data.getStiffenerI11(); // includes sp norm
+        T stiff_D11 = data.E * data.getStiffenerI11();  // includes sp norm
         s[0] += scale * stiff_D11 * e[0];
     }
 
-    __HOST_DEVICE__ static void computeDrillStress(const T &scale, const Data &data, const T ed[1], T sd[1]) {
-
+    __HOST_DEVICE__ static void computeDrillStress(const T &scale, const Data &data, const T ed[1],
+                                                   T sd[1]) {
         // panel contribution to drill stress
         IsotropicShell<T, Data_, isNonlinear>::computeDrillStress(scale, data, ed, sd);
 
@@ -77,8 +78,8 @@ class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
 
         // TODO : add thick offset part to this also?
         // and take about centroid so B neq 0
-        moments[0] += rho * data.getStiffenerArea() / sp;
-        moments[2] += rho * data.getStiffenerI11();
+        moments[0] += rho * physData.getStiffenerArea() / sp;
+        moments[2] += rho * physData.getStiffenerI11();
     }
 
     template <typename T2>
@@ -89,12 +90,13 @@ class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
                                                       A2D::ADObj<A2D::Vec<T2, 1>> &et,
                                                       A2D::ADObj<A2D::Vec<T2, 9>> &E,
                                                       A2D::ADObj<A2D::Vec<T2, 9>> &S) {
-
         // call panel contribution
-        IsotropicShell<T, Data_, isNonlinear>::computeQuadptStresses(physData, scale, u0x, u1x, e0ty, et, E, S);
+        IsotropicShell<T, Data_, isNonlinear>::computeQuadptStresses(physData, scale, u0x, u1x,
+                                                                     e0ty, et, E, S);
 
         // TODO : add stiffener contributions here
-        //   when not added (only affects visualized stresses, not strains), and no affect on optimization
+        //   when not added (only affects visualized stresses, not strains), and no affect on
+        //   optimization
     }  // end of computeQuadptStrains
 
     template <typename T2>

@@ -773,15 +773,17 @@ int TACSMeshLoader::scanBDFFile(const char *file_name) {
             // printf("%s\n", line);
 
             // currently unsupported settings in the TACS Meshloader C++ version from ESP/CAPS
-            bool caps_ignored_line = strncmp(line, "PARAM", 5) == 0 || strncmp(line, "SPCADD", 6) == 0 || strncmp(line, "MAT", 3) == 0 || 
-                strncmp(line, "PSHELL", 6) == 0 || strncmp(line, "PCOMP", 5) == 0 || strncmp(line, "DESVAR", 6) == 0 || strncmp(line, "DVPREL", 6) == 0 || strncmp(line, "CORD", 4) == 0;
+            bool caps_ignored_line =
+                strncmp(line, "PARAM", 5) == 0 || strncmp(line, "SPCADD", 6) == 0 ||
+                strncmp(line, "MAT", 3) == 0 || strncmp(line, "PSHELL", 6) == 0 ||
+                strncmp(line, "PCOMP", 5) == 0 || strncmp(line, "DESVAR", 6) == 0 ||
+                strncmp(line, "DVPREL", 6) == 0 || strncmp(line, "CORD", 4) == 0;
             if (prev_caps_ignore_line && strncmp(line, "*", 1) == 0) {
                 caps_ignored_line = true;
             }
             prev_caps_ignore_line = caps_ignored_line;
 
             if (line[0] != '$' && !caps_ignored_line) {
-
                 if (in_bulk &&
                     (strncmp(line, "END BULK", 8) == 0 || strncmp(line, "ENDDATA", 7) == 0)) {
                     buffer_temp_loc = buffer_len;
@@ -949,18 +951,21 @@ int TACSMeshLoader::scanBDFFile(const char *file_name) {
                 int comp_num = component_counter;
                 component_counter++;
 
-                strncpy(comp, &line[41], 32);
+                strncpy(comp, &line[19], 32);
                 comp[32] = '\0';
                 // Remove white space
                 if (comp_num >= 0 && comp_num < num_components) {
+                    // printf("component_descript icomp %d => '%s'\n", comp_num, comp);
                     sscanf(comp, "%s", &component_descript[33 * comp_num]);
                 }
             }
 
-
             // currently unsupported settings in the TACS Meshloader C++ version from ESP/CAPS
-            bool caps_ignored_line = strncmp(line, "PARAM", 5) == 0 || strncmp(line, "SPCADD", 6) == 0 || strncmp(line, "MAT", 3) == 0 || 
-                strncmp(line, "PSHELL", 6) == 0  || strncmp(line, "PCOMP", 5) == 0 || strncmp(line, "DESVAR", 6) == 0 || strncmp(line, "DVPREL", 6) == 0 || strncmp(line, "CORD", 4) == 0;
+            bool caps_ignored_line =
+                strncmp(line, "PARAM", 5) == 0 || strncmp(line, "SPCADD", 6) == 0 ||
+                strncmp(line, "MAT", 3) == 0 || strncmp(line, "PSHELL", 6) == 0 ||
+                strncmp(line, "PCOMP", 5) == 0 || strncmp(line, "DESVAR", 6) == 0 ||
+                strncmp(line, "DVPREL", 6) == 0 || strncmp(line, "CORD", 4) == 0;
             if (prev_caps_ignore_line && strncmp(line, "*", 1) == 0) {
                 caps_ignored_line = true;
             }
@@ -1013,7 +1018,7 @@ int TACSMeshLoader::scanBDFFile(const char *file_name) {
                         for (int j = 0; j < 8; j++) {
                             if (dofs[j] == line[k]) {
                                 bc_vars[bc_vars_size] = j;
-                                bc_vals[bc_vars_size] = 0.0; // SPC1* doesn't take nz values
+                                bc_vals[bc_vars_size] = 0.0;  // SPC1* doesn't take nz values
                                 bc_vars_size++;
                                 break;
                             }
@@ -1038,7 +1043,7 @@ int TACSMeshLoader::scanBDFFile(const char *file_name) {
                         for (int j = 0; j < 8; j++) {
                             if (dofs[j] == line[k]) {
                                 bc_vars[bc_vars_size] = j;
-                                bc_vals[bc_vars_size] = 0.0; // SPC1* doesn't take nz values
+                                bc_vals[bc_vars_size] = 0.0;  // SPC1* doesn't take nz values
                                 bc_vars_size++;
                                 break;
                             }

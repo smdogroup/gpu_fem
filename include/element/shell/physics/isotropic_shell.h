@@ -1,8 +1,7 @@
 #pragma once
 
-#include "../a2d/a2dshellstrain1.h"
 #include "../a2d/a2disostress.h"
-
+#include "../a2d/a2dshellstrain1.h"
 #include "../data/isotropic.h"
 #include "a2dcore.h"
 
@@ -23,7 +22,8 @@ class IsotropicShell {
     static constexpr bool is_nonlinear = isNonlinear;
     static constexpr int num_dvs = 1;
 
-    __HOST_DEVICE__ static void computeTyingStress(const T &scale, const Data &data, A2D::SymMat<T, 3> &e, A2D::SymMat<T, 3> &s) {
+    __HOST_DEVICE__ static void computeTyingStress(const T &scale, const Data &data,
+                                                   A2D::SymMat<T, 3> &e, A2D::SymMat<T, 3> &s) {
         /* compute membrane + trv shear stresses from the tying strains */
 
         T C[6];
@@ -51,7 +51,8 @@ class IsotropicShell {
         s[4] = As * e[4];
     }
 
-    __HOST_DEVICE__ static void computeBendingStress(const T &scale, const Data &data, const A2D::Vec<T, 3> &e, A2D::Vec<T, 3> &s) {
+    __HOST_DEVICE__ static void computeBendingStress(const T &scale, const Data &data,
+                                                     const A2D::Vec<T, 3> &e, A2D::Vec<T, 3> &s) {
         /* compute membrane + trv shear stresses from the tying strains */
 
         T C[6];
@@ -70,9 +71,10 @@ class IsotropicShell {
         s[2] *= I * scale;
     }
 
-    __HOST_DEVICE__ static void computeDrillStress(const T &scale, const Data &data, const T ed[1], T sd[1]) {
+    __HOST_DEVICE__ static void computeDrillStress(const T &scale, const Data &data, const T ed[1],
+                                                   T sd[1]) {
         T G = data.E / 2.0 / (1.0 + data.nu);
-        T As = Data::getTransShearCorrFactor() * G * data.thick; 
+        T As = Data::getTransShearCorrFactor() * G * data.thick;
         T drill = Data::getDrillingRegularization() * As;
         sd[0] = scale * drill * ed[0];
     }

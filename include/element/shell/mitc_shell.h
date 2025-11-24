@@ -45,10 +45,10 @@ class MITCShellAssembler
     // constructor
     MITCShellAssembler(int32_t num_geo_nodes, int32_t num_vars_nodes, int32_t num_elements,
                        HostVec<int32_t> &geo_conn, HostVec<int32_t> &vars_conn, HostVec<T> &xpts,
-                       HostVec<int> &bcs, HostVec<Data> &physData, int32_t num_components = 0,
-                       HostVec<int> elem_component = HostVec<int>(0))
+                       HostVec<int> &bcs, HostVec<Data> &compData, int32_t num_components = 1,
+                       HostVec<int> elem_component = HostVec<int>(1))
         : Base(num_geo_nodes, num_vars_nodes, num_elements, geo_conn, vars_conn, xpts, bcs,
-               physData, num_components, elem_component) {}
+               compData, num_components, elem_component) {}
 
     template <int elems_per_block = 1>
     void add_jacobian_fast(Mat &mat) {
@@ -60,9 +60,9 @@ class MITCShellAssembler
         int nblocks = (this->num_elements + elems_per_block - 1) / elems_per_block;
         dim3 grid(nblocks);
 
-        k_add_jacobian_fast<T, elems_per_block, Assembler, Data, Vec_, Mat>
-            <<<grid, block>>>(this->num_vars_nodes, this->num_elements, this->geo_conn,
-                              this->vars_conn, this->xpts, this->vars, this->physData, mat);
+        k_add_jacobian_fast<T, elems_per_block, Assembler, Data, Vec_, Mat><<<grid, block>>>(
+            this->num_vars_nodes, this->num_elements, this->elem_components, this->geo_conn,
+            this->vars_conn, this->xpts, this->vars, this->compData, mat);
 
         CHECK_CUDA(cudaDeviceSynchronize());
         // #endif
@@ -78,9 +78,9 @@ class MITCShellAssembler
         int nblocks = (this->num_elements + elems_per_block - 1) / elems_per_block;
         dim3 grid(nblocks);
 
-        k_add_residual_fast<T, elems_per_block, Assembler, Data, Vec_>
-            <<<grid, block>>>(this->num_vars_nodes, this->num_elements, this->geo_conn,
-                              this->vars_conn, this->xpts, this->vars, this->physData, res);
+        k_add_residual_fast<T, elems_per_block, Assembler, Data, Vec_><<<grid, block>>>(
+            this->num_vars_nodes, this->num_elements, this->elem_components, this->geo_conn,
+            this->vars_conn, this->xpts, this->vars, this->compData, res);
 
         CHECK_CUDA(cudaDeviceSynchronize());
         // #endif
@@ -90,7 +90,7 @@ class MITCShellAssembler
     __HOST_DEVICE__ static void add_element_quadpt_energy(const bool active_thread, const int iquad,
                                                           const T xpts[xpts_per_elem],
                                                           const T vars[dof_per_elem],
-                                                          const Data physData, T &Uelem) {
+                                                          const Data compData, T &Uelem) {
         // keep in mind max of ~256 floats on single thread
 
         if (!active_thread) return;
@@ -115,7 +115,7 @@ class MITCShellAssembler
 
             // compute the interpolated drill strain
             ShellComputeDrillStrain<T, vars_per_node, Data, Basis, Director>(
-                pt, physData.refAxis, xpts, vars, fn, et.value().get_data());
+                pt, compData.refAxis, xpts, vars, fn, et.value().get_data());
 
             // compute directors
             T d[3 * num_nodes];
@@ -130,7 +130,7 @@ class MITCShellAssembler
             // compute all shell displacement gradients
             T XdinvT[9];
             T detXd = computeBendingDispGrad<T, vars_per_node, Basis, Data>(
-                pt, physData.refAxis, xpts, vars, fn, d, XdinvT, u0x.value().get_data(),
+                pt, compData.refAxis, xpts, vars, fn, d, XdinvT, u0x.value().get_data(),
                 u1x.value().get_data());
 
             // rotate the tying strains with XdinvT frame
@@ -140,7 +140,7 @@ class MITCShellAssembler
             T scale = detXd * weight;
 
             // compute energy + energy-dispGrad sensitivites with physics
-            Phys::template computeStrainEnergy<T>(physData, scale, u0x, u1x, e0ty, et, _Uelem);
+            Phys::template computeStrainEnergy<T>(compData, scale, u0x, u1x, e0ty, et, _Uelem);
 
         }  // end of forward scope block for strain energy
         // ------------------------------------------------
@@ -151,7 +151,7 @@ class MITCShellAssembler
     template <class Data>
     __HOST_DEVICE__ static void add_element_quadpt_residual(
         const bool active_thread, const int iquad, const T xpts[xpts_per_elem],
-        const T vars[dof_per_elem], const Data physData, T res[dof_per_elem]) {
+        const T vars[dof_per_elem], const Data compData, T res[dof_per_elem]) {
         // keep in mind max of ~256 floats on single thread
 
         if (!active_thread) return;
@@ -176,7 +176,7 @@ class MITCShellAssembler
 
             // compute the interpolated drill strain
             ShellComputeDrillStrain<T, vars_per_node, Data, Basis, Director>(
-                pt, physData.refAxis, xpts, vars, fn, et.value().get_data());
+                pt, compData.refAxis, xpts, vars, fn, et.value().get_data());
 
             // compute directors
             Director::template computeDirector<vars_per_node, num_nodes>(vars, fn, d);
@@ -190,7 +190,7 @@ class MITCShellAssembler
             // compute all shell displacement gradients
             T XdinvT[9];
             T detXd = computeBendingDispGrad<T, vars_per_node, Basis, Data>(
-                pt, physData.refAxis, xpts, vars, fn, d, XdinvT, u0x.value().get_data(),
+                pt, compData.refAxis, xpts, vars, fn, d, XdinvT, u0x.value().get_data(),
                 u1x.value().get_data());
 
             // rotate the tying strains
@@ -200,7 +200,7 @@ class MITCShellAssembler
             T scale = detXd * weight;
 
             // compute energy + energy-dispGrad sensitivites with physics
-            Phys::template computeWeakRes<T>(physData, scale, u0x, u1x, e0ty, et);
+            Phys::template computeWeakRes<T>(compData, scale, u0x, u1x, e0ty, et);
 
         }  // end of forward scope block for strain energy
         // ------------------------------------------------
@@ -213,7 +213,7 @@ class MITCShellAssembler
         A2D::Vec<T, 3 * num_nodes> d_bar;
         T XdinvT[9];
         computeBendingDispGradSens<T, vars_per_node, Basis, Data>(
-            pt, physData.refAxis, xpts, vars, fn, u0x.bvalue().get_data(), u1x.bvalue().get_data(),
+            pt, compData.refAxis, xpts, vars, fn, u0x.bvalue().get_data(), u1x.bvalue().get_data(),
             XdinvT, res, d_bar.get_data());
 
         // transpose rotate the tying strains
@@ -231,7 +231,7 @@ class MITCShellAssembler
 
         // drill strain sens
         ShellComputeDrillStrainSens<T, vars_per_node, Data, Basis, Director>(
-            pt, physData.refAxis, xpts, vars, fn, et.bvalue().get_data(), res);
+            pt, compData.refAxis, xpts, vars, fn, et.bvalue().get_data(), res);
 
         // TODO : rotation constraint sens for some director classes (zero for
         // linear rotation)
@@ -241,7 +241,7 @@ class MITCShellAssembler
     template <class Data>
     __HOST_DEVICE__ static void add_element_quadpt_mass_residual(
         const bool active_thread, const int iquad, const T xpts[xpts_per_elem],
-        const T accel[dof_per_elem], const Data physData, T res[dof_per_elem]) {
+        const T accel[dof_per_elem], const Data compData, T res[dof_per_elem]) {
         if (!active_thread) return;
 
         T fn[3 * num_nodes];       // node normals
@@ -256,7 +256,7 @@ class MITCShellAssembler
         Director::template computeDirector<vars_per_node, num_nodes>(accel, fn, d_accel);
 
         T moments[3];
-        Phys::template getMassMoments(physData, moments);
+        Phys::template getMassMoments(compData, moments);
 
         // evaluate the second time derivatives (interpolated to the quadpt)
         T u0_accel[3], d0_accel[3];
@@ -283,7 +283,7 @@ class MITCShellAssembler
     template <class Data>
     __HOST_DEVICE__ static void add_element_quadpt_jacobian_col(
         const bool active_thread, const int iquad, const int ivar, const T xpts[xpts_per_elem],
-        const T vars[dof_per_elem], const Data physData, T res[dof_per_elem],
+        const T vars[dof_per_elem], const Data compData, T res[dof_per_elem],
         T matCol[dof_per_elem]) {
         // keep in mind max of ~256 floats on single thread
 
@@ -308,7 +308,7 @@ class MITCShellAssembler
             ShellComputeNodeNormals<T, Basis>(xpts, fn);
 
             ShellComputeDrillStrain<T, vars_per_node, Data, Basis, Director>(
-                pt, physData.refAxis, xpts, vars, fn, et.value().get_data());
+                pt, compData.refAxis, xpts, vars, fn, et.value().get_data());
 
             Director::template computeDirector<vars_per_node, num_nodes>(vars, fn, d);
 
@@ -320,7 +320,7 @@ class MITCShellAssembler
 
             // get the bending strains
             T detXd = computeBendingDispGrad<T, vars_per_node, Basis, Data>(
-                pt, physData.refAxis, xpts, vars, fn, d, XdinvT, u0x.value().get_data(),
+                pt, compData.refAxis, xpts, vars, fn, d, XdinvT, u0x.value().get_data(),
                 u1x.value().get_data());
 
             // rotate the tying strains with XdinvT frame
@@ -337,7 +337,7 @@ class MITCShellAssembler
         T p_d[3 * num_nodes];
         {
             ShellComputeDrillStrainHfwd<T, vars_per_node, Data, Basis, Director>(
-                pt, physData.refAxis, xpts, p_vars.get_data(), fn, et.pvalue().get_data());
+                pt, compData.refAxis, xpts, p_vars.get_data(), fn, et.pvalue().get_data());
 
             Director::template computeDirectorHfwd<vars_per_node, num_nodes>(p_vars.get_data(), fn,
                                                                              p_d);
@@ -351,7 +351,7 @@ class MITCShellAssembler
 
             // forward derivs of bending strains
             computeBendingDispGradHfwd<T, vars_per_node, Basis, Data>(
-                pt, physData.refAxis, xpts, p_vars.get_data(), fn, p_d, XdinvT,
+                pt, compData.refAxis, xpts, p_vars.get_data(), fn, p_d, XdinvT,
                 u0x.pvalue().get_data(), u1x.pvalue().get_data());
 
             // rotate the tying strains with XdinvT frame
@@ -361,7 +361,7 @@ class MITCShellAssembler
 
         // derivatives over disp grad to strain energy portion
         // ---------------------
-        Phys::template computeWeakJacobianCol<T>(physData, scale, u0x, u1x, e0ty, et);
+        Phys::template computeWeakJacobianCol<T>(compData, scale, u0x, u1x, e0ty, et);
         // ---------------------
         // begin reverse blocks from strain energy => physical disp grad sens
 
@@ -370,7 +370,7 @@ class MITCShellAssembler
         {
             A2D::Vec<T, 3 * num_nodes> d_bar;  // zeroes out on init
             computeBendingDispGradSens<T, vars_per_node, Basis, Data>(
-                pt, physData.refAxis, xpts, vars, fn, u0x.bvalue().get_data(),
+                pt, compData.refAxis, xpts, vars, fn, u0x.bvalue().get_data(),
                 u1x.bvalue().get_data(), XdinvT, res, d_bar.get_data());
 
             // transpose rotate the tying strains (frame transform)
@@ -387,7 +387,7 @@ class MITCShellAssembler
                                                                              res);
 
             ShellComputeDrillStrainSens<T, vars_per_node, Data, Basis, Director>(
-                pt, physData.refAxis, xpts, vars, fn, et.bvalue().get_data(), res);
+                pt, compData.refAxis, xpts, vars, fn, et.bvalue().get_data(), res);
 
         }  // end of breverse scope (1st order derivs)
 
@@ -396,7 +396,7 @@ class MITCShellAssembler
             A2D::Vec<T, 3 * num_nodes> d_hat;  // zeroes out on init
             T XdinvT[9];
             computeBendingDispGradHrev<T, vars_per_node, Basis, Data>(
-                pt, physData.refAxis, xpts, vars, fn, u0x.hvalue().get_data(),
+                pt, compData.refAxis, xpts, vars, fn, u0x.hvalue().get_data(),
                 u1x.hvalue().get_data(), XdinvT, matCol, d_hat.get_data());
 
             // // transpose rotate the tying strains
@@ -415,14 +415,14 @@ class MITCShellAssembler
                                                                              matCol);
 
             ShellComputeDrillStrainHrev<T, vars_per_node, Data, Basis, Director>(
-                pt, physData.refAxis, xpts, vars, fn, et.hvalue().get_data(), matCol);
+                pt, compData.refAxis, xpts, vars, fn, et.hvalue().get_data(), matCol);
         }  // end of hreverse scope (2nd order derivs)
     }      // add_element_quadpt_jacobian_col
 
     template <class Data, STRAIN strain = ALL>
     __DEVICE__ static void add_element_quadpt_residual_fast(
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
-        const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &physData,
+        const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
         const T vars[dof_per_elem], T res[dof_per_elem]) {
         constexpr bool bending = strain == BENDING || strain == ALL;
         constexpr bool tying = strain == TYING || strain == ALL;
@@ -451,7 +451,7 @@ class MITCShellAssembler
 
             // 1st order brev (only need ek.bvalue, so no additional steps here)
             {
-                Phys::computeBendingStress(scale, physData, ek.value(), ek.bvalue());
+                Phys::computeBendingStress(scale, compData, ek.value(), ek.bvalue());
 
                 computeBendingStrainSens<T, is_nonlinear>(
                     ek.bvalue().get_data(), u0x.value().get_data(), u1x.value().get_data(),
@@ -493,7 +493,7 @@ class MITCShellAssembler
             // 1st order brev
             A2D::SymMat<T, 3> gty_bar;
             {
-                Phys::computeTyingStress(scale, physData, e0ty.value(), e0ty.bvalue());
+                Phys::computeTyingStress(scale, compData, e0ty.value(), e0ty.bvalue());
 
                 computeEngineerTyingStrains<T>(e0ty.bvalue());
 
@@ -521,7 +521,7 @@ class MITCShellAssembler
             __syncthreads();
 
             // compute drill stress
-            Phys::computeDrillStress(scale, physData, et.value().get_data(),
+            Phys::computeDrillStress(scale, compData, et.value().get_data(),
                                      et.bvalue().get_data());
             __syncthreads();
 
@@ -535,7 +535,7 @@ class MITCShellAssembler
     template <class Data, STRAIN strain = ALL>
     __DEVICE__ static void add_element_quadpt_jacobian_col_fast(
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
-        const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &physData,
+        const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
         const T vars[dof_per_elem], const T pvars[dof_per_elem], T matCol[dof_per_elem]) {
         constexpr bool bending = strain == BENDING || strain == ALL;
         constexpr bool tying = strain == TYING || strain == ALL;
@@ -580,12 +580,12 @@ class MITCShellAssembler
 
             // 1st order brev (only need ek.bvalue, so no additional steps here)
             if constexpr (is_nonlinear) {
-                Phys::computeBendingStress(scale, physData, ek.value(), ek.bvalue());
+                Phys::computeBendingStress(scale, compData, ek.value(), ek.bvalue());
             }
 
             // 2nd order hrev
             {
-                Phys::computeBendingStress(scale, physData, ek.pvalue(), ek.hvalue());
+                Phys::computeBendingStress(scale, compData, ek.pvalue(), ek.hvalue());
 
                 computeBendingStrainHrev<T, is_nonlinear>(
                     ek.hvalue().get_data(), ek.bvalue().get_data(), u0x.value().get_data(),
@@ -645,7 +645,7 @@ class MITCShellAssembler
             // 1st order brev
             A2D::Vec<T, Basis::num_all_tying_points> ety_bar;  // zeroes out on init
             if constexpr (is_nonlinear) {
-                Phys::computeTyingStress(scale, physData, e0ty.value(), e0ty.bvalue());
+                Phys::computeTyingStress(scale, compData, e0ty.value(), e0ty.bvalue());
 
                 computeEngineerTyingStrains<T>(e0ty.bvalue());
 
@@ -659,7 +659,7 @@ class MITCShellAssembler
 
             // 2nd order hrev
             {
-                Phys::computeTyingStress(scale, physData, e0ty.pvalue(), e0ty.hvalue());
+                Phys::computeTyingStress(scale, compData, e0ty.pvalue(), e0ty.hvalue());
 
                 computeEngineerTyingStrains<T>(e0ty.hvalue());
 
@@ -689,7 +689,7 @@ class MITCShellAssembler
             __syncthreads();
 
             // compute drill stress
-            Phys::computeDrillStress(scale, physData, et.pvalue().get_data(),
+            Phys::computeDrillStress(scale, compData, et.pvalue().get_data(),
                                      et.hvalue().get_data());
             __syncthreads();
 
@@ -703,7 +703,7 @@ class MITCShellAssembler
     template <class Data>
     __HOST_DEVICE__ static void add_element_quadpt_mass_jacobian_col(
         const bool active_thread, const int iquad, const int ivar, const T xpts[xpts_per_elem],
-        const T accel[dof_per_elem], const Data physData, T res[dof_per_elem],
+        const T accel[dof_per_elem], const Data compData, T res[dof_per_elem],
         T matCol[dof_per_elem]) {
         // since it's linear, it should be very similar to the residual, just that we're doing
         // projected hessians, so you need to do the residual on a p_vars input basically
@@ -714,16 +714,16 @@ class MITCShellAssembler
         // element) resid = M * accel and to get a column of M you can plug in a cartesian basis vec
         // to the residual, resid(ej) = M * ej
 
-        add_element_quadpt_mass_residual(active_thread, iquad, xpts, accel, physData,
+        add_element_quadpt_mass_residual(active_thread, iquad, xpts, accel, compData,
                                          res);  // take this out later in speedup assembly kernels
-        add_element_quadpt_mass_residual(active_thread, iquad, xpts, p_vars.get_data(), physData,
+        add_element_quadpt_mass_residual(active_thread, iquad, xpts, p_vars.get_data(), compData,
                                          matCol);
     }
 
     template <class Data>
     __HOST_DEVICE__ static void compute_element_quadpt_adj_res_product(
         const bool active_thread, const int iquad, const T xpts[xpts_per_elem],
-        const T vars[dof_per_elem], const Data physData, const T psi[dof_per_elem], T loc_dv_sens[])
+        const T vars[dof_per_elem], const Data compData, const T psi[dof_per_elem], T loc_dv_sens[])
 
     {
         if (!active_thread) return;
@@ -749,7 +749,7 @@ class MITCShellAssembler
 
             // compute the interpolated drill strain
             ShellComputeDrillStrain<T, vars_per_node, Data, Basis, Director>(
-                pt, physData.refAxis, xpts, vars, fn, et.get_data());
+                pt, compData.refAxis, xpts, vars, fn, et.get_data());
 
             // compute directors
             Director::template computeDirector<vars_per_node, num_nodes>(vars, fn, d);
@@ -763,7 +763,7 @@ class MITCShellAssembler
             // compute all shell displacement gradients
             T XdinvT[9];
             detXd = computeBendingDispGrad<T, vars_per_node, Basis, Data>(
-                pt, physData.refAxis, xpts, vars, fn, d, XdinvT, u0x.get_data(), u1x.get_data());
+                pt, compData.refAxis, xpts, vars, fn, d, XdinvT, u0x.get_data(), u1x.get_data());
 
             // rotate the tying strains
             A2D::SymMatRotateFrame<T, 3>(XdinvT, gty, e0ty);
@@ -779,7 +779,7 @@ class MITCShellAssembler
         {
             // compute the interpolated drill strain
             ShellComputeDrillStrainHfwd<T, vars_per_node, Data, Basis, Director>(
-                pt, physData.refAxis, xpts, psi, fn, psi_et.get_data());
+                pt, compData.refAxis, xpts, psi, fn, psi_et.get_data());
 
             // compute directors (linearized Hfwd)
             T psi_d[3 * num_nodes];
@@ -794,7 +794,7 @@ class MITCShellAssembler
             // compute all shell displacement gradients (linearized Hfwd version)
             T XdinvT[9];
             computeBendingDispGradHfwd<T, vars_per_node, Basis, Data>(
-                pt, physData.refAxis, xpts, psi, fn, psi_d, XdinvT, psi_u0x.get_data(),
+                pt, compData.refAxis, xpts, psi, fn, psi_d, XdinvT, psi_u0x.get_data(),
                 psi_u1x.get_data());
 
             // rotate the tying strains with XdinvT frame
@@ -806,14 +806,14 @@ class MITCShellAssembler
         // want psi[u]^T d^2Pi/du/dx = psi[E]^T d^2Pi/dE/dx
         // instead of backprop sensitivities, hfwd and compute product on the strains
         Phys::template compute_strain_adjoint_res_product<T>(
-            physData, scale, u0x, u1x, e0ty, et, psi_u0x, psi_u1x, psi_e0ty, psi_et, loc_dv_sens);
+            compData, scale, u0x, u1x, e0ty, et, psi_u0x, psi_u1x, psi_e0ty, psi_et, loc_dv_sens);
 
     }  // end of method add_element_quadpt_residual
 
     template <class Data>
     __HOST_DEVICE__ static void _compute_element_quadpt_strains(
         const int iquad, const T xpts[xpts_per_elem], const T vars[dof_per_elem],
-        const Data &physData, A2D::Mat<T, 3, 3> &u0x, A2D::Mat<T, 3, 3> &u1x,
+        const Data &compData, A2D::Mat<T, 3, 3> &u0x, A2D::Mat<T, 3, 3> &u1x,
         A2D::SymMat<T, 3> &e0ty, A2D::Vec<T, 1> &et) {
         // data to store in forwards + backwards section
         T fn[3 * num_nodes];  // node normals
@@ -829,7 +829,7 @@ class MITCShellAssembler
 
             // compute the interpolated drill strain
             ShellComputeDrillStrain<T, vars_per_node, Data, Basis, Director>(
-                pt, physData.refAxis, xpts, vars, fn, et.get_data());
+                pt, compData.refAxis, xpts, vars, fn, et.get_data());
 
             // compute directors
             T d[3 * num_nodes];
@@ -844,7 +844,7 @@ class MITCShellAssembler
             // compute all shell displacement gradients
             T XdinvT[9];
             T detXd = computeBendingDispGrad<T, vars_per_node, Basis, Data>(
-                pt, physData.refAxis, xpts, vars, fn, d, XdinvT, u0x.get_data(), u1x.get_data());
+                pt, compData.refAxis, xpts, vars, fn, d, XdinvT, u0x.get_data(), u1x.get_data());
 
             // rotate the tying strains with XdinvT frame
             A2D::SymMatRotateFrame<T, 3>(XdinvT, gty, e0ty);
@@ -856,7 +856,7 @@ class MITCShellAssembler
     template <class Data>
     __HOST_DEVICE__ static void get_element_quadpt_failure_index(
         const bool active_thread, const int iquad, const T xpts[xpts_per_elem],
-        const T vars[dof_per_elem], const Data &physData, const T &rhoKS, const T &safetyFactor,
+        const T vars[dof_per_elem], const Data &compData, const T &rhoKS, const T &safetyFactor,
         T &fail_index) {
         if (!active_thread) return;
 
@@ -866,16 +866,16 @@ class MITCShellAssembler
         A2D::Vec<T, 1> et;
 
         // get strains and then failure index
-        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x, u1x, e0ty, et);
+        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, compData, u0x, u1x, e0ty, et);
 
-        Phys::template computeFailureIndex(physData, u0x, u1x, e0ty, et, rhoKS, safetyFactor,
+        Phys::template computeFailureIndex(compData, u0x, u1x, e0ty, et, rhoKS, safetyFactor,
                                            fail_index);
     }
 
     template <class Data>
     __HOST_DEVICE__ static void compute_element_quadpt_failure_dv_sens(
         const bool active_thread, const int iquad, const T xpts[xpts_per_elem],
-        const T vars[dof_per_elem], const Data &physData, const T &rhoKS, const T &safetyFactor,
+        const T vars[dof_per_elem], const Data &compData, const T &rhoKS, const T &safetyFactor,
         const T &fail_sens, T loc_dv_sens[]) {
         if (!active_thread) return;
 
@@ -884,16 +884,16 @@ class MITCShellAssembler
         A2D::SymMat<T, 3> e0ty;
         A2D::Vec<T, 1> et;
 
-        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x, u1x, e0ty, et);
+        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, compData, u0x, u1x, e0ty, et);
 
-        Phys::template computeFailureIndexDVSens(physData, u0x, u1x, e0ty, et, rhoKS, safetyFactor,
+        Phys::template computeFailureIndexDVSens(compData, u0x, u1x, e0ty, et, rhoKS, safetyFactor,
                                                  fail_sens, loc_dv_sens);
     }
 
     template <class Data>
     __HOST_DEVICE__ static void compute_element_quadpt_failure_sv_sens(
         const bool active_thread, const int iquad, const T xpts[xpts_per_elem],
-        const T vars[dof_per_elem], const Data &physData, const T &rhoKS, const T &safetyFactor,
+        const T vars[dof_per_elem], const Data &compData, const T &rhoKS, const T &safetyFactor,
         const T &fail_sens, T dfdu_local[]) {
         if (!active_thread) return;
 
@@ -925,7 +925,7 @@ class MITCShellAssembler
 
             // compute the interpolated drill strain
             ShellComputeDrillStrain<T, vars_per_node, Data, Basis, Director>(
-                pt, physData.refAxis, xpts, vars, fn, et.value().get_data());
+                pt, compData.refAxis, xpts, vars, fn, et.value().get_data());
 
             // compute directors
             Director::template computeDirector<vars_per_node, num_nodes>(vars, fn, d);
@@ -939,7 +939,7 @@ class MITCShellAssembler
             // compute all shell displacement gradients
             T XdinvT[9];
             T detXd = computeBendingDispGrad<T, vars_per_node, Basis, Data>(
-                pt, physData.refAxis, xpts, vars, fn, d, XdinvT, u0x.value().get_data(),
+                pt, compData.refAxis, xpts, vars, fn, d, XdinvT, u0x.value().get_data(),
                 u1x.value().get_data());
 
             // rotate the tying strains with XdinvT frame
@@ -948,7 +948,7 @@ class MITCShellAssembler
         }  // end of forward scope block for strain energy
         // ------------------------------------------------
 
-        Phys::template computeFailureIndexSVSens<T>(physData, rhoKS, safetyFactor, fail_sens, u0x,
+        Phys::template computeFailureIndexSVSens<T>(compData, rhoKS, safetyFactor, fail_sens, u0x,
                                                     u1x, e0ty, et);
 
         // beginning of backprop section to final residual derivatives
@@ -959,7 +959,7 @@ class MITCShellAssembler
         A2D::Vec<T, 3 * num_nodes> d_bar;
         T XdinvT[9];
         computeBendingDispGradSens<T, vars_per_node, Basis, Data>(
-            pt, physData.refAxis, xpts, vars, fn, u0x.bvalue().get_data(), u1x.bvalue().get_data(),
+            pt, compData.refAxis, xpts, vars, fn, u0x.bvalue().get_data(), u1x.bvalue().get_data(),
             XdinvT, dfdu_local, d_bar.get_data());
 
         // transpose rotate the tying strains
@@ -978,7 +978,7 @@ class MITCShellAssembler
 
         // drill strain sens
         ShellComputeDrillStrainSens<T, vars_per_node, Data, Basis, Director>(
-            pt, physData.refAxis, xpts, vars, fn, et.bvalue().get_data(), dfdu_local);
+            pt, compData.refAxis, xpts, vars, fn, et.bvalue().get_data(), dfdu_local);
 
         // TODO : rotation constraint sens for some director classes (zero for
         // linear rotation)
@@ -987,7 +987,7 @@ class MITCShellAssembler
     template <class Data>
     __HOST_DEVICE__ static void compute_element_quadpt_strains(
         const bool active_thread, const int iquad, const T xpts[xpts_per_elem],
-        const T vars[dof_per_elem], const Data physData, T strains[vars_per_node])
+        const T vars[dof_per_elem], const Data compData, T strains[vars_per_node])
 
     {
         // keep in mind max of ~256 floats on single thread
@@ -1007,11 +1007,11 @@ class MITCShellAssembler
         T scale = 1.0;
 
         // get strains and then failure index
-        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x.value(), u1x.value(),
-                                             e0ty.value(), et.value());
+        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, compData, u0x.value(), u1x.value(),
+                                              e0ty.value(), et.value());
 
         // compute energy + energy-dispGrad sensitivites with physics
-        Phys::template computeQuadptStresses<T>(physData, scale, u0x, u1x, e0ty, et, E, S);
+        Phys::template computeQuadptStresses<T>(compData, scale, u0x, u1x, e0ty, et, E, S);
 
         // now copy strains out
         A2D::Vec<T, 9> &Ef = E.value();
@@ -1023,7 +1023,7 @@ class MITCShellAssembler
     template <class Data>
     __HOST_DEVICE__ static void compute_element_quadpt_stresses(
         const bool active_thread, const int iquad, const T xpts[xpts_per_elem],
-        const T vars[dof_per_elem], const Data physData, T stresses[vars_per_node]) {
+        const T vars[dof_per_elem], const Data compData, T stresses[vars_per_node]) {
         // keep in mind max of ~256 floats on single thread
 
         if (!active_thread) return;
@@ -1041,11 +1041,11 @@ class MITCShellAssembler
         T scale = 1.0;
 
         // get strains and then failure index
-        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, physData, u0x.value(), u1x.value(),
-                                             e0ty.value(), et.value());
+        _compute_element_quadpt_strains<Data>(iquad, xpts, vars, compData, u0x.value(), u1x.value(),
+                                              e0ty.value(), et.value());
 
         // compute energy + energy-dispGrad sensitivites with physics
-        Phys::template computeQuadptStresses<T>(physData, scale, u0x, u1x, e0ty, et, E, S);
+        Phys::template computeQuadptStresses<T>(compData, scale, u0x, u1x, e0ty, et, E, S);
 
         // now copy strains out
         A2D::Vec<T, 9> &Sf = S.value();
@@ -1056,7 +1056,7 @@ class MITCShellAssembler
 
     template <class Data>
     __HOST_DEVICE__ static void compute_element_quadpt_mass(bool active_thread, int iquad,
-                                                            const T xpts[], const Data physData,
+                                                            const T xpts[], const Data compData,
                                                             T *output) {
         // compute int[rho * thick] dA
         if (!active_thread) return;
@@ -1082,12 +1082,12 @@ class MITCShellAssembler
         T detXd = A2D::MatDetCore<T, 3>(Xd);
 
         // compute area density quadpt contribution (then int across area with element sums)
-        *output = weight * detXd * physData.rho * physData.thick;
+        *output = weight * detXd * compData.rho * compData.thick;
     }
 
     template <class Data>
     __HOST_DEVICE__ static void compute_element_quadpt_dmass_dx(bool active_thread, int iquad,
-                                                                const T xpts[], const Data physData,
+                                                                const T xpts[], const Data compData,
                                                                 T *dm_dxlocal) {
         // mass = int[rho * thick] dA summed over all elements
         // then return dmass/dx for x this element thickness
@@ -1115,6 +1115,6 @@ class MITCShellAssembler
         T detXd = A2D::MatDetCore<T, 3>(Xd);
 
         // only one local DV in isotropic shell (panel thickness)
-        dm_dxlocal[0] = weight * detXd * physData.rho;
+        dm_dxlocal[0] = weight * detXd * compData.rho;
     }
 };

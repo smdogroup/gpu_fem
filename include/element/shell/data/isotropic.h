@@ -37,13 +37,8 @@ class ShellIsotropicData {
                                        T tOffset_ = 0.0)
         : E(E_), nu(nu_), thick(thick_), ys(ys_), rho(rho_), tOffset(tOffset_) {}
 
-
-    __HOST_DEVICE__ virtual T getPanelIzz() {
-        return thick * thick * thick / 12.0; 
-    }
-    __HOST_DEVICE__ T getPanelIzzSens() {
-        return thick * thick / 4.0;
-    }
+    __HOST_DEVICE__ T getPanelIzz() const { return thick * thick * thick / 12.0; }
+    __HOST_DEVICE__ T getPanelIzzSens() const { return thick * thick / 4.0; }
 
     // constitutive methods
     __HOST_DEVICE__ static void evalTangentStiffness2D(const T E_, const T nu_, T C[]) {
@@ -75,7 +70,8 @@ class ShellIsotropicData {
         // Mij += D * kij; deriv is dD/dx = (t^2/4 + tOffset^2 * 3 * thick^2) * C
         T dI = getPanelIzzSens();
         A2D::SymMatVecCoreScale3x3<T, true>(dI, C, &strain[3], &dstress[3]);
-        // A2D::SymMatVecCoreScale3x3<T, true>(3.0 * thick * thick * tOffset * tOffset, C, &strain[3],
+        // A2D::SymMatVecCoreScale3x3<T, true>(3.0 * thick * thick * tOffset * tOffset, C,
+        // &strain[3],
         //                                     &dstress[3]);
 
         // compute transverse shear components
