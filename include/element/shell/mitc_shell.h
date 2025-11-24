@@ -54,6 +54,7 @@ class MITCShellAssembler
     void add_jacobian_fast(Mat &mat) {
         // method for testing out faster jacobian GPU
 
+        mat.zeroValues();
         int cols_per_elem = (Quadrature::num_quad_pts <= 4) ? 24 : 9;
         dim3 block(num_quad_pts, cols_per_elem,
                    elems_per_block);  // better order for consecutive threads and mem reads
