@@ -8,7 +8,7 @@ template <class Assembler, ProlongationGeom geom>
 class StructuredProlongation {
   public:
     using T = double;
-    using Basis = Assembler::Basis;
+    using Basis = typename Assembler::Basis;
     static constexpr int32_t order = Basis::order;
     static constexpr bool structured = true;
     static constexpr bool assembly = false;

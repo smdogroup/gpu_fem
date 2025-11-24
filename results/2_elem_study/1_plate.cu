@@ -77,8 +77,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // using Smoother = MulticolorGSSmoother_V1<Assembler>;
     using Smoother = ChebyshevPolynomialSmoother<Assembler>;
     using Prolongation = StructuredProlongation<Assembler, PLATE>;
-    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
 
@@ -226,8 +226,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         // int n_krylov = 500;
         // int n_krylov = 10;
         // int n_krylov = 20;
-        int n_krylov = 40;
-        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omegaMC, atol, rtol, print_freq, print, double_smooth);    
+        // int n_krylov = 40;
+        int n_krylov = 200;
+        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
 
     std::vector<GRID>& grids = kmg->grids;

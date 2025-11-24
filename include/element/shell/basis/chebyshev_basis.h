@@ -65,11 +65,12 @@ public:
 };
 
 
-template <typename T, class Quadrature_, int order = 2>
+template <typename T, class Quadrature_, int _order = 2>
 class ChebyshevQuadBasis {
    public:
     using Quadrature = Quadrature_;
-    using Basis1D = ChebyShev1D<T, order>;
+    using Basis1D = ChebyShev1D<T, _order>;
+    static constexpr int32_t order = _order;
 
     // Required for loading solution data
     static constexpr int32_t nx = order + 1; // num nodes in a single direction

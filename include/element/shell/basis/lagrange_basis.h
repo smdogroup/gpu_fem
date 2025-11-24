@@ -3,10 +3,11 @@
 #include "quadrature.h"
 
 // technically nx = 2 is linear.. change this later
-template <typename T, class Quadrature_, int order = 1>
+template <typename T, class Quadrature_, int _order = 1>
 class LagrangeQuadBasis {
    public:
     using Quadrature = Quadrature_;
+    static constexpr int32_t order = _order;
     static constexpr int32_t nx = order + 1; 
 
     // Required for loading solution data
