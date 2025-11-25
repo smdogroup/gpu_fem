@@ -120,7 +120,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     }
 
     // get nxe_min for not exactly power of 2 case
-    int nxe_start = 32 / Basis::order;
+    int nxe_start = 64 / Basis::order;
     int pre_nxe_min = nxe > nxe_start ? nxe_start : 4;
     int nxe_min = pre_nxe_min;
     for (int c_nxe = nxe; c_nxe >= pre_nxe_min; c_nxe /= 2) {
@@ -413,7 +413,7 @@ void gatekeeper_method(bool is_multigrid, int nxe, double SR, int nsmooth, int n
 
 int main(int argc, char **argv) {
     // input ----------
-    bool is_multigrid = true;
+    bool is_multigrid = false; // multigrid doesn't work yet for HR
     int nxe = 128;
     double SR = 100.0; // default, the less slender it is, solves much faster
     int n_vcycles = 50;

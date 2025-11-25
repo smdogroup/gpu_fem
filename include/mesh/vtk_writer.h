@@ -99,6 +99,24 @@ void printToVTK(Assembler assembler, Vec soln, std::string filename) {
         myfile << soln[vpn * inode + offset + 5] << "\n";
     }
 
+    if constexpr (Phys::hellingerReissner) {
+        scalarName = "HRmem";
+        myfile << "VECTORS " << scalarName << " double64\n";
+        for (int inode = 0; inode < num_nodes; inode++) {
+            myfile << soln[vpn * inode + 0] << sp;
+            myfile << soln[vpn * inode + 1] << sp;
+            myfile << soln[vpn * inode + 2] << "\n";
+        }
+
+        scalarName = "HRtrv";
+        myfile << "VECTORS " << scalarName << " double64\n";
+        for (int inode = 0; inode < num_nodes; inode++) {
+            myfile << soln[vpn * inode + 3] << sp;
+            myfile << soln[vpn * inode + 4] << sp;
+            myfile << 0.0 << "\n";
+        }
+    }
+
     // init visualization states
     int ndvs = assembler.get_num_dvs();
     DeviceVec<double> d_dvs(ndvs);

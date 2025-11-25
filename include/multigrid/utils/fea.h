@@ -73,13 +73,13 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
             my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
             my_bcs.push_back(vpn * inode + 2);  // v2 equiv to e22 strain-gap disp (zero like v)
             my_bcs.push_back(vpn * inode +
-                             3);  // v3 equiv to gam13 strain-gap disp (zero like w, thy), checked
+                             4);  // v3 equiv to gam13 strain-gap disp (zero like w, thy), checked
                                   // coupling in nodal matrix (this is right)
         }
 
         my_bcs.push_back(vpn * inode + offset + 1);  // dof 2 for v
         my_bcs.push_back(vpn * inode + offset + 2);  // dof 3 for w
-        my_bcs.push_back(vpn * inode + offset + 4);  // dof 5 for thy
+        my_bcs.push_back(vpn * inode + offset + 4);  // dof 4 for thy
     }
     // neg and pos x1 edges with dof 13 and 3 resp.
     for (int iy = 1; iy < nny; iy++) {
@@ -88,11 +88,11 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
         int inode = nnx * iy + ix;
         my_bcs.push_back(vpn * inode + offset);      // u
         my_bcs.push_back(vpn * inode + offset + 2);  // w
-        my_bcs.push_back(vpn * inode + offset + 3);  // dof 4 for thx
+        my_bcs.push_back(vpn * inode + offset + 3);  // dof 3 for thx
         if constexpr (IS_HR_ELEM) {
             my_bcs.push_back(vpn * inode + 0);  // v0 equiv to e11 strain-gap disp (zero like u)
             my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like u)
-            my_bcs.push_back(vpn * inode + 4);  // v4 equiv to gam23 strain-gap disp (zero like
+            my_bcs.push_back(vpn * inode + 3);  // v4 equiv to gam23 strain-gap disp (zero like
             // w, thy). cje
         }
 
@@ -107,7 +107,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
             // v0 and v2) my_bcs.push_back(vpn * inode + 0);
             // v0 equiv to e11 strain-gap disp (zero like u)
             my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like u)
-            my_bcs.push_back(vpn * inode + 4);  // v4 equiv to gam23 strain-gap disp (zero like
+            my_bcs.push_back(vpn * inode + 3);  // v4 equiv to gam23 strain-gap disp (zero like
             // thx)
         }
     }
@@ -122,7 +122,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
         if constexpr (IS_HR_ELEM) {
             my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
             // my_bcs.push_back(vpn * inode + 2);  // v2 equiv to e22 strain-gap disp (zero like v)
-            my_bcs.push_back(vpn * inode + 3);  // v3 equiv to gam13 strain-gap disp (like thy)
+            my_bcs.push_back(vpn * inode + 4);  // v3 equiv to gam13 strain-gap disp (like thy)
         }
     }
     // pos (x1,x2) corner node, add thy DOF
@@ -131,7 +131,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
     if constexpr (IS_HR_ELEM) {
         my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
         // my_bcs.push_back(vpn * inode + 2);  // v2 equiv to e22 strain-gap disp (zero like v)
-        my_bcs.push_back(vpn * inode + 3);  // v3 equiv to gam13 strain-gap disp (like thy)
+        my_bcs.push_back(vpn * inode + 4);  // v3 equiv to gam13 strain-gap disp (like thy)
     }
 
     HostVec<int> bcs(my_bcs.size());
