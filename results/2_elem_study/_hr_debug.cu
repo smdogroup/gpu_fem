@@ -82,8 +82,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     using Prolongation = StructuredProlongation<Assembler, PLATE>;
     
     // sometimes line search helps, sometimes not
-    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
     
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
@@ -95,6 +95,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     using TwoLevelSolve = MultigridTwoLevelSolver<GRID, full_approx_scheme>;
     using KMG = MultilevelKcycleSolver<GRID, CoarseSolver, TwoLevelSolve, KrylovSolve>;
 
+    auto start0 = std::chrono::high_resolution_clock::now();
+
     // create cublas and cusparse handles (single one each)
     // -----------------------------------------------------
     cublasHandle_t cublasHandle = NULL;
@@ -102,12 +104,13 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     cusparseHandle_t cusparseHandle = NULL;
     CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
 
-
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto start0 = std::chrono::high_resolution_clock::now();
-    
     MG *mg;
     KMG *kmg;
+
+    T omegaLS_min = 0.1, omegaLS_max = 2.0;
+    // T omegaLS_min = 0.25, omegaLS_max = 2.0;
+    // T omegaLS_min = 0.5, omegaLS_max = 2.0;
+
 
     bool is_kcycle = cycle_type == "K";
     if (is_kcycle) {
@@ -116,30 +119,12 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         mg = new MG();
     }
 
-    // some important settings
-    // T omegaMC = 1.5; // for GS-SOR
-    // T omegaMC = 0.75;
-    // T omegaMC = 0.7;
-
-    T omegaLS_min = 0.1, omegaLS_max = 2.0;
-    // T omegaLS_min = 0.25, omegaLS_max = 2.0;
-    // T omegaLS_min = 0.5, omegaLS_max = 2.0;
-
     // get nxe_min for not exactly power of 2 case
-    // int nxe_start = 32 / Basis::order;
-    int nxe_start = 64 / Basis::order; // higher load frequency here needs a bit finer mesh for coarsest grid
-    // int pre_nxe_min = nxe > 16 ? 16 : 4; // 2x slower with this setting (takes more V-cycles)
-    int pre_nxe_min = nxe > nxe_start ? nxe_start : 4; // but on higher nxe, this one is more robust somehow
-    // int pre_nxe_min = nxe > 64 ? 64 : 4; // solved about 33% faster with this as coarsest grid (for nxe = 256, but prob need faster direct solver on GPU)
-
+    int nxe_start = 32 / Basis::order;
+    int pre_nxe_min = nxe > nxe_start ? nxe_start : 4;
     int nxe_min = pre_nxe_min;
     for (int c_nxe = nxe; c_nxe >= pre_nxe_min; c_nxe /= 2) {
         nxe_min = c_nxe;
-    }
-
-    if (cycle_type != "K") {
-        printf("only does Kcycle mg in this example rn (just haven't adapted generally)\n");
-        return;
     }
 
     // make each grid
@@ -147,12 +132,10 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         // make the assembler
         int c_nye = c_nxe;
         double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
-        int nxe_per_comp = c_nxe, nye_per_comp = c_nye; // for now (should have 25 grids)
+        int nxe_per_comp = c_nxe / 4, nye_per_comp = c_nye/4; // for now (should have 25 grids)
         auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
-        double uniform_force = pressure * 1.0 * 1.0;
-        double nodal_loads = uniform_force / (c_nxe - 1) / (c_nye - 1);
-        nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
+        double Q = 1.0; // load magnitude
+        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -179,7 +162,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
 
         // assemble the kmat
         auto start0 = std::chrono::high_resolution_clock::now();
-        // assembler.add_jacobian(res, kmat);
         assembler.add_jacobian_fast(kmat);
         // assembler.apply_bcs(res);
         assembler.apply_bcs(kmat);
@@ -189,7 +171,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
         // build smoother and prolongations..
-        // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC);
         int ORDER = 4;
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
         auto prolongation = new Prolongation(assembler);
@@ -222,99 +203,48 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     auto start1 = std::chrono::high_resolution_clock::now();
 
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
-    // bool print = true;
-    bool print = false;
+    bool print = true;
+    // bool print = false;omegaLS_min
     T atol = 1e-6, rtol = 1e-6;
     bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
 
-    // int n_cycles = 500; // max # cycles
+    int n_cycles = 500; // max # cycles
     int print_freq = 3;
 
     if (is_kcycle) {
-        // int n_krylov = 500;
-        // int n_krylov = 10;
-        // int n_krylov = 20;
-        // int n_krylov = 40;
-        int n_krylov = 200;
+        int n_krylov = 500;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
 
-    std::vector<GRID>& grids = kmg->grids;
-
-    // fine grid states
-    auto& fine_assembler = grids[0].assembler;
-    auto fine_soln = fine_assembler.createVarsVec();
-    auto fine_res = fine_assembler.createVarsVec();
-    auto fine_rhs = fine_assembler.createVarsVec();
-    auto fine_loads = fine_assembler.createVarsVec();
-    auto fine_vars = fine_assembler.createVarsVec();
-    auto& fine_kmat = grids[0].Kmat;
-
-    // get fine loads from fine grid init rhs
-    bool perm_out = true;
-    grids[0].getDefect(fine_loads, perm_out);
-    fine_assembler.apply_bcs(fine_loads);
-
-    // 1) do a linear solve here
-    // -------------------------------------------------------
-
-    kmg->set_print(true);
-    kmg->solve();
-    kmg->set_print(false);
-    int *d_perm = kmg->grids[0].d_perm;
-    auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_mg_lin.vtk");
-    T lin_max_disp = get_max_disp(kmg->grids[0].d_soln);
-
-
-    // -----------------------------------------------------------
-    // 2) actually try Newton-mg solve here (this is just V1, later versions may use FMG cycle so less extra work needs to be done on fine grids)
-    //     i.e. you can do most of hte nonlinear solves to get in basin of attraction on coarser grids first.. (then nonlinear fine grid at end only, or some FMG cycle)
-
-    // new nonlinear solver
-    // ======================
-
-    // build the inexact newton + outer continuation solver
-    using Mat = BsrMat<DeviceVec<T>>;
-    using Vec = DeviceVec<T>;
-    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG>;
-    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
-
-    INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg);
-    // bool use_predictor = true, debug = false;
-    bool use_predictor = false, debug = false;
-    NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver, use_predictor, debug);
-
-    // now try calling it
-    T lambda0 = 0.2;
-    // T lambda0 = 0.05;
-    // T inner_atol = 1e-2;
-    // T inner_atol = 1e-4;
-    // T inner_atol = 1e-4;
-    T inner_atol = 1e-6;
-    nl_solver->solve(fine_vars, lambda0, inner_atol);
-    T nl_max_disp = get_max_disp(fine_vars);
-
-    // print some of the data of host residual
-    auto h_vars = fine_vars.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(fine_assembler, h_vars, "out/plate_mg_nl.vtk");
-
-    // important to know reduction for how NL regime we are
-    T ratio = nl_max_disp / lin_max_disp;
-    printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
+    // fastest is K-cycle usually
+    if (cycle_type == "V") {
+        mg->vcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); //(good option)
+    } else if (cycle_type == "W") {
+        mg->wcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol);
+    } else if (cycle_type == "F") {
+        mg->fcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); // also decent
+    } else if (cycle_type == "K") {
+        kmg->solve(); // best
+    }
 
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start1;
-    int ndof = fine_assembler.get_num_vars();
+    int ndof = cycle_type == "K" ? kmg->grids[0].N : mg->grids[0].N;
     double total = startup_time.count() + solve_time.count();
-    printf("nonlinear Newton-Raphson KMG solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), solve_time.count(), total);
+    double mem_MB = is_kcycle ? kmg->get_memory_usage_mb() : mg->get_memory_usage_mb();
+    printf("plate GMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
 
-    // free and cleanup
-    // --------------------
-
-    // nl_solver.free();
-    kmg->free();
-    fine_assembler.free();
+    if (is_kcycle) {
+        // print some of the data of host residual
+        int *d_perm = kmg->grids[0].d_perm;
+        auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
+        printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_mg.vtk");
+    } else {
+        // print some of the data of host residual
+        int *d_perm = mg->grids[0].d_perm;
+        auto h_soln = mg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
+        printToVTK<Assembler,HostVec<T>>(mg->grids[0].assembler, h_soln, "out/plate_mg.vtk");
+    }
 }
 
 template <typename T, class Assembler>
@@ -496,10 +426,10 @@ int main(int argc, char **argv) {
     // old GSMC settings
     int nsmooth = 1;
     int ninnercyc = 1;
-    std::string cycle_type = "K"; // "V", "F", "W", "K"
+    std::string cycle_type = "V"; // "V", "F", "W", "K"
     // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9', 'HR4'
     // std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
-    std::string elem_type = "CFI9"; 
+    std::string elem_type = "HR4"; 
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {

@@ -378,7 +378,7 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::compute_visualizatio
 
 #ifdef USE_GPU
 
-    const int elems_per_block = 32;
+    const int elems_per_block = Phys::hellingerReissner ? 4 : 32;
     dim3 block(Quadrature::num_quad_pts, elems_per_block);
     int nblocks = (num_elements + block.y - 1) / block.y;
     dim3 grid(nblocks);
@@ -392,6 +392,7 @@ void ElementAssembler<ElemGroup, T, Basis, Phys, Vec, Mat>::compute_visualizatio
     k_vis_stresses<T, ElemGroup, Data, elems_per_block, Vec><<<grid, block>>>(
         num_elements, elem_components, geo_conn, vars_conn, xpts, vars, compData, stresses);
 
+    CHECK_CUDA(cudaDeviceSynchronize());
 #endif
 };
 

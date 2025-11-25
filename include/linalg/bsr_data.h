@@ -119,7 +119,7 @@ class BsrData {
         // then also compute rows here
         rows = new int[nnzb];
         for (int i = 0; i < nnodes; i++) {
-            for (int jp = rowp[i]; jp < rowp[i+1]; jp++) {
+            for (int jp = rowp[i]; jp < rowp[i + 1]; jp++) {
                 rows[jp] = i;
             }
         }
@@ -462,8 +462,8 @@ class BsrData {
     }
 
     __HOST__ void multicolor_junction_reordering_v2(int node_geom_ind[], int &n_colors,
-                                                 int *&color_rowp) {
-        /* a multicolor reordering for colored Gauss-seidel multigrid, using 0,1,2 geom levels for 
+                                                    int *&color_rowp) {
+        /* a multicolor reordering for colored Gauss-seidel multigrid, using 0,1,2 geom levels for
         face, edge and corner node */
 
         int *colors = new int[nnodes];
@@ -499,7 +499,7 @@ class BsrData {
 
         // now color the edge nodes
         for (int row = 0; row < nnodes; row++) {
-            if (node_geom_ind[row] != 1) continue; // just edge nodes now
+            if (node_geom_ind[row] != 1) continue;  // just edge nodes now
 
             // get list of adjacent colors
             std::vector<int> adj_colors;
@@ -522,7 +522,7 @@ class BsrData {
 
         // now color the corner nodes
         for (int row = 0; row < nnodes; row++) {
-            if (node_geom_ind[row] != 2) continue; // just corner nodes now
+            if (node_geom_ind[row] != 2) continue;  // just corner nodes now
 
             // get list of adjacent colors
             std::vector<int> adj_colors;
@@ -626,8 +626,7 @@ class BsrData {
         // then we perform random reordering to reduce chain lengths
         int prune_width = (int)(1.0 / p_factor * bandwidth);
         if (print)
-            printf("qordering with init bandwidth %d and prune width %d\n", bandwidth,
-                   prune_width);
+            printf("qordering with init bandwidth %d and prune width %d\n", bandwidth, prune_width);
         int num_prunes = (nnodes + prune_width - 1) / prune_width;
         std::random_device rd;  // random number generator
         std::mt19937 g(rd());
@@ -659,7 +658,7 @@ class BsrData {
 
     __HOST__ void random_reordering() {
         /*  fully random reordering
-        */
+         */
         std::random_device rd;  // random number generator
         std::mt19937 g(rd());
         // since iperm is used for sparsity change now, qperm modifies that
@@ -787,8 +786,8 @@ class BsrData {
 #endif
 
         // create HostVec wrapper objects in CUDA, transfer to device and get ptr for new object
-        DeviceVec<int> d_rowp(nnodes + 1, rowp), d_rows(nnzb, rows), d_cols(nnzb, cols), d_perm(nnodes, perm),
-            d_iperm(nnodes, iperm), d_elem_ind_map(n_eim, elem_ind_map),
+        DeviceVec<int> d_rowp(nnodes + 1, rowp), d_rows(nnzb, rows), d_cols(nnzb, cols),
+            d_perm(nnodes, perm), d_iperm(nnodes, iperm), d_elem_ind_map(n_eim, elem_ind_map),
             d_tr_rowp(nnodes + 1, tr_rowp), d_tr_cols(nnzb, tr_cols),
             d_tr_block_map(nnzb, tr_block_map);
         new_bsr.rowp = d_rowp.createHostVec().getPtr();
@@ -840,8 +839,8 @@ class BsrData {
             new_bsr.elem_conn = d_elem_conn;
         }
 
-        HostVec<int> h_rowp(nnodes + 1, rowp), h_rows(nnzb, rows), h_cols(nnzb, cols), h_perm(nnodes, perm),
-            h_iperm(nnodes, iperm);
+        HostVec<int> h_rowp(nnodes + 1, rowp), h_rows(nnzb, rows), h_cols(nnzb, cols),
+            h_perm(nnodes, perm), h_iperm(nnodes, iperm);
         new_bsr.rowp = h_rowp.createDeviceVec().getPtr();
         new_bsr.rows = h_rows.createDeviceVec().getPtr();
         new_bsr.cols = h_cols.createDeviceVec().getPtr();

@@ -15,7 +15,8 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
     using Basis = typename Assembler::Basis;
     using Geo = typename Assembler::Geo;
     using Data = typename Assembler::Data;
-    int order = Basis::order;
+    using Physics = typename Assembler::Phys;
+    const int order = Basis::order;
 
     /*
     make a rectangular plate mesh of shell elements
@@ -50,43 +51,87 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
 
     // printf("checkpoint 1\n");
 
+    constexpr bool IS_HR_ELEM = Physics::hellingerReissner;
+    int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
+    int vpn = Physics::vars_per_node;
+
     // make our bcs vec (note I use 1-based terminology from nastran in
     // description above) but since this is in C++ I apply BCs here 0-based as
     // in 012345
     std::vector<int> my_bcs;
     // (0,0) corner with dof 123456
-    for (int idof = 0; idof < 6; idof++) {
+    for (int idof = 0; idof < vpn; idof++) {
         my_bcs.push_back(idof);
     }
     // negative x2 (or y) edge with dof 23
     for (int ix = 1; ix < nnx; ix++) {
         int iy = 0;
         int inode = nnx * iy + ix;
-        my_bcs.push_back(6 * inode + 1);  // dof 2 for v
-        my_bcs.push_back(6 * inode + 2);  // dof 3 for w
-        my_bcs.push_back(6 * inode + 4);  // dof 5 for thy
+        if constexpr (IS_HR_ELEM) {
+            // also constrain [v0, v1, v2, v3, v4] = strain-disp of [e11, e12, e22, gam13, gam23]
+            // with v1(e12) constrained like u and v and e11,e22 like u,v and gam13, gam23 like thx,
+            my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
+            my_bcs.push_back(vpn * inode + 2);  // v2 equiv to e22 strain-gap disp (zero like v)
+            my_bcs.push_back(vpn * inode +
+                             3);  // v3 equiv to gam13 strain-gap disp (zero like w, thy), checked
+                                  // coupling in nodal matrix (this is right)
+        }
+
+        my_bcs.push_back(vpn * inode + offset + 1);  // dof 2 for v
+        my_bcs.push_back(vpn * inode + offset + 2);  // dof 3 for w
+        my_bcs.push_back(vpn * inode + offset + 4);  // dof 5 for thy
     }
     // neg and pos x1 edges with dof 13 and 3 resp.
     for (int iy = 1; iy < nny; iy++) {
         // neg x1 edge
         int ix = 0;
         int inode = nnx * iy + ix;
-        my_bcs.push_back(6 * inode);
-        my_bcs.push_back(6 * inode + 2);
-        my_bcs.push_back(6 * inode + 3);  // dof 4 for thx
+        my_bcs.push_back(vpn * inode + offset);      // u
+        my_bcs.push_back(vpn * inode + offset + 2);  // w
+        my_bcs.push_back(vpn * inode + offset + 3);  // dof 4 for thx
+        if constexpr (IS_HR_ELEM) {
+            my_bcs.push_back(vpn * inode + 0);  // v0 equiv to e11 strain-gap disp (zero like u)
+            my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like u)
+            my_bcs.push_back(vpn * inode + 4);  // v4 equiv to gam23 strain-gap disp (zero like
+            // w, thy). cje
+        }
 
         // pos x1 edge
         ix = nnx - 1;
         inode = nnx * iy + ix;
-        my_bcs.push_back(6 * inode + 2);  // corresp dof 3 for w
+        my_bcs.push_back(vpn * inode + offset + 2);  // corresp dof 3 for w
+        my_bcs.push_back(vpn * inode + offset + 3);  // corresp dof 3 for thx
+        // no HR constraints needed on positive edges
+        if constexpr (IS_HR_ELEM) {
+            // in-plane BCs a bit weird still (needed v12 or v1 = 0 on positive x1,x2 edges but not
+            // v0 and v2) my_bcs.push_back(vpn * inode + 0);
+            // v0 equiv to e11 strain-gap disp (zero like u)
+            my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like u)
+            my_bcs.push_back(vpn * inode + 4);  // v4 equiv to gam23 strain-gap disp (zero like
+            // thx)
+        }
     }
-    // pos x2 edge
+    // pos x2 edge (up to one before upper-right corner)
     for (int ix = 1; ix < nnx - 1; ix++) {
         int iy = nny - 1;
         int inode = nnx * iy + ix;
         // printf("new bc = %d\n", 6 * inode + 2);
-        my_bcs.push_back(6 * inode + 4);  // dof 5 for thy
-        my_bcs.push_back(6 * inode + 2);  // corresp dof 3 for w
+        my_bcs.push_back(vpn * inode + offset + 4);  // dof 5 for thy
+        my_bcs.push_back(vpn * inode + offset + 2);  // corresp dof 3 for w
+        // no HR constraints needed on positive edges
+        if constexpr (IS_HR_ELEM) {
+            my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
+            // my_bcs.push_back(vpn * inode + 2);  // v2 equiv to e22 strain-gap disp (zero like v)
+            my_bcs.push_back(vpn * inode + 3);  // v3 equiv to gam13 strain-gap disp (like thy)
+        }
+    }
+    // pos (x1,x2) corner node, add thy DOF
+    int inode = nnx * (nny - 1) + nnx - 1;
+    my_bcs.push_back(vpn * inode + offset + 4);  // set thy DOF zero here too
+    if constexpr (IS_HR_ELEM) {
+        my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
+        // my_bcs.push_back(vpn * inode + 2);  // v2 equiv to e22 strain-gap disp (zero like v)
+        my_bcs.push_back(vpn * inode + 3);  // v3 equiv to gam13 strain-gap disp (like thy)
     }
 
     HostVec<int> bcs(my_bcs.size());
@@ -119,6 +164,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
             }
         }
     }
+    // return;
 
     // printf("elem_conn with nnodes_per_elem %d: ", Basis::num_nodes);
     // printVec<int>(N, elem_conn);
@@ -137,9 +183,19 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
         for (int ix = 0; ix < nnx; ix++) {
             int inode = nnx * iy + ix;
             T *xpt_node = &xpts[Geo::spatial_dim * inode];
-            xpt_node[0] = dx * ix;
-            xpt_node[1] = dy * iy;
-            xpt_node[2] = 0.0;
+            if constexpr (Basis::order == 1) {
+                xpt_node[0] = dx * ix;
+                xpt_node[1] = dy * iy;
+                xpt_node[2] = 0.0;
+            } else {
+                // higher order needs to now the current mid-side node location
+                int ix_corner = (ix / n) * n, iy_corner = (iy / n) * n;
+                // here nx is the number of points in element (related to elem order)
+                T xi = Basis::getGaussPoint(ix % n), eta = Basis::getGaussPoint(iy % n);
+                xpt_node[0] = dx * ix_corner + (1.0 + xi) * 0.5 * (dx * order);
+                xpt_node[1] = dy * iy_corner + (1.0 + eta) * 0.5 * (dy * order);
+                xpt_node[2] = 0.0;
+            }
         }
     }
 
@@ -267,6 +323,10 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
     int nny = order * nye + 1;
     int num_nodes = nnx * nny;
 
+    constexpr bool IS_HR_ELEM = Phys::hellingerReissner;
+    int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
+    int vpn = Phys::vars_per_node;
+
     T dx = Lx / (nnx - 1);
     T dy = Ly / (nny - 1);
 
@@ -290,8 +350,9 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
             T nodal_load = load_mag * sin(5.0 * PI * r) * cos(4.0 * th);
 
             if (ix % order == 0 && iy % order == 0) {
+                // no loads on mid-side nodes
                 // don't put loads on mid-side nodes etc of higher order (weird results)
-                my_loads[Phys::vars_per_node * inode + 2] = nodal_load;  // * dx * dy;
+                my_loads[vpn * inode + offset + 2] = nodal_load;  // * dx * dy;
             }
         }
     }
@@ -533,12 +594,23 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
     using Basis = typename Assembler::Basis;
     using Geo = typename Assembler::Geo;
     using Data = typename Assembler::Data;
+    using Physics = typename Assembler::Phys;
 
     // number of nodes per direction
-    int nnx = nxe + 1;  // axial nodes
-    int nnh = nhe;      // number of hoop nodes
+    const int order = Basis::order;
+    int n = order + 1;
+    int nnx = order * nxe + 1;  // axial nodes
+    int nnh = order * nhe;      // number of hoop nodes
     int num_nodes = nnx * nnh;
     int num_elements = nxe * nhe;
+
+    constexpr bool IS_HR_ELEM = Physics::hellingerReissner;
+    int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
+    int vpn = Physics::vars_per_node;
+
+    if constexpr (Basis::order > 1) {
+        printf("ERROR TODO, need to add different GP spacing of mid-side nodes for cylinder\n");
+    }
 
     // cylinder is in x direction along its axis, circle planes are in yz plane
 
@@ -549,25 +621,41 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
     // TODO : will change to use disp control BCs later
     // node 0 has dof 123456, changed now to just 123
     // for (int idof = 0; idof < 3; idof++) {
-    for (int idof = 0; idof < 6; idof++) {  // clamped
+    for (int idof = 0; idof < vpn; idof++) {  // clamped
         my_bcs.push_back(idof);
     }
     // rest of nodes on xneg hoop are simply supported and with no axial disp
     for (int ih = 0; ih < nnh; ih++) {
-        int inode_L = ih * nnx;                     // xneg node
-        int inode_R = inode_L + nnx - 1;            // xpos node
-        if (inode_L != 0) {                         // xneg nodes
-            for (int idof = 0; idof < 3; idof++) {  // simply supported
-                // for (int idof = 0; idof < 6; idof++) {  // clamped
+        int inode_L = ih * nnx;           // xneg node
+        int inode_R = inode_L + nnx - 1;  // xpos node
+        if (inode_L != 0) {               // xneg nodes
+            // for (int idof = 0; idof < 3; idof++) {  // simply supported
+            for (int idof = 0; idof < 6; idof++) {  // clamped
                 // constrain u,v,w disp on xneg edge
-                if (inode_L != 0) my_bcs.push_back(6 * inode_L + idof);
+                if (inode_L != 0) my_bcs.push_back(vpn * inode_L + offset + idof);
+            }
+            // also constrain the thx rotation?
+            // then hellinger reissner bcs
+            if constexpr (IS_HR_ELEM) {
+                my_bcs.push_back(vpn * inode_L + 0);  // e11 strain-gap disp
+                my_bcs.push_back(vpn * inode_L + 1);  // e12 strain-gap disp
+                my_bcs.push_back(vpn * inode_L + 2);  // e22 strain-gap disp
+                my_bcs.push_back(vpn * inode_L + 3);  // gam13 strain-gap disp
+                my_bcs.push_back(vpn * inode_L + 4);  // gam23 strain-gap disp
             }
         }
         // xpos nodes
-        for (int idof = 1; idof < 3; idof++) {  // simply supported
-            // for (int idof = 0; idof < 6; idof++) {  // clamped
+        // for (int idof = 1; idof < 3; idof++) {  // simply supported
+        for (int idof = 0; idof < 6; idof++) {  // clamped
             // only constraint v,w on xpos edge (TODO : later make disp control here)
-            my_bcs.push_back(6 * inode_R + idof);
+            my_bcs.push_back(6 * inode_R + offset + idof);
+        }
+        if constexpr (IS_HR_ELEM) {
+            my_bcs.push_back(vpn * inode_R + 0);  // e11 strain-gap disp
+            my_bcs.push_back(vpn * inode_R + 1);  // e12 strain-gap disp
+            my_bcs.push_back(vpn * inode_R + 2);  // e22 strain-gap disp
+            my_bcs.push_back(vpn * inode_R + 3);  // gam13 strain-gap disp
+            my_bcs.push_back(vpn * inode_R + 4);  // gam23 strain-gap disp
         }
     }
 
@@ -585,10 +673,13 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
     for (int ihe = 0; ihe < nhe - 1; ihe++) {
         for (int ixe = 0; ixe < nxe; ixe++) {
             int ielem = nxe * ihe + ixe;
-            int inode = nnx * ihe + ixe;
-            int nodes[] = {inode, inode + 1, inode + nnx, inode + nnx + 1};
-            for (int inode = 0; inode < Basis::num_nodes; inode++) {
-                elem_conn[Basis::num_nodes * ielem + inode] = nodes[inode];
+            for (int iloc = 0; iloc < n * n; iloc++) {
+                int ilx = iloc % n, ily = iloc / n;
+                int ix = order * ixe + ilx;
+                int iy = order * ihe + ily;
+                int inode = nnx * iy + ix;
+
+                elem_conn[Basis::num_nodes * ielem + iloc] = inode;
             }
         }
     }
@@ -596,11 +687,14 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
     int ihe = nhe - 1;
     for (int ixe = 0; ixe < nxe; ixe++) {
         int ielem = nxe * ihe + ixe;
-        int inode_n = nnx * ihe + ixe;  // last row before closing hoop
-        int inode_p = ixe;              // closes hoop so first row of nodes
-        int nodes[] = {inode_n, inode_n + 1, inode_p, inode_p + 1};
-        for (int inode = 0; inode < Basis::num_nodes; inode++) {
-            elem_conn[Basis::num_nodes * ielem + inode] = nodes[inode];
+        for (int iloc = 0; iloc < n * n; iloc++) {
+            int ilx = iloc % n, ily = iloc / n;
+            int ix = order * ixe + ilx;
+            int iy = order * ihe + ily;
+            if (ily == n - 1) iy = 0;  // loops back around
+            int inode = nnx * iy + ix;
+
+            elem_conn[Basis::num_nodes * ielem + iloc] = inode;
         }
     }
 
@@ -613,19 +707,30 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
     // now set the xyz-coordinates of the cylinder
     int32_t num_xpts = Geo::spatial_dim * num_nodes;
     HostVec<T> xpts(num_xpts);
-    T dx = L / nxe;
-    T dth = 2 * M_PI / nhe;
+    T dx = L / (nnx - 1);
+    T dth = 2 * M_PI / nnh;
     for (int ih = 0; ih < nnh; ih++) {
         for (int ix = 0; ix < nnx; ix++) {
             int inode = nnx * ih + ix;
-            T *xpt_node = &xpts[Geo::spatial_dim * inode];
-            xpt_node[0] = dx * ix;
-            T th = dth * ih;
+            if (ix % order == 0 && ih % order == 0)
+                continue;  // only apply loads to non mid-side nodes?
 
-            // apply imperfection to shell midplane coords
-            T R_mid = R;
+            T *xpt_node = &xpts[Geo::spatial_dim * inode];
+            T x, th, R_mid;
+            if constexpr (Basis::order == 1) {
+                x = dx * ix;
+                th = dth * ih;
+                R_mid = R;
+            } else {
+                int ix_corner = (ix / n) * n, ih_corner = (ih / n) * n;
+                // here nx is the number of points in element (related to elem order)
+                T xi = Basis::getGaussPoint(ix % n), eta = Basis::getGaussPoint(ih % n);
+                x = dx * ix_corner + 0.5 * (1 + xi) * (dx * order);
+                th = dth * ih_corner + 0.5 * (1 + eta) * (dth * order);
+                R_mid = R;
+            }
             if (imperfection) {
-                T x_hat = xpt_node[0] / L;
+                T x_hat = x / L;
                 T th_hat = th / 2 / M_PI;
 
                 // can change settings here
@@ -634,6 +739,7 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
                 R_mid += thick * imp_mag * imp_shape;
             }
 
+            xpt_node[0] = x;
             xpt_node[1] = R_mid * sin(th);
             xpt_node[2] = R_mid * cos(th);
         }
@@ -686,6 +792,10 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
     int nnh = nhe + 1;
     int num_nodes = nnx * nnh;
 
+    constexpr bool IS_HR_ELEM = Phys::hellingerReissner;
+    int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
+    int vpn = Phys::vars_per_node;
+
     T dx = L / nxe;
     T dth = 2 * M_PI / nhe;
 
@@ -704,7 +814,7 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
                 if (ix == nnx - 1) {
                     // on xpos edge, make compressive loads in x-direction
                     // printf("compressive load on %d\n", inode);
-                    my_loads[Phys::vars_per_node * inode] = -load_mag;
+                    my_loads[vpn * inode + offset] = -load_mag;
                 }
             } else if (load_case == 2) {  // otherwise transverse simply sine-sine load
                 // transverse sinusoidal magnitude
@@ -713,8 +823,8 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
                 T mag = load_mag * sin(x_hat * 5 * M_PI) * sin(th_hat * 4 * M_PI);
 
                 // y and z transverse loads in radial direction only
-                my_loads[Phys::vars_per_node * inode + 1] = sin(th) * mag;
-                my_loads[Phys::vars_per_node * inode + 2] = cos(th) * mag;
+                my_loads[vpn * inode + offset + 1] = sin(th) * mag;
+                my_loads[vpn * inode + offset + 2] = cos(th) * mag;
             } else if (load_case == 3) {  // petal load
                 // rose shape in hoop, chirp in x direction
                 T x_hat = x / L;
@@ -727,8 +837,8 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
                         sin(5 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
 
                 // y and z transverse loads in radial direction only
-                my_loads[Phys::vars_per_node * inode + 1] = sin(th) * mag;
-                my_loads[Phys::vars_per_node * inode + 2] = cos(th) * mag;
+                my_loads[vpn * inode + offset + 1] = sin(th) * mag;
+                my_loads[vpn * inode + offset + 2] = cos(th) * mag;
             }
         }
     }

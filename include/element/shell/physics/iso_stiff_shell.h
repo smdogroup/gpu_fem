@@ -6,14 +6,16 @@
 #include "a2dcore.h"
 #include "isotropic_shell.h"
 
-template <typename T, class Data_, bool isNonlinear = false, bool hellingerReissner = false>
-class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear, hellingerReissner> {
+template <typename T, class Data_, bool isNonlinear = false, bool hellingerReissner_ = false>
+class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear, hellingerReissner_> {
    public:
     using Data = Data_;
-    using IsoShellClass = IsotropicShell<T, Data_, isNonlinear, hellingerReissner>;
+    using IsoShellClass = IsotropicShell<T, Data_, isNonlinear, hellingerReissner_>;
+    static constexpr bool hellingerReissner = hellingerReissner_;
 
     // u, v, w, thx, thy, thz
     static constexpr int32_t vars_per_node = hellingerReissner ? 11 : 6;
+    static constexpr int32_t std_vpn = 6;
     // whether strain is linear or nonlinear (in this case linear)
     static constexpr A2D::ShellStrainType STRAIN_TYPE =
         isNonlinear ? A2D::ShellStrainType::NONLINEAR : A2D::ShellStrainType::LINEAR;
@@ -92,8 +94,7 @@ class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear, hel
                                                       A2D::ADObj<A2D::Vec<T2, 9>> &E,
                                                       A2D::ADObj<A2D::Vec<T2, 9>> &S) {
         // call panel contribution
-        IsoShellClass::computeQuadptStresses(physData, scale, u0x, u1x,
-                                                                     e0ty, et, E, S);
+        IsoShellClass::computeQuadptStresses(physData, scale, u0x, u1x, e0ty, et, E, S);
 
         // TODO : add stiffener contributions here
         //   when not added (only affects visualized stresses, not strains), and no affect on

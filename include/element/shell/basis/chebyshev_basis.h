@@ -56,51 +56,47 @@ class ChebyShev1D<T, 2> {
     }
 };
 
+/* only at third order do the gauss points (GPs) finally differ from standard Gauss-Lobatto points
+ * [-1, -0.5, 0.5, 1] and help prevent locking better */
 template <typename T>
 class ChebyShev1D<T, 3> {
-public:
+   public:
     static constexpr int num_nodes = 4;
 
     __HOST_DEVICE__ __forceinline__ static T getXi(int i) {
         if (i == 0) return -1.0;
-        if (i == 1) return -0.5;
-        if (i == 2) return  0.5;
+        if (i == 1) return -0.41421356237309504880;  // -(√2 - 1)
+        if (i == 2) return 0.41421356237309504880;   //  +(√2 - 1)
         return 1.0;
     }
 
-    __HOST_DEVICE__ __forceinline__ static void evalBasis(const T xi, T N[num_nodes]) {
-        const T x = xi;
-
-        // Cubic Chebyshev–Lobatto
-        N[0] = -(1.0/6.0) * (x + 0.5) * (x - 0.5) * (x - 1.0);
-        N[1] =  (4.0/3.0) * (x + 1.0) * (x - 0.5) * (x - 1.0);
-        N[2] = -(4.0/3.0) * (x + 1.0) * (x + 0.5) * (x - 1.0);
-        N[3] =  (1.0/6.0) * (x + 1.0) * (x + 0.5) * (x - 0.5);
+    __HOST_DEVICE__ __forceinline__ static void evalBasis(const T x, T N[num_nodes]) {
+        const T x2 = x * x;
+        const T x3 = x2 * x;
+        // N0
+        N[0] = (-0.6035533905932737) * x3 + (0.6035533905932737) * x2 + (0.10355339059327376) * x +
+               (-0.10355339059327376);
+        // N1
+        N[1] = (1.4571067811865475) * x3 + (-0.6035533905932737) * x2 + (-1.4571067811865475) * x +
+               (0.6035533905932737);
+        // N2
+        N[2] = (-1.4571067811865475) * x3 + (-0.6035533905932737) * x2 + (1.4571067811865475) * x +
+               (0.6035533905932737);
+        // N3
+        N[3] = (0.6035533905932737) * x3 + (0.6035533905932737) * x2 + (-0.10355339059327376) * x +
+               (-0.10355339059327376);
     }
 
-    __HOST_DEVICE__ __forceinline__ static void evalBasisGrad(const T xi, T dN[num_nodes]) {
-        const T x = xi;
-
-        // dN/dx for cubic Chebyshev polynomials
-        dN[0] =
-            -(1.0/6.0) * ( (x - 0.5)*(x - 1.0) 
-                         + (x + 0.5)*(x - 1.0) 
-                         + (x + 0.5)*(x - 0.5) );
-
-        dN[1] =
-            (4.0/3.0) * ( (x - 0.5)*(x - 1.0)
-                        + (x + 1.0)*(x - 1.0)
-                        + (x + 1.0)*(x - 0.5) );
-
-        dN[2] =
-            -(4.0/3.0) * ( (x + 0.5)*(x - 1.0)
-                         + (x + 1.0)*(x - 1.0)
-                         + (x + 1.0)*(x + 0.5) );
-
-        dN[3] =
-            (1.0/6.0) * ( (x + 0.5)*(x - 0.5)
-                        + (x + 1.0)*(x - 0.5)
-                        + (x + 1.0)*(x + 0.5) );
+    __HOST_DEVICE__ __forceinline__ static void evalBasisGrad(const T x, T dN[num_nodes]) {
+        const T x2 = x * x;
+        // dN0/dx = 3*a0*x^2 + 2*b0*x + c0
+        dN[0] = (-1.8106601717798211) * x2 + (1.2071067811865474) * x + (0.10355339059327376);
+        // dN1/dx
+        dN[1] = (4.3713203435596425) * x2 + (-1.2071067811865474) * x + (-1.4571067811865475);
+        // dN2/dx
+        dN[2] = (-4.3713203435596425) * x2 + (-1.2071067811865474) * x + (1.4571067811865475);
+        // dN3/dx
+        dN[3] = (1.8106601717798211) * x2 + (1.2071067811865474) * x + (-0.10355339059327376);
     }
 };
 
@@ -134,6 +130,11 @@ class ChebyshevQuadBasis {
         // static constexpr int32_t geo_data_size = 5 * num_quad_pts;
     };  // end of class LinearQuadGeo
     using Geo = LinearQuadGeo;
+
+    __HOST_DEVICE__ static T getGaussPoint(int i) {
+        // for use in assembler and structured prolong (external tools)
+        return Basis1D::getXi(i);
+    }
 
     // generic evalBasis call for interps in multigrid and FEA
     __HOST_DEVICE__ static void getBasis(const T pt[2], T N[num_nodes]) {
@@ -236,9 +237,7 @@ class ChebyshevQuadBasis {
     }  // end of interpFieldsGrad method
 
     template <int vars_per_node, int num_fields>
-    __HOST_DEVICE__ static void interpFieldsMixedGrad(const T pt[],
-                                                    const T values[],
-                                                    T d2mixed[]) {
+    __HOST_DEVICE__ static void interpFieldsMixedGrad(const T pt[], const T values[], T d2mixed[]) {
         // Compute 1D basis and gradients
         T na[nx], nb[nx];
         T dna[nx], dnb[nx];
@@ -246,13 +245,11 @@ class ChebyshevQuadBasis {
         Basis1D::evalBasisGrad(pt[0], dna), Basis1D::evalBasisGrad(pt[1], dnb);
 
         for (int ifield = 0; ifield < num_fields; ifield++) {
-
             T val = 0.0;
 
             // Loop over 2D nodes: N(xi_i, eta_j) = na[i] * nb[j]
             for (int j = 0; j < nx; j++) {
                 for (int i = 0; i < nx; i++) {
-
                     const int inode = nx * j + i;
 
                     // Mixed derivative:  dN/dxi * dN/deta = dna[i] * dnb[j]
@@ -267,9 +264,8 @@ class ChebyshevQuadBasis {
     }
 
     template <int vars_per_node, int num_fields>
-    __HOST_DEVICE__ static void interpFieldsMixedGradTranspose(const T pt[],
-                                                            const T d2mixed_b[],
-                                                            T values_b[]) {
+    __HOST_DEVICE__ static void interpFieldsMixedGradTranspose(const T pt[], const T d2mixed_b[],
+                                                               T values_b[]) {
         // Compute 1D basis and gradients
         T na[nx], nb[nx];
         T dna[nx], dnb[nx];
@@ -288,4 +284,4 @@ class ChebyshevQuadBasis {
             }
         }
     }
-};     // end of class ChebyshevQuadBasis
+};  // end of class ChebyshevQuadBasis

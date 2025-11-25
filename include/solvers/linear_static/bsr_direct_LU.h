@@ -81,6 +81,35 @@ void direct_LU_solve(BsrMat<DeviceVec<T>> &mat, DeviceVec<T> &rhs, DeviceVec<T> 
                                          nnzb, block_dim, d_vals_ILU0, d_rowp, d_cols, trans_L,
                                          trans_U, policy_L, policy_U, dir);
 
+    // // cehck LU factor (TEMP DEBUG)
+    // int *h_rowp = DeviceVec<int>(mb + 1, d_rowp).createHostVec().getPtr();
+    // int *h_cols = DeviceVec<int>(nnzb, d_cols).createHostVec().getPtr();
+    // int *h_perm = DeviceVec<int>(mb, bsr_data.perm).createHostVec().getPtr();
+    // T *h_vals0 = DeviceVec<T>(121 * nnzb, d_vals).createHostVec().getPtr();
+    // T *h_vals_ILU0 = DeviceVec<T>(121 * nnzb, d_vals_ILU0).createHostVec().getPtr();
+    // printf("block_dim %d with %d nodes\n", block_dim, mb);
+    // for (int _row = 0; _row < mb; _row++) {
+    //     for (int jp = h_rowp[_row]; jp < h_rowp[_row + 1]; jp++) {
+    //         int _col = h_cols[jp];
+    //         // unpermute from solve to vis order
+    //         int row = h_perm[_row], col = h_perm[_col];
+
+    //         printf("row %d from _row %d\n", row, _row);
+
+    //         printf("h_vals0 of nodes (%d,%d): \n", row, col);
+    //         for (int i = 0; i < 11; i++) {
+    //             printVec<T>(11, &h_vals0[121 * jp + 11 * i]);
+    //         }
+    //         printf("\n--------\n");
+
+    //         printf("h_vals_ILU0 of nodes (%d,%d): \n", row, col);
+    //         for (int i = 0; i < 11; i++) {
+    //             printVec<T>(11, &h_vals_ILU0[121 * jp + 11 * i]);
+    //         }
+    //         printf("\n--------\n");
+    //     }
+    // }
+
     // temp debug, time the triang solves only
     // cudaDeviceSynchronize();
     // auto start = std::chrono::high_resolution_clock::now();
@@ -91,10 +120,25 @@ void direct_LU_solve(BsrMat<DeviceVec<T>> &mat, DeviceVec<T> &rhs, DeviceVec<T> 
                                          d_vals_ILU0, d_rowp, d_cols, block_dim, info_L, d_rhs,
                                          d_temp, policy_L, pBuffer));
 
+    // T *h_temp = DeviceVec<T>(11 * mb, d_temp).createHostVec().getPtr();
+    // printf("h_temp1: ");
+    // for (int _inode = 0; _inode < mb; _inode++) {
+    //     int inode = h_perm[_inode];
+    //     printf("h_temp1 of node %d\n", inode);
+    //     printVec<T>(11, &h_temp[11 * _inode]);
+    // }
+
     // triangular solve U*y = z
     CHECK_CUSPARSE(cusparseDbsrsv2_solve(handle, dir, trans_U, mb, nnzb, &alpha, descr_U,
                                          d_vals_ILU0, d_rowp, d_cols, block_dim, info_U, d_temp,
                                          d_soln, policy_U, pBuffer));
+
+    // T *h_temp2 = DeviceVec<T>(11 * mb, d_soln).createHostVec().getPtr();
+    // for (int _inode = 0; _inode < mb; _inode++) {
+    //     int inode = h_perm[_inode];
+    //     printf("h_temp2 of node %d\n", inode);
+    //     printVec<T>(11, &h_temp2[11 * _inode]);
+    // }
 
     // print timing data
     // cudaDeviceSynchronize();
@@ -120,6 +164,5 @@ void direct_LU_solve(BsrMat<DeviceVec<T>> &mat, DeviceVec<T> &rhs, DeviceVec<T> 
     if (permute_inout) {
         permute_soln<BsrMat<DeviceVec<T>>, DeviceVec<T>>(mat, soln);
     }
-    
 }
 }  // namespace CUSPARSE

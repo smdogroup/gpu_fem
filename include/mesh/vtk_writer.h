@@ -30,6 +30,11 @@ void printToVTK(Assembler assembler, Vec soln, std::string filename) {
     auto d_xpts = assembler.getXpts();
     auto h_xpts = d_xpts.createHostVec();
 
+    using Phys = typename Assembler::Phys;
+    int vpn = Phys::vars_per_node;
+    int std_vpn = Phys::std_vpn;
+    int offset = (vpn == std_vpn) ? 0 : 5;  // for hellinger-reissner
+
     double *xpts_ptr = h_xpts.getPtr();
     for (int inode = 0; inode < num_nodes; inode++) {
         double *node_xpts = &xpts_ptr[3 * inode];
@@ -79,18 +84,19 @@ void printToVTK(Assembler assembler, Vec soln, std::string filename) {
     myfile << "POINT_DATA " << num_nodes << "\n";
     string scalarName = "disp";
     myfile << "VECTORS " << scalarName << " double64\n";
+
     for (int inode = 0; inode < num_nodes; inode++) {
-        myfile << soln[6 * inode] << sp;
-        myfile << soln[6 * inode + 1] << sp;
-        myfile << soln[6 * inode + 2] << "\n";
+        myfile << soln[vpn * inode + offset] << sp;
+        myfile << soln[vpn * inode + offset + 1] << sp;
+        myfile << soln[vpn * inode + offset + 2] << "\n";
     }
 
     scalarName = "rot";
     myfile << "VECTORS " << scalarName << " double64\n";
     for (int inode = 0; inode < num_nodes; inode++) {
-        myfile << soln[6 * inode + 3] << sp;
-        myfile << soln[6 * inode + 4] << sp;
-        myfile << soln[6 * inode + 5] << "\n";
+        myfile << soln[vpn * inode + offset + 3] << sp;
+        myfile << soln[vpn * inode + offset + 4] << sp;
+        myfile << soln[vpn * inode + offset + 5] << "\n";
     }
 
     // init visualization states

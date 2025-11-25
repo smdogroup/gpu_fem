@@ -13,6 +13,8 @@ class StructuredProlongation {
     static constexpr bool structured = true;
     static constexpr bool assembly = false;
 
+    static constexpr int32_t vars_per_node = Assembler::Phys::vars_per_node;
+
     StructuredProlongation(Assembler &fine_assembler) {
         // extract some relevant data from the coarse and fine assemblers
         nelems_fine = fine_assembler.get_num_elements();
@@ -42,9 +44,9 @@ class StructuredProlongation {
         dim3 block(32);
         int nblocks_x = (nelems_fine + 31) / 32;
         dim3 grid(nblocks_x);
-        k_plate_prolongate<T, Basis, geom>
-            <<<grid, block>>>(order, nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm,
-                              d_fine_iperm, coarse_soln_in.getPtr(), dx_fine.getPtr(), d_weights);
+        k_plate_prolongate<T, Basis, geom><<<grid, block>>>(
+            order, vars_per_node, nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm, d_fine_iperm,
+            coarse_soln_in.getPtr(), dx_fine.getPtr(), d_weights);
 
         /* ensure partition of unity by weight normalization */
         int nblock2 = (N_fine + 31) / 32;
@@ -64,7 +66,7 @@ class StructuredProlongation {
         int nblocks_x = (nelems_fine + 31) / 32;
         dim3 grid(nblocks_x);
         k_plate_restrict<T, Basis, geom><<<grid, block>>>(
-            order, nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm, d_fine_iperm,
+            order, vars_per_node, nxe_coarse, nxe_fine, nelems_fine, d_coarse_iperm, d_fine_iperm,
             fine_vec_in.getPtr(), coarse_vec_out.getPtr(), d_weights);
 
         // now normalize by the weights so partition of unity remains (only for restricting soln in

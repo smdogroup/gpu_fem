@@ -124,6 +124,11 @@ __GLOBAL__ static void k_add_jacobian_fast(int32_t vars_num_nodes, int32_t num_e
         __syncthreads();
     }
 
+    // if (threadIdx.x == 0 && blockIdx.x == 4) {
+    //     printf("local_mat_col of elem %d, elemCol %d: ");
+    //     printVec<T>(vars_per_elem, local_mat_col);
+    // }
+
 
     if constexpr (Quadrature::num_quad_pts == 4) {
         /* warp shuffle here.. */

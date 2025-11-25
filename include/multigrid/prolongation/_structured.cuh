@@ -8,7 +8,7 @@ enum ProlongationGeom : int {
 };
 
 template <typename T, class Basis, ProlongationGeom geom>
-__global__ static void k_plate_prolongate(const int order, const int nxe_coarse, const int nxe_fine, 
+__global__ static void k_plate_prolongate(const int order, const int vars_per_node, const int nxe_coarse, const int nxe_fine, 
     const int nelems_fine, const int *d_coarse_iperm, const int *d_fine_iperm,
     const T *coarse_soln_in, T *dx_fine, T *d_fine_wts) {
     // prolongation for linear cquad4 shells in plate geometry (corrects for arbitrary reordering here..)
@@ -57,9 +57,9 @@ __global__ static void k_plate_prolongate(const int order, const int nxe_coarse,
             int perm_fine_node = d_fine_iperm[fine_node];
 
             // now loop over each DOF..
-            for (int idof = 0; idof < 6; idof++) {
-                int coarse_dof = 6 * perm_coarse_node + idof;
-                int fine_dof = 6 * perm_fine_node + idof;
+            for (int idof = 0; idof < vars_per_node; idof++) {
+                int coarse_dof = vars_per_node * perm_coarse_node + idof;
+                int fine_dof = vars_per_node * perm_fine_node + idof;
                 T val = coarse_soln_in[coarse_dof];
                 val *= scale;
 
@@ -72,7 +72,7 @@ __global__ static void k_plate_prolongate(const int order, const int nxe_coarse,
 }
 
 template <typename T, class Basis, ProlongationGeom geom>
-__global__ static void k_plate_restrict(const int order, const int nxe_coarse, const int nxe_fine, 
+__global__ static void k_plate_restrict(const int order, const int vars_per_node, const int nxe_coarse, const int nxe_fine, 
     const int nelems_fine, const int *d_coarse_iperm, const int *d_fine_iperm,
     const T *defect_fine_in, T *defect_coarse_out, T *d_coarse_wts) {
     // restriction for linear cquad4 shells in plate geometry (corrects for arbitrary reordering here..)
@@ -121,9 +121,9 @@ __global__ static void k_plate_restrict(const int order, const int nxe_coarse, c
             int perm_fine_node = d_fine_iperm[fine_node];
 
             // now loop over each DOF..
-            for (int idof = 0; idof < 6; idof++) {
-                int coarse_dof = 6 * perm_coarse_node + idof;
-                int fine_dof = 6 * perm_fine_node + idof;
+            for (int idof = 0; idof < vars_per_node; idof++) {
+                int coarse_dof = vars_per_node * perm_coarse_node + idof;
+                int fine_dof = vars_per_node * perm_fine_node + idof;
                 T val = defect_fine_in[fine_dof];
                 val *= scale;
 

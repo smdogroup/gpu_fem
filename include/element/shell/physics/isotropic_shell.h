@@ -5,10 +5,11 @@
 #include "../data/isotropic.h"
 #include "a2dcore.h"
 
-template <typename T, class Data_, bool isNonlinear = false, bool hellingerReissner = false>
+template <typename T, class Data_, bool isNonlinear = false, bool hellingerReissner_ = false>
 class IsotropicShell {
    public:
     using Data = Data_;
+    static constexpr bool hellingerReissner = hellingerReissner_;
 
     // ensure the data is only allowed to be ShellIsotropicData
     // static_assert(std::is_same<Data_, ShellIsotropicData>::value,
@@ -16,6 +17,7 @@ class IsotropicShell {
 
     // u, v, w, thx, thy, thz
     static constexpr int32_t vars_per_node = hellingerReissner ? 11 : 6;
+    static constexpr int32_t std_vpn = 6;
     // whether strain is linear or nonlinear (in this case linear)
     static constexpr A2D::ShellStrainType STRAIN_TYPE =
         isNonlinear ? A2D::ShellStrainType::NONLINEAR : A2D::ShellStrainType::LINEAR;

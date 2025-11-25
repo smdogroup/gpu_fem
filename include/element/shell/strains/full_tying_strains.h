@@ -12,7 +12,7 @@
 template <typename T, class Physics, class Basis, bool is_nonlinear>
 __DEVICE__ static void computeFullTyingStrain(const T pt[], const T Xpts[], const T fn[],
                                               const T vars[], const T d[], T gty[]) {
-    static constexpr int vars_per_node = Physics::vars_per_node;
+    static constexpr int vars_per_node = Physics::std_vpn;
 
     // Interpolate the field values
     T Uxi[3], Ueta[3], Xxi[3], Xeta[3];
@@ -80,7 +80,7 @@ __DEVICE__ static void computeFullTyingStrainHfwd(const T pt[], const T Xpts[], 
     // otherwise continue and get nonlinear part of the derivatives
     __syncthreads();
 
-    static constexpr int vars_per_node = Physics::vars_per_node;
+    static constexpr int vars_per_node = Physics::std_vpn;
 
     // Interpolate the field values
     T Uxi[3], Ueta[3], p_Uxi[3], p_Ueta[3];
@@ -126,7 +126,7 @@ template <typename T, class Physics, class Basis, bool is_nonlinear>
 __DEVICE__ static void computeFullTyingStrainSens(const T pt[], const T Xpts[], const T fn[],
                                                   const T vars[], const T d[], const T gty_bar[],
                                                   T res[], T d_bar[]) {
-    static constexpr int vars_per_node = Physics::vars_per_node;
+    static constexpr int vars_per_node = Physics::std_vpn;
 
     // Interpolate the field values
     T Uxi[3], Ueta[3], Xxi[3], Xeta[3];
@@ -220,7 +220,7 @@ __DEVICE__ static void computeFullTyingStrainHrev(const T pt[], const T Xpts[], 
     // only valid for nonlinear case (aka uses gradient and second derivs of this step, nonlinear
     // part)
 
-    static constexpr int vars_per_node = Physics::vars_per_node;
+    static constexpr int vars_per_node = Physics::std_vpn;
 
     // Interpolate the field values
     T p_Uxi[3], p_Ueta[3];
