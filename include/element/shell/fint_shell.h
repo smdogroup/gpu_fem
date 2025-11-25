@@ -453,7 +453,7 @@ class FullyIntegratedShellAssembler
     }      // add_element_quadpt_jacobian_col
 
     template <class Data, STRAIN strain = ALL>
-    __DEVICE__ static void add_element_quadpt_residual_fast(
+    __DEVICE__ __noinline__  static void add_element_quadpt_residual_fast(
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
         const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
         const T vars[dof_per_elem], T res[dof_per_elem]) {
@@ -480,7 +480,7 @@ class FullyIntegratedShellAssembler
                 computeBendingStrain<T, is_nonlinear>(
                     u0x.value().get_data(), u1x.value().get_data(), ek.value().get_data());
             }
-            __syncthreads();
+            // __syncthreads();
 
             // 1st order brev (only need ek.bvalue, so no additional steps here)
             {
@@ -519,7 +519,7 @@ class FullyIntegratedShellAssembler
                 A2D::SymMatRotateFrame<T, 3>(XdinvT, gty, e0ty.value());
 
                 computeEngineerTyingStrains<T>(e0ty.value());
-                __syncthreads();
+                // __syncthreads();
             }
 
             // 1st order brev
@@ -548,12 +548,12 @@ class FullyIntegratedShellAssembler
             // pforward
             ShellComputeDrillStrainFast<T, vars_per_node, Basis, Director>(pt, Tmat, XdinvT, vars,
                                                                            et.value().get_data());
-            __syncthreads();
+            // __syncthreads();
 
             // compute drill stress
             Phys::computeDrillStress(scale, compData, et.value().get_data(),
                                      et.bvalue().get_data());
-            __syncthreads();
+            // __syncthreads();
 
             // hreverse for drill
             ShellComputeDrillStrainFastSens<T, vars_per_node, Basis, Director>(
@@ -563,7 +563,7 @@ class FullyIntegratedShellAssembler
     }  // add_element_quadpt_residual_fast
 
     template <class Data, STRAIN strain = ALL>
-    __DEVICE__ static void add_element_quadpt_jacobian_col_fast(
+    __DEVICE__ __noinline__ static void add_element_quadpt_jacobian_col_fast(
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
         const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
         const T vars[dof_per_elem], const T pvars[dof_per_elem], T matCol[dof_per_elem]) {
@@ -590,7 +590,7 @@ class FullyIntegratedShellAssembler
                 computeBendingStrain<T, is_nonlinear>(
                     u0x.value().get_data(), u1x.value().get_data(), ek.value().get_data());
             }
-            __syncthreads();
+            // __syncthreads();
 
             // just code in the linear part right now
             // pforward
@@ -606,7 +606,7 @@ class FullyIntegratedShellAssembler
                     u0x.value().get_data(), u1x.value().get_data(), u0x.pvalue().get_data(),
                     u1x.pvalue().get_data(), ek.pvalue().get_data());
             }
-            __syncthreads();
+            // __syncthreads();
 
             // 1st order brev (only need ek.bvalue, so no additional steps here)
             if constexpr (is_nonlinear) {
@@ -651,7 +651,7 @@ class FullyIntegratedShellAssembler
                 A2D::SymMatRotateFrame<T, 3>(XdinvT, gty, e0ty.value());
 
                 computeEngineerTyingStrains<T>(e0ty.value());
-                __syncthreads();
+                // __syncthreads();
             }
 
             // pforward section
@@ -668,7 +668,7 @@ class FullyIntegratedShellAssembler
 
                 computeEngineerTyingStrains<T>(e0ty.pvalue());
             }
-            __syncthreads();
+            // __syncthreads();
 
             // 1st order brev
             A2D::SymMat<T, 3> gty_bar;
@@ -679,7 +679,7 @@ class FullyIntegratedShellAssembler
 
                 A2D::SymMat3x3RotateFrameReverse<T>(XdinvT, e0ty.bvalue().get_data(),
                                                     gty_bar.get_data());
-                __syncthreads();
+                // __syncthreads();
             }
 
             // 2nd order hrev
@@ -709,12 +709,12 @@ class FullyIntegratedShellAssembler
             // pforward
             ShellComputeDrillStrainFast<T, vars_per_node, Basis, Director>(pt, Tmat, XdinvT, pvars,
                                                                            et.pvalue().get_data());
-            __syncthreads();
+            // __syncthreads();
 
             // compute drill stress
             Phys::computeDrillStress(scale, compData, et.pvalue().get_data(),
                                      et.hvalue().get_data());
-            __syncthreads();
+            // __syncthreads();
 
             // hreverse for drill
             ShellComputeDrillStrainFastSens<T, vars_per_node, Basis, Director>(

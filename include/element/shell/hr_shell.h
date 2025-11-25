@@ -6,6 +6,7 @@
 #include "a2dcore.h"
 #include "cuda_utils.h"
 #include "strains/_all.h"
+#include "strains/hr_tying_strains.h" // special strain-gap tying strains for HR element
 
 // fully integrated here means we don't reduced integrated or MITC (mixed integrated)
 // the transverse shear or membrane strains (in order to have better multigrid performance)
@@ -35,6 +36,7 @@ class HellingerReissnerShellAssembler
     static constexpr int32_t dof_per_elem = vars_per_node * num_nodes;
     static constexpr int32_t num_quad_pts = Quadrature::num_quad_pts;
     static constexpr int32_t hr_offset = 5; // hellinger-reissner (hr) offset of standard 6 DOF (u,v,w,thx,thy,thz), come after new HR 5 DOF
+    static constexpr int32_t standard_vpn = vars_per_node - hr_offset; // =6 normally
 
 // TODO : way to make this more general if num_quad_pts is not a multiple of 3?
 // some if constexpr stuff on type of Basis?
@@ -96,7 +98,7 @@ class HellingerReissnerShellAssembler
     }
 
     template <class Data, STRAIN strain = ALL>
-    __DEVICE__ static void add_element_quadpt_residual_fast(
+    __DEVICE__ __noinline__  static void add_element_quadpt_residual_fast(
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
         const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
         const T full_vars[dof_per_elem], T full_res[dof_per_elem]) {
@@ -115,10 +117,13 @@ class HellingerReissnerShellAssembler
         // assume that standard vars has been reordered into 
         // HR DOF [n1,n2,n3,n4] then standard 6DOF [n1,n2,n3,n4] for 1st order example
         // and same for full res. Then we'll permute back later..
-        T *hr_vars = full_vars;
-        T *vars = &full_vars[hr_offset * num_nodes];
-        T *hr_res = full_res;
-        T *res = &full_res[hr_offset * num_nodes];
+        T hr_vars[hr_offset * num_nodes];
+        T vars[standard_vpn * num_nodes];
+        blockPermuteHRVarsPerNode<T>(full_vars, hr_vars, vars, num_nodes, hr_dof, standard_vpn);
+
+        // then make standard and full residual
+        T hr_res[hr_offset * num_nodes] = {0};
+        T res[standard_vpn * num_nodes] = {0};
 
         // only the tying strains have different terms in the HR formulation?
 
@@ -139,7 +144,7 @@ class HellingerReissnerShellAssembler
                 computeBendingStrain<T, is_nonlinear>(
                     u0x.value().get_data(), u1x.value().get_data(), ek.value().get_data());
             }
-            __syncthreads();
+            // __syncthreads();
 
             // 1st order brev (only need ek.bvalue, so no additional steps here)
             {
@@ -165,44 +170,64 @@ class HellingerReissnerShellAssembler
 
             /* tying strains are computed special way with HR element */
 
-            // 1) first we consider the -Eubar*C*Eubar term (strain-gap to itself)
-            // fully linear, the -He part
-            
+            /* 1) first we consider the -He = -Eubar*C*Eubar term (strain-gap to itself, fully linear) */
+            {
+                // forward prop from strain-gap disps
+                computeHR_tyingStrain<T, Basis>(pt, hr_vars, XdinvT, e0ty.value());
+                computeEngineerTyingStrains<T>(e0ty.value());
+                // negate the tying strians for this -He term (with strain-gap to strain-gap)
+                negateHR_tyingStrain<T>(e0ty.value());
 
-            // forward section
-            // --------------------------------
+                // compute tying stresses (to multiply through constitutive)
+                Phys::computeTyingStress(scale, compData, e0ty.value(), e0ty.bvalue());
+                
+                // then backprop to strain-gap disp residual
+                computeEngineerTyingStrains<T>(e0ty.bvalue());
+                computeHR_tyingStrainTranspose<T, Basis>(pt, e0ty.bvalue(), XdinvT, hr_res);
+            }
+            // __syncthreads();
+
+            /* 2) then nonlinear forward to strain-gap backprop */
             T d[3 * num_nodes];  // need directors in reverse for nonlinear strains
             {
+                // forward tying strains (no need to re-zero)
                 Director::template computeDirector<vars_per_node, num_nodes>(vars, fn, d);
-
                 A2D::SymMat<T, 3> gty;
                 computeFullTyingStrain<T, Phys, Basis, is_nonlinear>(pt, xpts, fn, vars, d,
                                                                      gty.get_data());
-
                 A2D::SymMatRotateFrame<T, 3>(XdinvT, gty, e0ty.value());
-
                 computeEngineerTyingStrains<T>(e0ty.value());
-                __syncthreads();
-            }
 
-            // 1st order brev
-            A2D::SymMat<T, 3> gty_bar;
-            {
+                // through constitutive (to stress)
                 Phys::computeTyingStress(scale, compData, e0ty.value(), e0ty.bvalue());
 
+                // backprop tying strains to strain-gap
                 computeEngineerTyingStrains<T>(e0ty.bvalue());
+                computeHR_tyingStrainTranspose<T, Basis>(pt, e0ty.bvalue(), XdinvT, hr_res);
+            }
+            // __syncthreads();
 
+            /* 3) then forward strain-gap to nonlinear backprop true disps */
+            {
+                // forward prop from strain-gap disps
+                computeHR_tyingStrain<T, Basis>(pt, hr_vars, XdinvT, e0ty.value());
+                computeEngineerTyingStrains<T>(e0ty.value());
+
+                // compute tying stresses (to multiply through constitutive)
+                Phys::computeTyingStress(scale, compData, e0ty.value(), e0ty.bvalue());
+
+                // 1st order brev
+                A2D::SymMat<T, 3> gty_bar;
+                computeEngineerTyingStrains<T>(e0ty.bvalue());
                 A2D::SymMat3x3RotateFrameReverse<T>(XdinvT, e0ty.bvalue().get_data(),
                                                     gty_bar.get_data());
-
                 A2D::Vec<T, 3 * num_nodes> d_bar;
                 computeFullTyingStrainSens<T, Phys, Basis, is_nonlinear>(
                     pt, xpts, fn, vars, d, gty_bar.get_data(), res, d_bar.get_data());
-
                 Director::template computeDirectorSens<vars_per_node, num_nodes>(
                     fn, d_bar.get_data(), res);
             }
-        }
+        } // done with tying strains
 
         // just show the linear case pvalue and hvalue rn
         if constexpr (drill) {
@@ -211,31 +236,57 @@ class HellingerReissnerShellAssembler
             // pforward
             ShellComputeDrillStrainFast<T, vars_per_node, Basis, Director>(pt, Tmat, XdinvT, vars,
                                                                            et.value().get_data());
-            __syncthreads();
+            // __syncthreads();
 
             // compute drill stress
             Phys::computeDrillStress(scale, compData, et.value().get_data(),
                                      et.bvalue().get_data());
-            __syncthreads();
+            // __syncthreads();
 
             // hreverse for drill
             ShellComputeDrillStrainFastSens<T, vars_per_node, Basis, Director>(
                 pt, Tmat, XdinvT, et.bvalue().get_data(), res);
         }
 
+        // add back from HR unknowns to full residual (block-unpermute)
+        blockAddUnpermuteHRVarsPerNode<T>(hr_res, res, full_res, 
+            num_nodes, hr_offset, standard_vpn);
+
     }  // add_element_quadpt_residual_fast
 
     template <class Data, STRAIN strain = ALL>
-    __DEVICE__ static void add_element_quadpt_jacobian_col_fast(
+    __DEVICE__ __noinline__ static void add_element_quadpt_jacobian_col_fast(
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
         const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
-        const T vars[dof_per_elem], const T pvars[dof_per_elem], T matCol[dof_per_elem]) {
+        const T full_vars[dof_per_elem], const T full_pvars[dof_per_elem], T full_matCol[dof_per_elem]) {
         constexpr bool bending = strain == BENDING || strain == ALL;
         constexpr bool tying = strain == TYING || strain == ALL;
         constexpr bool drill = strain == DRILL || strain == ALL;
 
         // data to store in forwards + backwards section
         static constexpr bool is_nonlinear = Phys::is_nonlinear;
+
+        /* only the tying strains are computed a special way with HR formulation 
+           since there are 5 tying strains, there are 5 HR strain-gap displacements
+           which together prevent membrane + trv shear locking
+        */
+
+        // assume that standard vars has been reordered into 
+        // HR DOF [n1,n2,n3,n4] then standard 6DOF [n1,n2,n3,n4] for 1st order example
+        // and same for full res. Then we'll permute back later..
+        T hr_vars[hr_offset * num_nodes];
+        T vars[standard_vpn * num_nodes];
+        blockPermuteHRVarsPerNode<T>(full_vars, hr_vars, vars, num_nodes, hr_dof, standard_vpn);
+        
+        // then block-unpermute the pvars too
+        T hr_pvars[hr_offset * num_nodes];
+        T pvars[standard_vpn * num_nodes];
+        blockPermuteHRVarsPerNode<T>(full_pvars, hr_pvars, pvars, num_nodes, hr_dof, standard_vpn);
+        
+
+        // then make standard and full residual
+        T hr_matCol[hr_offset * num_nodes] = {0};
+        T matCol[standard_vpn * num_nodes] = {0};
 
         if constexpr (bending) {
             A2D::A2DObj<A2D::Mat<T, 3, 3>> u0x, u1x;
@@ -253,7 +304,7 @@ class HellingerReissnerShellAssembler
                 computeBendingStrain<T, is_nonlinear>(
                     u0x.value().get_data(), u1x.value().get_data(), ek.value().get_data());
             }
-            __syncthreads();
+            // __syncthreads();
 
             // just code in the linear part right now
             // pforward
@@ -269,7 +320,7 @@ class HellingerReissnerShellAssembler
                     u0x.value().get_data(), u1x.value().get_data(), u0x.pvalue().get_data(),
                     u1x.pvalue().get_data(), ek.pvalue().get_data());
             }
-            __syncthreads();
+            // __syncthreads();
 
             // 1st order brev (only need ek.bvalue, so no additional steps here)
             if constexpr (is_nonlinear) {
@@ -297,69 +348,90 @@ class HellingerReissnerShellAssembler
         }
 
         if constexpr (tying) {
-            // // TODO : only need 1st order obj not 2nd order here since e0ty is linear to energy
-            // // nonlinear part of tying strains happens in earlier step before e0ty
             A2D::A2DObj<A2D::SymMat<T, 3>> e0ty;
+            
+            /* tying strains are computed special [-H, G; G, 0] block way in HR element */
 
-            // forward section
-            // --------------------------------
+            /* 1) -He = Eubar * C * Eubar linear part (strain-gap to strain-gap) 
+                 since linear, just uses pvars 
+            */
+            {
+                // forward prop from strain-gap disps
+                computeHR_tyingStrain<T, Basis>(pt, hr_pvars, XdinvT, e0ty.value());
+                computeEngineerTyingStrains<T>(e0ty.pvalue());
+                // negate the tying strians for this -He term (with strain-gap to strain-gap)
+                negateHR_tyingStrain<T>(e0ty.pvalue());
+
+                // compute tying stresses (to multiply through constitutive)
+                Phys::computeTyingStress(scale, compData, e0ty.pvalue(), e0ty.hvalue());
+                
+                // then backprop to strain-gap disp residual
+                computeEngineerTyingStrains<T>(e0ty.hvalue());
+                computeHR_tyingStrainTranspose<T, Basis>(pt, e0ty.hvalue(), XdinvT, hr_matCol);
+            }
+            // __syncthreads();
+
+            /* 2) nonlinear forward and pforward then linear backprop to strain-gap */
+            // nonlinear forward
             T d[3 * num_nodes];  // need directors in reverse for nonlinear strains
             if constexpr (is_nonlinear) {
                 Director::template computeDirector<vars_per_node, num_nodes>(vars, fn, d);
-
                 A2D::SymMat<T, 3> gty;
                 computeFullTyingStrain<T, Phys, Basis, is_nonlinear>(pt, xpts, fn, vars, d,
                                                                      gty.get_data());
-
                 A2D::SymMatRotateFrame<T, 3>(XdinvT, gty, e0ty.value());
-
                 computeEngineerTyingStrains<T>(e0ty.value());
-                __syncthreads();
             }
-
-            // pforward section
-            // -------------------------------
+            // pforward
             T p_d[3 * num_nodes];
             {
                 Director::template computeDirectorHfwd<vars_per_node, num_nodes>(pvars, fn, p_d);
-
                 A2D::SymMat<T, 3> p_gty;
                 computeFullTyingStrainHfwd<T, Phys, Basis>(pt, xpts, fn, vars, d, pvars, p_d,
                                                            p_gty.get_data());
-
                 A2D::SymMatRotateFrame<T, 3>(XdinvT, p_gty, e0ty.pvalue());
-
                 computeEngineerTyingStrains<T>(e0ty.pvalue());
             }
-            __syncthreads();
+            // linear backprop to strain-gap disps
+            {
+                // compute tying stresses (to multiply through constitutive)
+                Phys::computeTyingStress(scale, compData, e0ty.pvalue(), e0ty.hvalue());
+                // then backprop to strain-gap disp residual
+                computeEngineerTyingStrains<T>(e0ty.hvalue());
+                computeHR_tyingStrainTranspose<T, Basis>(pt, e0ty.hvalue(), XdinvT, hr_matCol);
+            }
+            // __syncthreads();
 
-            // 1st order brev
+
+            /* 3) linear forward from strain-gap, then nonlinear brev and hrev to standard vars */
+            // linear forward from strain-gap (to pvalue)
+            {
+                // forward prop from strain-gap disps
+                computeHR_tyingStrain<T, Basis>(pt, hr_pvars, XdinvT, e0ty.value());
+                computeEngineerTyingStrains<T>(e0ty.pvalue());
+                // negate the tying strians for this -He term (with strain-gap to strain-gap)
+                negateHR_tyingStrain<T>(e0ty.pvalue());
+            }
+            // nonlinear 1st order brev from strain-gap
             A2D::SymMat<T, 3> gty_bar;
             if constexpr (is_nonlinear) {
                 Phys::computeTyingStress(scale, compData, e0ty.value(), e0ty.bvalue());
-
                 computeEngineerTyingStrains<T>(e0ty.bvalue());
-
                 A2D::SymMat3x3RotateFrameReverse<T>(XdinvT, e0ty.bvalue().get_data(),
                                                     gty_bar.get_data());
-                __syncthreads();
+                // __syncthreads();
             }
-
-            // 2nd order hrev
+            // 2nd order hrev to vars
             {
                 Phys::computeTyingStress(scale, compData, e0ty.pvalue(), e0ty.hvalue());
-
                 computeEngineerTyingStrains<T>(e0ty.hvalue());
-
                 A2D::SymMat<T, 3> gty_hat;
                 A2D::SymMat3x3RotateFrameReverse<T>(XdinvT, e0ty.hvalue().get_data(),
                                                     gty_hat.get_data());
-
                 A2D::Vec<T, 3 * num_nodes> d_hat;
                 computeFullTyingStrainHrev<T, Phys, Basis>(pt, xpts, fn, vars, d, pvars, p_d,
                                                            gty_bar.get_data(), gty_hat.get_data(),
                                                            matCol, d_hat.get_data());
-
                 Director::template computeDirectorHrev<vars_per_node, num_nodes>(
                     fn, d_hat.get_data(), matCol);
             }
@@ -372,17 +444,21 @@ class HellingerReissnerShellAssembler
             // pforward
             ShellComputeDrillStrainFast<T, vars_per_node, Basis, Director>(pt, Tmat, XdinvT, pvars,
                                                                            et.pvalue().get_data());
-            __syncthreads();
+            // __syncthreads();
 
             // compute drill stress
             Phys::computeDrillStress(scale, compData, et.pvalue().get_data(),
                                      et.hvalue().get_data());
-            __syncthreads();
+            // __syncthreads();
 
             // hreverse for drill
             ShellComputeDrillStrainFastSens<T, vars_per_node, Basis, Director>(
                 pt, Tmat, XdinvT, et.hvalue().get_data(), matCol);
         }
+
+        // add back from HR unknowns to full residual (block-unpermute)
+        blockAddUnpermuteHRVarsPerNode<T>(hr_matCol, matCol, full_matCol, 
+            num_nodes, hr_offset, standard_vpn);
 
     }  // add_element_quadpt_jacobian_col
 

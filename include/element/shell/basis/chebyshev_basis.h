@@ -146,7 +146,7 @@ class ChebyshevQuadBasis {
     }
 
     __HOST_DEVICE__ static void eval_chebyshev_2d_basis(const T pt[], T N[]) {
-        T N1[num_nodes], N2[num_nodes];
+        T N1[nx], N2[nx];
         Basis1D::evalBasis(pt[0], N1);
         Basis1D::evalBasis(pt[1], N2);
 
@@ -158,8 +158,8 @@ class ChebyshevQuadBasis {
     }
 
     __HOST_DEVICE__ static void eval_chebyshev_2d_basis_grad(const T pt[], T Nxi[], T Neta[]) {
-        T N1[num_nodes], dN1[num_nodes];
-        T N2[num_nodes], dN2[num_nodes];
+        T N1[nx], dN1[nx];
+        T N2[nx], dN2[nx];
         Basis1D::evalBasis(pt[0], N1), Basis1D::evalBasis(pt[1], N2);
         Basis1D::evalBasisGrad(pt[0], dN1), Basis1D::evalBasisGrad(pt[1], dN2);
 
@@ -234,4 +234,58 @@ class ChebyshevQuadBasis {
             }
         }
     }  // end of interpFieldsGrad method
+
+    template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFieldsMixedGrad(const T pt[],
+                                                    const T values[],
+                                                    T d2mixed[]) {
+        // Compute 1D basis and gradients
+        T na[nx], nb[nx];
+        T dna[nx], dnb[nx];
+        Basis1D::evalBasis(pt[0], na), Basis1D::evalBasis(pt[1], nb);
+        Basis1D::evalBasisGrad(pt[0], dna), Basis1D::evalBasisGrad(pt[1], dnb);
+
+        for (int ifield = 0; ifield < num_fields; ifield++) {
+
+            T val = 0.0;
+
+            // Loop over 2D nodes: N(xi_i, eta_j) = na[i] * nb[j]
+            for (int j = 0; j < nx; j++) {
+                for (int i = 0; i < nx; i++) {
+
+                    const int inode = nx * j + i;
+
+                    // Mixed derivative:  dN/dxi * dN/deta = dna[i] * dnb[j]
+                    const T Nmixed = dna[i] * dnb[j];
+
+                    val += Nmixed * values[inode * vars_per_node + ifield];
+                }
+            }
+
+            d2mixed[ifield] = val;
+        }
+    }
+
+    template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFieldsMixedGradTranspose(const T pt[],
+                                                            const T d2mixed_b[],
+                                                            T values_b[]) {
+        // Compute 1D basis and gradients
+        T na[nx], nb[nx];
+        T dna[nx], dnb[nx];
+        Basis1D::evalBasis(pt[0], na), Basis1D::evalBasis(pt[1], nb);
+        Basis1D::evalBasisGrad(pt[0], dna), Basis1D::evalBasisGrad(pt[1], dnb);
+
+        // Loop over 2D nodes to accumulate adjoints
+        for (int j = 0; j < nx; j++) {
+            for (int i = 0; i < nx; i++) {
+                const int inode = nx * j + i;
+                T coeff = dna[i] * dnb[j];  // mixed derivative
+
+                for (int ifield = 0; ifield < num_fields; ifield++) {
+                    values_b[inode * vars_per_node + ifield] += coeff * d2mixed_b[ifield];
+                }
+            }
+        }
+    }
 };     // end of class ChebyshevQuadBasis

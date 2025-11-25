@@ -62,9 +62,10 @@ class MultilevelKcycleSolver {
         /* debug and check that coarser grids, etc. have reasonable states */
 
         for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
-            grids[ilevel].d_vars.permuteData(6, grids[ilevel].d_perm);  // from SOLVE to VIS order
+            int block_dim = grids[ilevel].block_dim;
+            grids[ilevel].d_vars.permuteData(block_dim, grids[ilevel].d_perm);  // from SOLVE to VIS order
             auto h_vars = grids[ilevel].d_vars.createHostVec();
-            grids[ilevel].d_vars.permuteData(6, grids[ilevel].d_iperm);  // and undo perm
+            grids[ilevel].d_vars.permuteData(block_dim, grids[ilevel].d_iperm);  // and undo perm
             std::stringstream outputFile;
             outputFile << "out/wing_debug_level_" << ilevel << ".vtk";
             printToVTK<Assembler, HostVec<T>>(grids[ilevel].assembler, h_vars, outputFile.str());

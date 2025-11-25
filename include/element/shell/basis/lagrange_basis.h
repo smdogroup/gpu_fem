@@ -224,6 +224,62 @@ class LagrangeQuadBasis {
     }  // end of interpFieldsGrad method
 
     template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFieldsMixedGrad(const T pt[],
+                                                    const T values[],
+                                                    T d2mixed[]) {
+        // Compute 1D basis and gradients
+        T na[nx], nb[nx];
+        T dna[nx], dnb[nx];
+
+        lagrangeLobatto1DGrad(pt[0], na,  dna);
+        lagrangeLobatto1DGrad(pt[1], nb,  dnb);
+
+        for (int ifield = 0; ifield < num_fields; ifield++) {
+
+            T val = 0.0;
+
+            // Loop over 2D nodes: N(xi_i, eta_j) = na[i] * nb[j]
+            for (int j = 0; j < nx; j++) {
+                for (int i = 0; i < nx; i++) {
+
+                    const int inode = nx * j + i;
+
+                    // Mixed derivative:  dN/dxi * dN/deta = dna[i] * dnb[j]
+                    const T Nmixed = dna[i] * dnb[j];
+
+                    val += Nmixed * values[inode * vars_per_node + ifield];
+                }
+            }
+
+            d2mixed[ifield] = val;
+        }
+    }
+
+    template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFieldsMixedGradTranspose(const T pt[],
+                                                            const T d2mixed_b[],
+                                                            T values_b[]) {
+        // Compute 1D basis and gradients
+        T na[nx], nb[nx];
+        T dna[nx], dnb[nx];
+        lagrangeLobatto1DGrad(pt[0], na,  dna);
+        lagrangeLobatto1DGrad(pt[1], nb,  dnb);
+
+        // Loop over 2D nodes to accumulate adjoints
+        for (int j = 0; j < nx; j++) {
+            for (int i = 0; i < nx; i++) {
+                const int inode = nx * j + i;
+                T coeff = dna[i] * dnb[j];  // mixed derivative
+
+                for (int ifield = 0; ifield < num_fields; ifield++) {
+                    values_b[inode * vars_per_node + ifield] += coeff * d2mixed_b[ifield];
+                }
+            }
+        }
+    }
+
+
+    template <int vars_per_node, int num_fields>
     __HOST_DEVICE__ static void interpFieldsTranspose(const T pt[], const T field_bar[],
                                                       T values_bar[]) {
         T N[num_nodes];  // TODO : double check this method (can we store less

@@ -21,6 +21,9 @@
 #include "element/shell/basis/chebyshev_basis.h"
 #include "element/shell/fint_shell.h"
 
+// hellinger reissner element
+#include "element/shell/hr_shell.h"
+
 // local multigrid imports
 #include "multigrid/grid.h"
 #include "multigrid/utils/fea.h"
@@ -472,7 +475,7 @@ int main(int argc, char **argv) {
     int nsmooth = 1;
     int ninnercyc = 1;
     std::string cycle_type = "K"; // "V", "F", "W", "K"
-    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9', 'HR4'
     // std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
     std::string elem_type = "CFI9"; 
 
@@ -554,24 +557,35 @@ int main(int argc, char **argv) {
     constexpr bool has_ref_axis = false;
     constexpr bool is_nonlinear = true; // this is a nonlinear GMG case
     using Data = ShellIsotropicData<T, has_ref_axis>;
-    using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
     printf("plate mesh with geomNL %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
     if (elem_type == "MITC4") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadLinearQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI4") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadLinearQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI9") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
         // probably do need quadratic, but need to fix assembly issues with 9 quadpts
         using Quad = QuadQuadraticQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    } else if (elem_type == "HR4") {
+        // hellinger-reissner element
+        const bool HR = true; // whether is HR element (then physics has 5 extra DOF at start for strain-gap)
+        using Physics = IsotropicShell<T, Data, is_nonlinear, HR>;
+        // probably do need quadratic, but need to fix assembly issues with 9 quadpts
+        using Quad = QuadQuadraticQuadrature<T>;
+        using Basis = LagrangeQuadBasis<T, Quad, 1>;
+        using Assembler = HellingerReissnerShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
