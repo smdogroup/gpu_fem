@@ -54,10 +54,10 @@ void multigrid_plate_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::
     // need to make a number of grids..
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
-    const SCALER scaler  = LINE_SEARCH;
     using Smoother = MulticolorGSSmoother_V1<Assembler>;
     using Prolongation = StructuredProlongation<Assembler, PLATE>;
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
 
@@ -89,7 +89,8 @@ void multigrid_plate_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::
     }
 
     // get nxe_min for not exactly power of 2 case
-    int pre_nxe_min = nxe > 32 ? 32 : 4;
+    int nxe_start = 32 / Basis::order;
+    int pre_nxe_min = nxe > nxe_start ? nxe_start : 4;
     int nxe_min = pre_nxe_min;
     for (int c_nxe = nxe; c_nxe >= pre_nxe_min; c_nxe /= 2) {
         nxe_min = c_nxe;
@@ -103,7 +104,7 @@ void multigrid_plate_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::
         int nxe_per_comp = c_nxe / 4, nye_per_comp = c_nye/4; // for now (should have 25 grids)
         auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
         double Q = 1.0; // load magnitude
-        T *my_loads = getPlateLoads<T, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -130,7 +131,7 @@ void multigrid_plate_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::
 
         // assemble the kmat
         auto start0 = std::chrono::high_resolution_clock::now();
-        assembler.add_jacobian(res, kmat);
+        assembler.add_jacobian_fast(kmat);
         // assembler.apply_bcs(res);
         assembler.apply_bcs(kmat);
         CHECK_CUDA(cudaDeviceSynchronize());
@@ -234,7 +235,7 @@ void direct_plate_solve(int nxe, double SR) {
 
     // get the loads
     double Q = 1.0; // load magnitude
-    T *my_loads = getPlateLoads<T, Physics>(nxe, nye, Lx, Ly, Q);
+    T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nye, Lx, Ly, Q);
 
     auto loads = assembler.createVarsVec(my_loads);
     assembler.apply_bcs(loads);
@@ -246,7 +247,7 @@ void direct_plate_solve(int nxe, double SR) {
     auto vars = assembler.createVarsVec();
 
     // assemble the kmat
-    assembler.add_jacobian(res, kmat);
+    assembler.add_jacobian_fast(kmat);
     assembler.apply_bcs(res);
     assembler.apply_bcs(kmat);
 
@@ -355,7 +356,7 @@ int main(int argc, char **argv) {
 
     // type specifications here
     using T = double;   
-    using Quad = QuadLinearQuadrature<T>;
+   
     using Director = LinearizedRotation<T>;
     constexpr bool has_ref_axis = false;
     constexpr bool is_nonlinear = false;
@@ -364,14 +365,17 @@ int main(int argc, char **argv) {
 
     printf("plate mesh with %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
     if (elem_type == "MITC4") {
+         using Quad = QuadLinearQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type);
     } else if (elem_type == "CFI4") {
+         using Quad = QuadLinearQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type);
     } else if (elem_type == "CFI9") {
+         using Quad = QuadQuadraticQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type);

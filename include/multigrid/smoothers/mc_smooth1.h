@@ -18,9 +18,9 @@ class MulticolorGSSmoother_V1 : public BaseSolver {
         : cublasHandle(cublasHandle_), cusparseHandle(cusparseHandle_) {
         Kmat = Kmat_;
         h_color_rowp = h_color_rowp_;
-        block_dim = 6;
+        block_dim = assembler_.getBsrData().block_dim;
         N = assembler_.get_num_vars();
-        nnodes = N / 6;
+        nnodes = N / block_dim;
         assembler = assembler_;
         omega = omega_;
         symmetric = symmetric_;
@@ -119,7 +119,7 @@ class MulticolorGSSmoother_V1 : public BaseSolver {
             d_diag_cols = HostVec<int>(nnodes, h_diag_cols).createDeviceVec().getPtr();
 
             // create the bsr data object on device
-            d_diag_bsr_data = BsrData(nnodes, 6, diag_inv_nnzb, d_diag_rowp, d_diag_cols, nullptr,
+            d_diag_bsr_data = BsrData(nnodes, block_dim, diag_inv_nnzb, d_diag_rowp, d_diag_cols, nullptr,
                                       nullptr, false);
             delete[] h_diag_rowp;
             delete[] h_diag_cols;

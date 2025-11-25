@@ -118,8 +118,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // T omegaLS_min = 0.5, omegaLS_max = 2.0;
 
     // get nxe_min for not exactly power of 2 case
+    int nxe_start = 32 / Basis::order;
     // int pre_nxe_min = nxe > 16 ? 16 : 4; // 2x slower with this setting (takes more V-cycles)
-    int pre_nxe_min = nxe > 32 ? 32 : 4; // but on higher nxe, this one is more robust somehow
+    int pre_nxe_min = nxe > nxe_start ? nxe_start : 4; // but on higher nxe, this one is more robust somehow
     // int pre_nxe_min = nxe > 64 ? 64 : 4; // solved about 33% faster with this as coarsest grid (for nxe = 256, but prob need faster direct solver on GPU)
 
     int nxe_min = pre_nxe_min;
@@ -142,7 +143,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         double uniform_force = pressure * 1.0 * 1.0;
         double nodal_loads = uniform_force / (c_nxe - 1) / (c_nye - 1);
         nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-        T *my_loads = getPlateLoads<T, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
+        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -333,7 +334,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
     nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
     // T *my_loads = getPlatePointLoad<T, Physics>(c_nxe, c_nye, Lx, Ly, Q);
-    T *my_loads = getPlateLoads<T, Physics>(nxe, nye, Lx, Ly, nodal_loads);
+    T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nye, Lx, Ly, nodal_loads);
 
     // double Q = 1.0e5;
     // T *my_loads = getPlatePointLoad<T, Physics>(nxe, nye, Lx, Ly, Q);
@@ -512,7 +513,6 @@ int main(int argc, char **argv) {
 
     // type specifications here
     using T = double;   
-    using Quad = QuadLinearQuadrature<T>;
     using Director = LinearizedRotation<T>;
     constexpr bool has_ref_axis = false;
     constexpr bool is_nonlinear = true; // this is a nonlinear GMG case
@@ -521,14 +521,17 @@ int main(int argc, char **argv) {
 
     printf("plate mesh with geomNL %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
     if (elem_type == "MITC4") {
+        using Quad = QuadLinearQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, pressure);
     } else if (elem_type == "CFI4") {
+        using Quad = QuadLinearQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, pressure);
     } else if (elem_type == "CFI9") {
+        using Quad = QuadQuadraticQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, pressure);

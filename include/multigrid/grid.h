@@ -38,8 +38,8 @@ class SingleGrid {
           cublasHandle(cublasHandle_),
           cusparseHandle(cusparseHandle_) {
         N = assembler.get_num_vars();
-        block_dim = 6;
-        nnodes = N / 6;
+        block_dim = assembler.getBsrData().block_dim;
+        nnodes = N / block_dim;
 
         omega_min = omega_min_;
         omega_max = omega_max_;

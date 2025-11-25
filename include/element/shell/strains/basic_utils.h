@@ -108,7 +108,6 @@ __HOST_DEVICE__ void computeXdinvT(const T pt[], const T refAxis[], const T xpts
 
     // compute XdinvT = Xdinv*T
     A2D::MatMatMultCore3x3<T>(Xdinv, Tmat, XdinvT);
-
 }
 
 // compute XdinvT and other shell rotations

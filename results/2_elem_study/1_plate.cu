@@ -21,6 +21,9 @@
 #include "element/shell/basis/chebyshev_basis.h"
 #include "element/shell/fint_shell.h"
 
+// hellinger reissner element
+#include "element/shell/hr_shell.h"
+
 // local multigrid imports
 #include "multigrid/grid.h"
 #include "multigrid/utils/fea.h"
@@ -77,8 +80,11 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // using Smoother = MulticolorGSSmoother_V1<Assembler>;
     using Smoother = ChebyshevPolynomialSmoother<Assembler>;
     using Prolongation = StructuredProlongation<Assembler, PLATE>;
+    
+    // sometimes line search helps, sometimes not
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
     // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
+    
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
 
@@ -115,13 +121,15 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // T omegaMC = 0.75;
     // T omegaMC = 0.7;
 
-    // T omegaLS_min = 0.1, omegaLS_max = 2.0;
-    T omegaLS_min = 0.25, omegaLS_max = 2.0;
+    T omegaLS_min = 0.1, omegaLS_max = 2.0;
+    // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     // T omegaLS_min = 0.5, omegaLS_max = 2.0;
 
     // get nxe_min for not exactly power of 2 case
+    // int nxe_start = 32 / Basis::order;
+     int nxe_start = 64 / Basis::order; // higher load frequency here needs a bit finer mesh for coarsest grid
     // int pre_nxe_min = nxe > 16 ? 16 : 4; // 2x slower with this setting (takes more V-cycles)
-    int pre_nxe_min = nxe > 32 ? 32 : 4; // but on higher nxe, this one is more robust somehow
+    int pre_nxe_min = nxe > nxe_start ? nxe_start : 4; // but on higher nxe, this one is more robust somehow
     // int pre_nxe_min = nxe > 64 ? 64 : 4; // solved about 33% faster with this as coarsest grid (for nxe = 256, but prob need faster direct solver on GPU)
 
     int nxe_min = pre_nxe_min;
@@ -250,7 +258,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // 1) do a linear solve here
     // -------------------------------------------------------
 
+    kmg->set_print(true);
     kmg->solve();
+    kmg->set_print(false);
     int *d_perm = kmg->grids[0].d_perm;
     auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
     printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_mg_lin.vtk");
@@ -381,12 +391,22 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     // compare to pure linear solve (to see how nonlinear)
     // ==================================
 
+    printf("add jacobian\n");
     assembler.add_jacobian_fast(kmat);
     assembler.apply_bcs(kmat);
+    CHECK_CUDA(cudaDeviceSynchronize());
+    printf("\tdone with jacobian\n");
+    // return;
+
+    printf("try linear solve\n");
     CUSPARSE::direct_LU_solve(kmat, loads, soln);
+    printf("\tdone with linear solve\n");
+
     T lin_max_disp = get_max_disp(soln);
     auto h_soln = soln.createHostVec();
+    printf("print solution\n");
     printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/plate_lin.vtk");
+    printf("\tprinted solution\n");
     
 
     // new nonlinear solver
@@ -442,12 +462,11 @@ void gatekeeper_method(bool is_multigrid, int nxe, double SR, int nsmooth, int n
 int main(int argc, char **argv) {
     // input ----------
     bool is_multigrid = true;
-    int nxe = 256; // default value (three grids)
+    int nxe = 128;
     double SR = 100.0; // default, the less slender it is, solves much faster
     int n_vcycles = 50;
     double pressure = 8.0e6;
-
-    double omega = 0.3;
+    double omega = 0.9; // works better with omega near 1
 
     // int nsmooth = 2; // typically faster right now
     // int ninnercyc = 2; // inner V-cycles to precond K-cycle
@@ -456,8 +475,9 @@ int main(int argc, char **argv) {
     int nsmooth = 1;
     int ninnercyc = 1;
     std::string cycle_type = "K"; // "V", "F", "W", "K"
-    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
-    std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
+    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9', 'HR4'
+    // std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
+    std::string elem_type = "CFI9"; 
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -533,25 +553,39 @@ int main(int argc, char **argv) {
 
     // type specifications here
     using T = double;   
-    using Quad = QuadLinearQuadrature<T>;
     using Director = LinearizedRotation<T>;
     constexpr bool has_ref_axis = false;
     constexpr bool is_nonlinear = true; // this is a nonlinear GMG case
     using Data = ShellIsotropicData<T, has_ref_axis>;
-    using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
     printf("plate mesh with geomNL %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
     if (elem_type == "MITC4") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        using Quad = QuadLinearQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI4") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        using Quad = QuadLinearQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI9") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        // probably do need quadratic, but need to fix assembly issues with 9 quadpts
+        using Quad = QuadQuadraticQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    } else if (elem_type == "HR4") {
+        // hellinger-reissner element
+        const bool HR = true; // whether is HR element (then physics has 5 extra DOF at start for strain-gap)
+        using Physics = IsotropicShell<T, Data, is_nonlinear, HR>;
+        // probably do need quadratic, but need to fix assembly issues with 9 quadpts
+        using Quad = QuadQuadraticQuadrature<T>;
+        using Basis = LagrangeQuadBasis<T, Quad, 1>;
+        using Assembler = HellingerReissnerShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");

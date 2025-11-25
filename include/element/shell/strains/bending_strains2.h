@@ -22,7 +22,7 @@ __DEVICE__ void computeBendingDispGrad(const T pt[], const T vars[], const T d[]
     }  // end of u0x, u1x frame assembly scope
     __syncthreads();
 
-    // u0x, u1x conversion to physical space scope
+    // u0x, u1x conversion to shell frame
     {
         T tmp[9];
 
@@ -34,7 +34,7 @@ __DEVICE__ void computeBendingDispGrad(const T pt[], const T vars[], const T d[]
         // compute u0x = T^{T}*u0d*Xdinv*T
         A2D::MatMatMultCore3x3<T>(u0x, XdinvT, tmp);
         A2D::MatMatMultCore3x3<T, A2D::MatOp::TRANSPOSE>(Tmat, tmp, u0x);
-    }  // end of u0x, u1x conversion to physical space scope
+    }  // end of u0x, u1x conversion to conversion to shell frame
 }
 
 template <typename T, int vars_per_node, class Basis>

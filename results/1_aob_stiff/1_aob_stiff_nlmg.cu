@@ -208,8 +208,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level,
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
         // build smoother and prolongations
-        bool smooth_debug = true;
-        // bool smooth_debug = false;
+        // bool smooth_debug = true;
+        bool smooth_debug = false;
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER, 1, smooth_debug);
         int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
         // int ELEM_MAX = 4;
@@ -515,9 +515,7 @@ int main(int argc, char **argv) {
     bool is_multigrid = true;
     // bool is_debug = false;
     int ORDER = 8;
-    // TODO : maybe should put loads only on outer components? not on ribs and spars which can cause buckling?
-    double omega = 0.35; // only conv with lower  than omega < 0.35? Is the spectral radius estimate accurate?
-    // double omega = 0.9; // after spectral radius norm (which appears to work as omega > 1 diverges, omega < 1 conv)
+    double omega = 0.9; // after spectral radius norm (which appears to work as omega > 1 diverges, omega < 1 conv)
     // line search breaking down a lot..
     double omegaLS_min = 1.0; // default min line search omega
     double omegaLS_max = 1.0;

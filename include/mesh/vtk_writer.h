@@ -46,20 +46,33 @@ void printToVTK(Assembler assembler, Vec soln, std::string filename) {
     auto h_vars_conn = d_vars_conn.createHostVec();
     int *conn_ptr = h_vars_conn.getPtr();
 
-    const int32_t local_perm[4] = {0, 1, 3, 2};
-    for (int ielem = 0; ielem < num_elems; ielem++) {
-        const int *elem_conn = &conn_ptr[nodes_per_elem * ielem];
-        myfile << nodes_per_elem;
-        for (int inode = 0; inode < nodes_per_elem; inode++) {
-            myfile << sp << elem_conn[local_perm[inode]];
+    if (nodes_per_elem == 4) {
+        const int32_t local_perm[4] = {0, 1, 3, 2};
+        for (int ielem = 0; ielem < num_elems; ielem++) {
+            const int *elem_conn = &conn_ptr[nodes_per_elem * ielem];
+            myfile << nodes_per_elem;
+            for (int inode = 0; inode < nodes_per_elem; inode++) {
+                myfile << sp << elem_conn[local_perm[inode]];
+            }
+            myfile << "\n";
         }
-        myfile << "\n";
+    } else if (nodes_per_elem == 9) {
+        const int32_t local_perm[9] = {0, 2, 8, 6, 1, 5, 7, 3, 4};
+        for (int ielem = 0; ielem < num_elems; ielem++) {
+            const int *elem_conn = &conn_ptr[nodes_per_elem * ielem];
+            myfile << nodes_per_elem;
+            for (int inode = 0; inode < nodes_per_elem; inode++) {
+                myfile << sp << elem_conn[local_perm[inode]];
+            }
+            myfile << "\n";
+        }
     }
 
     // cell type 9 is for CQUAD4 basically
     myfile << "CELL_TYPES " << num_elems << "\n";
+    int cell_type = (nodes_per_elem == 4) ? 9 : 23;  // CQUAD4 is type 9, CQUAD9 is type 23
     for (int ielem = 0; ielem < num_elems; ielem++) {
-        myfile << 9 << "\n";
+        myfile << cell_type << "\n";
     }
 
     // disp vector field now

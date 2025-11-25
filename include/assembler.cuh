@@ -328,6 +328,13 @@ __GLOBAL__ static void k_add_jacobian(int32_t vars_num_nodes, int32_t num_elemen
     // printf("blockMat:");
     // printVec<double>(576,block_mat[local_elem]);
 
+    if constexpr (ElemGroup::Quadrature::num_quad_pts > 4) {
+        if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0) {
+            printf("FATAL ERROR: add_jacobian(res, kmat) kernel doesn't support high-order quadrature yet, call add_jacobian_fast(kmat) instead\n");
+        }
+        __trap(); // suddenly aborts CUDA kernel
+    }
+
     res.addElementValuesFromShared(active_thread, thread_yz, nthread_yz, Phys::vars_per_node,
                                    Basis::num_nodes, vars_elem_conn,
                                    &block_res[local_elem][0]);
