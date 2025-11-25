@@ -77,7 +77,6 @@ __HOST_DEVICE__ void blockAddUnpermuteHRVarsPerNode(const T* hr_res, const T* re
                                                  int num_nodes, int hr_dof = 5, int std_dof = 6) {
     for (int n = 0; n < num_nodes; n++) {
         for (int f = 0; f < hr_dof; f++) full_res[n*(hr_dof+std_dof)+f] += hr_res[n*hr_dof+f];
-        for (int f = 0; f < std_dof; f++)         for (int f = 0; f < hr_dof; f++) full_res[n*(hr_dof+std_dof)+f] += hr_res[n*hr_dof+f];
-[n*(hr_dof+std_dof)+hr_dof+f] += res[n*std_dof+f];
+        for (int f = 0; f < std_dof; f++) full_res[n*(hr_dof+std_dof)+hr_dof+f] += res[n*std_dof+f];
     }
 }

@@ -119,7 +119,7 @@ class HellingerReissnerShellAssembler
         // and same for full res. Then we'll permute back later..
         T hr_vars[hr_offset * num_nodes];
         T vars[standard_vpn * num_nodes];
-        blockPermuteHRVarsPerNode<T>(full_vars, hr_vars, vars, num_nodes, hr_dof, standard_vpn);
+        blockPermuteHRVarsPerNode<T>(full_vars, hr_vars, vars, num_nodes, hr_offset, standard_vpn);
 
         // then make standard and full residual
         T hr_res[hr_offset * num_nodes] = {0};
@@ -276,12 +276,12 @@ class HellingerReissnerShellAssembler
         // and same for full res. Then we'll permute back later..
         T hr_vars[hr_offset * num_nodes];
         T vars[standard_vpn * num_nodes];
-        blockPermuteHRVarsPerNode<T>(full_vars, hr_vars, vars, num_nodes, hr_dof, standard_vpn);
+        blockPermuteHRVarsPerNode<T>(full_vars, hr_vars, vars, num_nodes, hr_offset, standard_vpn);
         
         // then block-unpermute the pvars too
         T hr_pvars[hr_offset * num_nodes];
         T pvars[standard_vpn * num_nodes];
-        blockPermuteHRVarsPerNode<T>(full_pvars, hr_pvars, pvars, num_nodes, hr_dof, standard_vpn);
+        blockPermuteHRVarsPerNode<T>(full_pvars, hr_pvars, pvars, num_nodes, hr_offset, standard_vpn);
         
 
         // then make standard and full residual
