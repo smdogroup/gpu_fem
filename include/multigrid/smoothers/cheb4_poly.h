@@ -40,7 +40,7 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
 
         spectral_radius = 1.0;  // default spectral radius (no adjustment until solved)
         CG_LANCZOS = false;     // by default we don't do CG Lanczos updates
-        bool debug = debug_;
+        debug = debug_;
 
         // get data out of kmat
         auto d_kmat_bsr_data = Kmat.getBsrData();
