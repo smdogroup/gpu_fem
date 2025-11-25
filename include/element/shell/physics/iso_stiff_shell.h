@@ -6,13 +6,14 @@
 #include "a2dcore.h"
 #include "isotropic_shell.h"
 
-template <typename T, class Data_, bool isNonlinear = false>
-class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
+template <typename T, class Data_, bool isNonlinear = false, bool hellingerReissner = false>
+class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear, hellingerReissner> {
    public:
     using Data = Data_;
+    using IsoShellClass = IsotropicShell<T, Data_, isNonlinear, hellingerReissner>;
 
     // u, v, w, thx, thy, thz
-    static constexpr int32_t vars_per_node = 6;
+    static constexpr int32_t vars_per_node = hellingerReissner ? 11 : 6;
     // whether strain is linear or nonlinear (in this case linear)
     static constexpr A2D::ShellStrainType STRAIN_TYPE =
         isNonlinear ? A2D::ShellStrainType::NONLINEAR : A2D::ShellStrainType::LINEAR;
@@ -24,7 +25,7 @@ class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
         /* compute membrane + trv shear stresses from the tying strains */
 
         /* 1) panel contributions to tying stress */
-        IsotropicShell<T, Data_, isNonlinear>::computeTyingStress(scale, data, e, s);
+        IsoShellClass::computeTyingStress(scale, data, e, s);
 
         /* 2) stiffener stiffness contributions */
         // e11_stiff = E * A / stiffPitch
@@ -45,7 +46,7 @@ class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
 
         // TODO : take about the centroid so B = 0, needs modification here
         // probably won't be able to call the previous method directly
-        IsotropicShell<T, Data_, isNonlinear>::computeBendingStress(scale, data, e, s);
+        IsoShellClass::computeBendingStress(scale, data, e, s);
 
         /* 2) stiffener stiffness contributions */
         // M11 = E * I / sp * k11 (axial bending moment from bending stress)
@@ -57,7 +58,7 @@ class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
     __HOST_DEVICE__ static void computeDrillStress(const T &scale, const Data &data, const T ed[1],
                                                    T sd[1]) {
         // panel contribution to drill stress
-        IsotropicShell<T, Data_, isNonlinear>::computeDrillStress(scale, data, ed, sd);
+        IsoShellClass::computeDrillStress(scale, data, ed, sd);
 
         // stiffener contribution to drill stress
         T G = data.E / 2.0 / (1.0 + data.nu);
@@ -70,7 +71,7 @@ class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
         // for mass residual + jacobian (unsteady analyses)
 
         // panel contribution to mass moments
-        IsotropicShell<T, Data_, isNonlinear>::getMassMoments(physData, moments);
+        IsoShellClass::getMassMoments(physData, moments);
 
         // stiffener contribution to mass moments
         const T &rho = physData.rho;
@@ -91,7 +92,7 @@ class StiffenedIsotropicShell : public IsotropicShell<T, Data_, isNonlinear> {
                                                       A2D::ADObj<A2D::Vec<T2, 9>> &E,
                                                       A2D::ADObj<A2D::Vec<T2, 9>> &S) {
         // call panel contribution
-        IsotropicShell<T, Data_, isNonlinear>::computeQuadptStresses(physData, scale, u0x, u1x,
+        IsoShellClass::computeQuadptStresses(physData, scale, u0x, u1x,
                                                                      e0ty, et, E, S);
 
         // TODO : add stiffener contributions here
