@@ -58,44 +58,98 @@ class LagrangeQuadBasis {
     // shape functions here
     __HOST_DEVICE__ static void lagrangeLobatto1D(const T u, T *N) {
         if constexpr (nx == 2) {
+            // Linear
             N[0] = 0.5 * (1.0 - u);
             N[1] = 0.5 * (1.0 + u);
         }
+
+        else if constexpr (nx == 3) {
+            // Quadratic Lobatto: nodes = [-1, 0, 1]
+            N[0] = 0.5 * u * (u - 1.0);
+            N[1] = 1.0 - u*u;
+            N[2] = 0.5 * u * (u + 1.0);
+        }
+
+        else if constexpr (nx == 4) {
+            // Cubic Lobatto: nodes = [-1, -1/3, 1/3, 1]
+            const T a = u;
+            N[0] = -(9.0/16.0) * (a + 1.0) * (a + 1.0/3.0) * (a - 1.0/3.0);
+            N[1] =  (27.0/16.0) * (a + 1.0) * (a + 1.0/3.0) * (a - 1.0);
+            N[2] = -(27.0/16.0) * (a + 1.0) * (a - 1.0/3.0) * (a - 1.0);
+            N[3] =  (9.0/16.0) * (a - 1.0/3.0) * (a + 1.0/3.0) * (a - 1.0);
+        }
     }
 
-    template <int tying_order>
+    template <int tying_nx>
     __HOST_DEVICE__ static void lagrangeLobatto1D_tying(const T u, T *N) {
-        if constexpr (tying_order == 1) {
+        if constexpr (tying_nx == 1) {
             N[0] = 1.0;
-        } else if constexpr (tying_order == 2) {
+        } else if constexpr (tying_nx == 2) {
             N[0] = 0.5 * (1.0 - u);
             N[1] = 0.5 * (1.0 + u);
+        }
+        else if constexpr (tying_nx == 3) {
+            // Quadratic Lobatto: nodes = [-1, 0, 1]
+            N[0] = 0.5 * u * (u - 1.0);
+            N[1] = 1.0 - u*u;
+            N[2] = 0.5 * u * (u + 1.0);
+        }
+        else if constexpr (tying_nx == 4) {
+            // Cubic Lobatto: nodes = [-1, -1/3, 1/3, 1]
+            const T a = u;
+            N[0] = -(9.0/16.0) * (a + 1.0) * (a + 1.0/3.0) * (a - 1.0/3.0);
+            N[1] =  (27.0/16.0) * (a + 1.0) * (a + 1.0/3.0) * (a - 1.0);
+            N[2] = -(27.0/16.0) * (a + 1.0) * (a - 1.0/3.0) * (a - 1.0);
+            N[3] =  (9.0/16.0) * (a - 1.0/3.0) * (a + 1.0/3.0) * (a - 1.0);
         }
     }
 
     __HOST_DEVICE__ static void lagrangeLobatto1DGrad(const T u, T *N, T *Nd) {
         if constexpr (nx == 2) {
-            N[0] = 0.5 * (1.0 - u);
-            N[1] = 0.5 * (1.0 + u);
+            N[0] = 0.5*(1.0 - u);
+            N[1] = 0.5*(1.0 + u);
 
-            // dN/du
             Nd[0] = -0.5;
-            Nd[1] = 0.5;
+            Nd[1] =  0.5;
+        }
+
+        else if constexpr (nx == 3) {
+            // Quadratic
+            N[0]  = 0.5*u*(u-1.0);
+            N[1]  = 1.0 - u*u;
+            N[2]  = 0.5*u*(u+1.0);
+
+            Nd[0] = u - 0.5;
+            Nd[1] = -2.0 * u;
+            Nd[2] = u + 0.5;
+        }
+
+        else if constexpr (nx == 4) {
+            // Cubic
+            const T a = u;
+
+            N[0]  = -(9.0/16.0)*(a+1.0)*(a+1.0/3.0)*(a-1.0/3.0);
+            N[1]  =  (27.0/16.0)*(a+1.0)*(a+1.0/3.0)*(a-1.0);
+            N[2]  = -(27.0/16.0)*(a+1.0)*(a-1.0/3.0)*(a-1.0);
+            N[3]  =  (9.0/16.0)*(a-1.0/3.0)*(a+1.0/3.0)*(a-1.0);
+
+            Nd[0] = -(9.0/16.0)*( (a+1.0)*(a+1.0/3.0) + (a+1.0)*(a-1.0/3.0) + (a+1.0/3.0)*(a-1.0/3.0) );
+            Nd[1] =  (27.0/16.0)*( (a+1.0)*(a+1.0/3.0) + (a+1.0)*(a-1.0) + (a+1.0/3.0)*(a-1.0) );
+            Nd[2] = -(27.0/16.0)*( (a+1.0)*(a-1.0/3.0) + (a+1.0)*(a-1.0) + (a-1.0/3.0)*(a-1.0) );
+            Nd[3] =  (9.0/16.0)*( (a-1.0/3.0)*(a+1.0/3.0) + (a-1.0/3.0)*(a-1.0) + (a+1.0/3.0)*(a-1.0) );
         }
     }
 
     __HOST_DEVICE__ static void lagrangeLobatto2D(const T xi, const T eta, T *N) {
         // compute N_i(u) shape function values at each node
-        if constexpr (nx == 2) {
-            T na[nx], nb[nx];
-            lagrangeLobatto1D(xi, na);
-            lagrangeLobatto1D(eta, nb);
+        T na[nx], nb[nx];
+        lagrangeLobatto1D(xi, na);
+        lagrangeLobatto1D(eta, nb);
 
-            // now compute 2D N_a(xi) * N_b(eta) for each node
-            for (int ieta = 0; ieta < nx; ieta++) {
-                for (int ixi = 0; ixi < nx; ixi++) {
-                    N[nx * ieta + ixi] = na[ixi] * nb[ieta];
-                }
+        // now compute 2D N_a(xi) * N_b(eta) for each node
+        for (int ieta = 0; ieta < nx; ieta++) {
+            for (int ixi = 0; ixi < nx; ixi++) {
+                N[nx * ieta + ixi] = na[ixi] * nb[ieta];
             }
         }
     }  // end of lagrangeLobatto2D
@@ -103,19 +157,17 @@ class LagrangeQuadBasis {
     __HOST_DEVICE__ static void lagrangeLobatto2DGrad(const T xi, const T eta, T *N, T *dNdxi,
                                                       T *dNdeta) {
         // compute N_i(u) shape function values at each node
-        if constexpr (nx == 2) {
-            T na[nx], nb[nx];
-            T dna[nx], dnb[nx];
-            lagrangeLobatto1DGrad(xi, na, dna);
-            lagrangeLobatto1DGrad(eta, nb, dnb);
+        T na[nx], nb[nx];
+        T dna[nx], dnb[nx];
+        lagrangeLobatto1DGrad(xi, na, dna);
+        lagrangeLobatto1DGrad(eta, nb, dnb);
 
-            // now compute 2D N_a(xi) * N_b(eta) for each node
-            for (int ieta = 0; ieta < nx; ieta++) {
-                for (int ixi = 0; ixi < nx; ixi++) {
-                    N[nx * ieta + ixi] = na[ixi] * nb[ieta];
-                    dNdxi[nx * ieta + ixi] = dna[ixi] * nb[ieta];
-                    dNdeta[nx * ieta + ixi] = na[ixi] * dnb[ieta];
-                }
+        // now compute 2D N_a(xi) * N_b(eta) for each node
+        for (int ieta = 0; ieta < nx; ieta++) {
+            for (int ixi = 0; ixi < nx; ixi++) {
+                N[nx * ieta + ixi] = na[ixi] * nb[ieta];
+                dNdxi[nx * ieta + ixi] = dna[ixi] * nb[ieta];
+                dNdeta[nx * ieta + ixi] = na[ixi] * dnb[ieta];
             }
         }
     }  // end of lagrangeLobatto2D_grad

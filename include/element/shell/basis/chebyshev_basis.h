@@ -56,6 +56,54 @@ class ChebyShev1D<T, 2> {
     }
 };
 
+template <typename T>
+class ChebyShev1D<T, 3> {
+public:
+    static constexpr int num_nodes = 4;
+
+    __HOST_DEVICE__ __forceinline__ static T getXi(int i) {
+        if (i == 0) return -1.0;
+        if (i == 1) return -0.5;
+        if (i == 2) return  0.5;
+        return 1.0;
+    }
+
+    __HOST_DEVICE__ __forceinline__ static void evalBasis(const T xi, T N[num_nodes]) {
+        const T x = xi;
+
+        // Cubic Chebyshev–Lobatto
+        N[0] = -(1.0/6.0) * (x + 0.5) * (x - 0.5) * (x - 1.0);
+        N[1] =  (4.0/3.0) * (x + 1.0) * (x - 0.5) * (x - 1.0);
+        N[2] = -(4.0/3.0) * (x + 1.0) * (x + 0.5) * (x - 1.0);
+        N[3] =  (1.0/6.0) * (x + 1.0) * (x + 0.5) * (x - 0.5);
+    }
+
+    __HOST_DEVICE__ __forceinline__ static void evalBasisGrad(const T xi, T dN[num_nodes]) {
+        const T x = xi;
+
+        // dN/dx for cubic Chebyshev polynomials
+        dN[0] =
+            -(1.0/6.0) * ( (x - 0.5)*(x - 1.0) 
+                         + (x + 0.5)*(x - 1.0) 
+                         + (x + 0.5)*(x - 0.5) );
+
+        dN[1] =
+            (4.0/3.0) * ( (x - 0.5)*(x - 1.0)
+                        + (x + 1.0)*(x - 1.0)
+                        + (x + 1.0)*(x - 0.5) );
+
+        dN[2] =
+            -(4.0/3.0) * ( (x + 0.5)*(x - 1.0)
+                         + (x + 1.0)*(x - 1.0)
+                         + (x + 1.0)*(x + 0.5) );
+
+        dN[3] =
+            (1.0/6.0) * ( (x + 0.5)*(x - 0.5)
+                        + (x + 1.0)*(x - 0.5)
+                        + (x + 1.0)*(x + 0.5) );
+    }
+};
+
 template <typename T, class Quadrature_, int _order = 2>
 class ChebyshevQuadBasis {
    public:
