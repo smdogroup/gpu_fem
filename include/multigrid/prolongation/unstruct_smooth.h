@@ -53,6 +53,14 @@ class UnstructuredSmoothProlongation {
         auto d_Z_vec = DeviceVec<T>(P_nnzb * block_dim2);
         d_Z_vals = d_Z_vec.getPtr();
         Z_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_Z_vec);
+
+        // TODO : temporarily we use an extra Zprev_mat for matrix smoothing
+        //   for less mem storage, could later remove this extra matrix and just do -Dinv*A*P into Z in one step
+        auto d_Zprev_vec = DeviceVec<T>(P_nnzb * block_dim2);
+        d_Zprev_vals = d_Zprev_vec.getPtr();
+        Zprev_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_Zprev_vals);
+
+        compute_matmat_prod_nz_pattern();
     }
 
     void construct_nz_pattern() {
@@ -79,6 +87,74 @@ class UnstructuredSmoothProlongation {
         d_coarse_weights = DeviceVec<T>(N_coarse).getPtr();     
     }
 
+    void compute_matmat_prod_nz_pattern() {
+        // get pointers
+        auto kmat_bsr_data = fine_assembler.getBsrData();
+        int *h_kmat_rowp = kmat_bsr_data.rowp.createHostVec().getPtr();
+        int *h_kmat_cols = kmat_bsr_data.cols.createHostVec().getPtr();
+
+        nnzb_prod = 0;
+        for (int i = 0; i < nnodes_fine; i++) {
+            for (int jp = h_P_rowp[i]; jp < h_P_rowp[i+1]; jp++) {
+                int j = h_P_cols[jp]; // (P_F)_{ij} output
+                // now inner loop k for K_{ik} * P_{kj}
+                for (int kp = h_kmat_rowp[i]; kp < h_kmat_rowp[i+1]; kp++) {
+                    int k = h_kmat_cols[kp];
+
+                    // check P_{kj} nz
+                    bool nz_Pkj = false; // now also use PF = -K*P sparsity for P cause we add K*P fillin (for better prolong)
+                    for (int jp2 = h_P_rowp[k]; jp2 < h_P_rowp[k+1]; jp2++) {
+                        int j2 = h_P_cols[jp2];
+                        if (j2 == j) {
+                            nz_Pkj = true;
+                        }
+                    }
+                    if (!nz_Pkj) continue;
+                    // otherwise, we do have a valid nz product here
+                    nnzb_prod++;
+                }
+            }
+        }
+        // now allocate the block indices of the product
+        int *h_PF_blocks = new int[nnzb_prod];
+        int *h_K_blocks = new int[nnzb_prod];
+        int *h_P_blocks = new int[nnzb_prod];
+        memset(h_PF_blocks, 0, nnzb_prod * sizeof(int));
+        memset(h_K_blocks, 0, nnzb_prod * sizeof(int));
+        memset(h_P_blocks, 0, nnzb_prod * sizeof(int));
+        int inz_prod = 0;
+        for (int i = 0; i < nnodes_fine; i++) {
+            for (int jp = h_P_rowp[i]; jp < h_P_rowp[i+1]; jp++) {
+                int j = h_P_cols[jp]; // (P_F)_{ij} output
+                // now inner loop k for K_{ik} * P_{kj}
+                for (int kp = h_kmat_rowp[i]; kp < h_kmat_rowp[i+1]; kp++) {
+                    int k = h_kmat_cols[kp];
+
+                    // check P_{kj} nz
+                    bool nz_Pkj = false;
+                    int _jp2 = -1;
+                    for (int jp2 = h_P_rowp[k]; jp2 < h_P_rowp[k+1]; jp2++) {
+                        int j2 = h_P_cols[jp2];
+                        if (j2 == j) {
+                            nz_Pkj = true;
+                            _jp2 = jp2;
+                        }
+                    }
+                    if (!nz_Pkj) continue;
+                    // otherwise, we do have a valid nz product here
+                    h_PF_blocks[inz_prod] = jp;
+                    h_K_blocks[inz_prod] = kp;
+                    h_P_blocks[inz_prod] = _jp2;
+                    inz_prod++;
+                }
+            }
+        }
+        // now allocate onto the device
+        d_Z_prodblocks = HostVec<int>(nnzb_prod, h_PF_blocks).createDeviceVec().getPtr();
+        d_K_prodblocks = HostVec<int>(nnzb_prod, h_K_blocks).createDeviceVec().getPtr();
+        d_P_prodblocks = HostVec<int>(nnzb_prod, h_P_blocks).createDeviceVec().getPtr();
+    }
+
     void apply_kmat_fillin() {
         // get matrix filin P0 => A*P0, done on host and then update the device pointers (only once)
 
@@ -87,8 +163,8 @@ class UnstructuredSmoothProlongation {
         int *h_kmat_rowp = kmat_bsr_data.rowp.createHostVec().getPtr();
         int *h_kmat_cols = kmat_bsr_data.cols.createHostVec().getPtr();
         int h_kmat_nnzb = kmat_bsr_data.nnzb;
-        int *h_P_rowp = d_P_rowp.createHostVec().getPtr();
-        int *h_P_cols = d_P_cols.createHostVec().getPtr();
+        int *h_P_rowp0 = d_P_rowp.createHostVec().getPtr();
+        int *h_P_cols0 = d_P_cols.createHostVec().getPtr();
 
         // delete previous nofill P0 device pointers
         cudaMemfree(d_P_rowp);
@@ -105,8 +181,8 @@ class UnstructuredSmoothProlongation {
             std::unordered_set<int> unique_cols;
             for (int kp = h_kmat_rowp[i]; kp < h_kmat_rowp[i+1]; kp++) {
                 int k = h_kmat_cols[kp]; 
-                for (int jp = h_P_rowp[k]; jp < h_P_rowp[k+1]; jp++) {
-                    int j = h_P_cols[jp];
+                for (int jp = h_P_rowp0[k]; jp < h_P_rowp0[k+1]; jp++) {
+                    int j = h_P_cols0[jp];
                     unique_cols.insert(j);
                 }
             }
@@ -121,8 +197,8 @@ class UnstructuredSmoothProlongation {
             std::set<int> ordered_unique_cols;
             for (int kp = h_kmat_rowp[i]; kp < h_kmat_rowp[i+1]; kp++) {
                 int k = h_kmat_cols[kp];
-                for (int jp = h_AP_rowp[k]; jp < h_AP_rowp[k+1]; jp++) {
-                    int j = h_AP_cols[jp];
+                for (int jp = h_P_rowp0[k]; jp < h_P_rowp0[k+1]; jp++) {
+                    int j = h_P_cols0[jp];
                     ordered_unique_cols.insert(j);
                 }
             }
@@ -133,13 +209,17 @@ class UnstructuredSmoothProlongation {
             }
         }
 
+        // copy final fillin sparsity to host (for use in mat-mat prod sparsity)
+        h_P_rowp = h_AP_rowp;
+        h_P_cols = h_AP_cols;
+
         // now store the new fillin P mat sparsity
         d_P_rowp = HostVec<int>(nnodes_fine + 1, h_AP_rowp).createDeviceVec().getPtr();
         d_P_rows = HostVec<int>(AP_nnzb, h_AP_rows).createDeviceVec().getPtr();
         d_P_cols = HostVec<int>(AP_nnzb, h_AP_cols).createDeviceVec().getPtr();
 
         // and free + allocate new matrix vals
-        prolong_mat.free(); // frees up device values
+        prolong_mat->free(); // frees up device values
         block_dim2 = block_dim * block_dim;
         P_nnzb = AP_nnzb;
         auto d_P_vals_vec = DeviceVec<T>(AP_nnzb * block_dim2);
@@ -148,6 +228,7 @@ class UnstructuredSmoothProlongation {
         // and update the P_bsr_data also 
         int *d_fine_perm = P_bsr_data.perm;
         P_bsr_data = BsrData(nnodes_fine, block_dim, AP_nnzb, d_P_rowp, d_P_cols, d_fine_perm, d_fine_iperm, false);
+        P_bsr_data.rows = d_P_rows; // need rows
         prolong_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_P_vals_vec); 
     }
 
@@ -195,7 +276,12 @@ class UnstructuredSmoothProlongation {
 
     // public
     // Zmat is temp matrix for smoothing
-    BsrMat<DeviceVec<T>> *prolong_mat, *Z_mat;
+    BsrMat<DeviceVec<T>> *prolong_mat, *Z_mat, *Zprev_mat;
+
+    // pointers for mat-mat smoothing
+    int *h_P_rowp, *h_P_cols; // final fillin version A*P sparsity
+    int *d_P_prodBlocks, *d_K_prodBlocks, *d_Z_prodBlocks;
+    int nnzb_prod;
 
    private:
     Assembler fine_assembler, coarse_assembler;

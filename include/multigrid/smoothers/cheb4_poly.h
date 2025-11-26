@@ -480,70 +480,81 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
 
     /* prolong matrix-smoothing area (AMG) */
 
-    // void smoothMatrix(BsrMat<DeviceVec<T>> &prolong_mat, BsrMat<DeviceVec<T>> &Z_mat, int
-    // n_iters) {
-    //     // smooth the prolongation matrix using Kmat and Dinv mat, Z_mat is temp matrix for
-    //     smoothing process
-    //     // TODO : add option if we want to do fewer smoothing steps (if using higher-order)?
+    void smoothMatrix(int n_iters, BsrMat<DeviceVec<T>> *prolong_mat, BsrMat<DeviceVec<T>> *Z_mat,  
+        BsrMat<DeviceVec<T>> *Zprev_mat, int nnzb_prod, int *d_P_prodBlocks, 
+        int *d_K_prodblocks, int *d_Z_prodblocks) {
+        // smooth the prolongation matrix using Kmat and Dinv mat, Z_mat is temp matrix for
+        // smoothing process
+        // TODO : add option if we want to do fewer smoothing steps (if using higher-order)?
 
-    //     for (int iter = 0; iter < n_iters; iter++) {
-    //         // number of smoothing steps
+        // store vals for matrices and other useful pointers
+        T *d_P_vals = prolong_mat->getPtr();
+        T *d_Z_vals = Z_mat->getPtr();
+        T *d_Zprev_vals = Zprev_mat->getPtr();
+        auto prolong_bsr_data = prolong_mat->getBsrData();
+        int P_nnzb = prolong_bsr_data.nnzb;
+        int *d_P_rows = prolong_bsr_data.rows;
+        int *d_P_cols = prolong_bsr_data.cols;
 
-    //         // reset z and zprev to zero (cause new smooth solve her)
-    //         cudaMemset(d_z, 0.0, N * sizeof(T));
-    //         cudaMemset(d_zprev, 0.0, N * sizeof(T));
+        if constexpr (Assembler::Phys::vars_per_node > 6) {
+            printf("WARNING: vpn > 6, smooth matrix exited. Devel to get this to work, change block sizes for HR element\n");
+            return;
+        }
 
-    //         // NOTE : I've rewritten the recursion with d = b - A*x_k the defect
-    //         //   and z_k = delta(x_k) helping to update the defect (as standard MG smoother
-    //         would)
-    //         //   still only does one A*() mat-vec product and one Dinv*() mat-vec product each
+        for (int iter = 0; iter < n_iters; iter++) {
+            // number of smoothing steps
 
-    //         // iteration starts by first computing z_1 so k=1 (as z_0 = 0)
-    //         for (int k = 1; k < ORDER + 1;
-    //              k++) {  // order = 4 is default fourth-order chebyshev from template parameter
-    //             // then compute D_{L1}^{-1} * residual (the l1-jacobi preconditioner) into the
-    //             temp
-    //             // vec
-    //             //   where D_{L1}^{-1} was LU factored and then computed as a linear operator so
-    //             we
-    //             //   can do mat-vec mult here!
-    //             T a = omega / spectral_radius, b = 0.0;  // b = 0 so adds to replace d_temp (with
-    //             scalar of omega,
-    //                                    // should be omega = 1.0 by default in D_{L1} jacobi)
-    //             CHECK_CUSPARSE(cusparseDbsrmv(
-    //                 cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
-    //                 nnodes, nnodes, diag_inv_nnzb, &a, descrDinvMat, d_dinv_vals.getPtr(),
-    //                 d_diag_rowp, d_diag_cols, block_dim, d_defect.getPtr(), &b, d_temp));
+            // reset z and zprev to zero (cause new smooth solve her)
+            Z_mat->zeroValues();
+            Zprev_mat->zeroValues();
 
-    //             // then compute the recursion of zprev into z
-    //             //  first re-zero new z
-    //             cudaMemset(d_z, 0.0, N * sizeof(T));
-    //             //  then add old z into it with the prescribed scalar
-    //             a = (2.0 * k - 3.0) / (2.0 * k + 1.0);
-    //             CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_zprev, 1, d_z, 1));
-    //             // then add preconditioned residual into it too
-    //             a = (8.0 * k - 4.0) / (2.0 * k + 1.0);
-    //             CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_temp, 1, d_z, 1));
+            // iteration starts by first computing z_1 so k=1 (as z_0 = 0)
+            for (int k = 1; k < ORDER + 1; k++) { 
 
-    //             // then copy d_z into the previous value (for next iteration)
-    //             CHECK_CUDA(cudaMemcpy(d_zprev, d_z, N * sizeof(T), cudaMemcpyDeviceToDevice));
+                // compute -omega/rho(Dinv*A) * beta_k * A*P into Z first (scaled prolong defect matrix)
+                Z_mat.zeroValues();
+                dim3 PKP_block(216), PKP_grid(nnzb_prod);
+                T beta_k = (8.0 * k - 4.0) / (2.0 * k + 1.0);
+                T a = -omega / spectral_radius * beta_k;
+                k_compute_mat_mat_prod<T><<<PKP_grid, PKP_block>>>(nnzb_prod, block_dim, a, d_K_prodblocks, 
+                    d_P_prodblocks, d_Z_prodblocks, d_kmat_vals, d_P_vals, d_Z_vals);
 
-    //             // and finally update the solution using the current d_z vector
-    //             a = 1.0;
-    //             CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_z, 1, d_soln.getPtr(), 1));
+                // compute Dinv*Z into Z in-place (equiv to Dinv*scale*A*P => Z)
+                dim3 DP_block(216), DP_grid(P_nnzb);
+                k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(P_nnzb, block_dim, 
+                    d_dinv_vals.getPtr(), d_P_rows, d_P_vals);
 
-    //             // update the defect by z_k = delta(x_k), so defect -= A * z_k
-    //             a = -1.0, b = 1.0;
-    //             CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
-    //                                           CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes, nnodes,
-    //                                           kmat_nnzb, &a, descrKmat, d_kmat_vals, d_kmat_rowp,
-    //                                           d_kmat_cols, block_dim, d_z, &b,
-    //                                           d_defect.getPtr()));
+                // add alpha_k * Zprev into Z
+                dim3 add_block(64);
+                T alpha_k = (2.0 * k - 3.0) / (2.0 * k + 1.0);
+                k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(P_nnzb, block_dim, alpha_k, 0,
+                    d_Zprev_vals, d_Z_vals);
 
-    //         }  // end of chebyshev recursion
-    //     }
+                // do orthogonal projector on Z (only really needed for coarse-grid galerkin AMG, not smooth GMG)
+                // if constexpr (do_orthog_projector) {
+                //     dim3 OP_block(32), OP_grid(nnodes_fine);
+                //     d_SU_vals.zeroValues();
+                //     // compute SU matrix
+                //     k_orthog_projector_computeSU<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
+                //         d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_PF_vals, d_SU_vals.getPtr());
 
-    // }  // end of smoothMatrix function
+                //     // remove rigid-body row-sums
+                //     k_orthog_projector_removeRowSums<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
+                //     d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_SU_vals.getPtr(), d_UTUinv_vals.getPtr(), d_PF_vals);
+                // }
+
+                // add Z into P (the prolongation update)
+                T scale = 1.0;
+                k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(P_nnzb, block_dim, scale, 0,
+                    d_Z_vals, d_P_vals);
+
+                // now copy Z into Zprev
+                Z_mat.copyValuesTo(Zprev_mat);
+
+            }  // end of chebyshev recursion
+        }
+
+    }  // end of smoothMatrix function
 
     // data
     Assembler assembler;

@@ -505,6 +505,12 @@ class MulticolorGSSmoother_V1 : public BaseSolver {
         }  // next block-GS iteration
     }
 
+    void smoothMatrix(BsrMat<DeviceVec<T>> *prolong_mat, BsrMat<DeviceVec<T>> *Z_mat,  
+        BsrMat<DeviceVec<T>> *Zprev_mat, int n_iters, int nnzb_prod, int *d_P_prodBlocks, 
+        int *d_K_prodblocks, int *d_Z_prodblocks) {
+        printf("WARNING: MC-Smoother doesn't smooth the matrix yet\n");
+    }
+
     // data
     Assembler assembler;
     int N, nelems, block_dim, nnodes;

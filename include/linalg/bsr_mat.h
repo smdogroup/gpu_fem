@@ -152,14 +152,17 @@ class BsrMat {
 #endif
 
 #ifdef USE_GPU
-        // GPU version
-        dim3 block = nodes_block;
-        int nblocks = (nnodes + block.x - 1) / block.x;
-        dim3 grid(nblocks);
+        auto dest_vec = mat.getVec();
+        values.copyValuesTo(dest_vec);
 
-        copy_mat_values_kernel<T>
-            <<<grid, block>>>(nnodes, block_dim, rowp, cols, vals, t_rowp, t_cols, t_vals);
-        CHECK_CUDA(cudaDeviceSynchronize());
+        // // GPU version
+        // dim3 block = nodes_block;
+        // int nblocks = (nnodes + block.x - 1) / block.x;
+        // dim3 grid(nblocks);
+
+        // copy_mat_values_kernel<T>
+        //     <<<grid, block>>>(nnodes, block_dim, rowp, cols, vals, t_rowp, t_cols, t_vals);
+        // CHECK_CUDA(cudaDeviceSynchronize());
 #endif
     }
 
