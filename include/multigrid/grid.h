@@ -166,6 +166,13 @@ class SingleGrid {
         smoother->smoothDefect(d_defect, d_soln, n_iters, print, print_freq);
     }
 
+    void smoothMatrix(int n_iters = 5) {
+        /* call the smoother on the prolongation matrix */
+        smoother->smoothMatrix(n_iters, prolongation->prolong_mat, prolongation->Z_mat,
+            prolongation->Zprev_mat, prolongation->nnzb_prod, prolongation->d_P_prodBlocks, 
+            prolongation->d_K_prodBlocks, prolongation->d_Z_prodBlocks);
+    }
+
     void prolongate(DeviceVec<T> coarse_soln_in) {
         /* prolongate from a coarser grid to this fine grid */
 
