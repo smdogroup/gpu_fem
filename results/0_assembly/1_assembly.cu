@@ -1,4 +1,5 @@
-#include "../plate/_src/_plate_utils.h"
+// #include "../../examples/plate/_src/_plate_utils.h"
+#include "multigrid/utils/fea.h" // these plate assemblers can do higher order
 #include "linalg/_linalg.h"
 #include "solvers/_solvers.h"
 #include "mesh/TACSMeshLoader.h"
@@ -12,6 +13,7 @@
 #include "element/shell/basis/lagrange_basis.h"
 #include "element/shell/mitc_shell.h"
 
+template <typename Quad, typename Basis>
 void time_assembly(int nxe) {
     // run the plate problem to time the assembly (nofill)
     using T = double;   
@@ -19,10 +21,8 @@ void time_assembly(int nxe) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_nz = std::chrono::high_resolution_clock::now();
 
-    using Quad = QuadLinearQuadrature<T>;
     using Director = LinearizedRotation<T>;
-    using Basis = LagrangeQuadBasis<T, Quad, 1>;
-    using Geo = Basis::Geo;
+    using Geo = typename Basis::Geo;
 
     constexpr bool has_ref_axis = false;
     constexpr bool is_nonlinear = false;
@@ -41,7 +41,7 @@ void time_assembly(int nxe) {
 
     // get the loads
     double Q = 1.0; // load magnitude
-    T *my_loads = getPlateLoads<T, Physics>(nxe, nye, Lx, Ly, Q);
+    T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nye, Lx, Ly, Q);
     auto loads = assembler.createVarsVec(my_loads);
     assembler.apply_bcs(loads);
 
@@ -78,42 +78,72 @@ void time_assembly(int nxe) {
     std::chrono::duration<double> res_time = end_res - start_res;
     printf("\tresidual assembly in %.5e seconds\n", res_time.count());
 
-    // estimate throughput on jacobian assembly
-    // double peak_gflops = 108*64*2*1.41; // for A100
-    double peak_gflops = 1250; // gflops for 3090Ti GPU (double precision so about 10x lower)
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    // // estimate throughput on jacobian assembly
+    // // double peak_gflops = 108*64*2*1.41; // for A100
+    // double peak_gflops = 1250; // gflops for 3090Ti GPU (double precision so about 10x lower)
+    // cudaEvent_t start, stop;
+    // cudaEventCreate(&start);
+    // cudaEventCreate(&stop);
 
-    cudaEventRecord(start);
-    kernel_assemble<<<grid, block>>>(...);
-    cudaEventRecord(stop);
+    // cudaEventRecord(start);
+    // kernel_assemble<<<grid, block>>>(...);
+    // cudaEventRecord(stop);
 
-    cudaEventSynchronize(stop);
-    float ms = 0.0f;
-    cudaEventElapsedTime(&ms, start, stop);
+    // cudaEventSynchronize(stop);
+    // float ms = 0.0f;
+    // cudaEventElapsedTime(&ms, start, stop);
 
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    // cudaEventDestroy(start);
+    // cudaEventDestroy(stop);
 
-    double flops = num_elements * flops_per_element;
-    double achieved_gflops = flops / (ms * 1e6);
-    double percent = 100.0 * achieved_gflops / peak_gflops;
+    // double flops = num_elements * flops_per_element;
+    // double achieved_gflops = flops / (ms * 1e6);
+    // double percent = 100.0 * achieved_gflops / peak_gflops;
 
-    printf("Assembly: %.2f GFLOPS (%.1f%% of peak)\n",
-        achieved_gflops, percent);
+    // printf("Assembly: %.2f GFLOPS (%.1f%% of peak)\n",
+    //     achieved_gflops, percent);
 
 }
 
-int main() {
-    
-    // int nxe_vals[3] = {16, 32, 64};
-    int nxe_vals[7] = {16, 32, 64, 128, 256, 512, 1024};
+template <typename T>
+void run_with_order(int order, int nxe) {
+    switch(order) {
 
-    for (int i = 0; i < 7; i++) {
-    // for (int i = 0; i < 7; i++) {
-        int nxe = nxe_vals[i];
-        time_assembly(nxe);
+        case 1: {
+            using Quad = QuadLinearQuadrature<T>;
+            using Basis = LagrangeQuadBasis<T, Quad, 1>;
+            time_assembly<Quad, Basis>(nxe);
+            break;
+        }
+
+        case 2: {
+            using Quad = QuadQuadraticQuadrature<T>;
+            using Basis = LagrangeQuadBasis<T, Quad, 2>;
+            time_assembly<Quad, Basis>(nxe);
+            break;
+        }
+
+        case 3: {
+            using Quad = QuadCubicQuadrature<T>;
+            using Basis = LagrangeQuadBasis<T, Quad, 3>;
+            time_assembly<Quad, Basis>(nxe);
+            break;
+        }
+
+        default:
+            printf("ERROR: Unsupported order %d\n", order);
+            exit(1);
     }
-    // TODO : include other element-types in assembly too? like Hellinger-reissner later?
-};
+}
+
+
+int main(int argc, char** argv) {
+    using T = double;
+
+    int ORDER = (argc > 1 ? atoi(argv[1]) : 1);
+
+    int nxe_vals[7] = {16, 32, 64, 128, 256, 512, 1024};
+    for (int i = 0; i < 7; i++) {
+        run_with_order<T>(ORDER, nxe_vals[i]);
+    }
+}
