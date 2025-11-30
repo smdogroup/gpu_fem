@@ -587,18 +587,19 @@ int main(int argc, char **argv) {
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    } else if (elem_type == "MITC9") {
-        using Physics = IsotropicShell<T, Data, is_nonlinear>;
-        using Quad = QuadQuadraticQuadrature<T>;
-        using Basis = LagrangeQuadBasis<T, Quad, 2>;
-        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    } else if (elem_type == "MITC16") {
-        using Physics = IsotropicShell<T, Data, is_nonlinear>;
-        using Quad = QuadCubicQuadrature<T>;
-        using Basis = LagrangeQuadBasis<T, Quad, 3>;
-        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    // MITC higher order don't really work? but LFI16 would..
+    // } else if (elem_type == "MITC9") {
+    //     using Physics = IsotropicShell<T, Data, is_nonlinear>;
+    //     using Quad = QuadQuadraticQuadrature<T>;
+    //     using Basis = LagrangeQuadBasis<T, Quad, 2>;
+    //     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+    //     gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    // } else if (elem_type == "MITC16") {
+    //     using Physics = IsotropicShell<T, Data, is_nonlinear>;
+    //     using Quad = QuadCubicQuadrature<T>;
+    //     using Basis = LagrangeQuadBasis<T, Quad, 3>;
+    //     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+    //     gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI4") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadLinearQuadrature<T>;

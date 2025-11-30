@@ -6,12 +6,15 @@
 #include "mesh/vtk_writer.h"
 #include <chrono>
 
+// chebyshev element
+#include "element/shell/basis/chebyshev_basis.h"
+#include "element/shell/fint_shell.h"
 
 // shell imports
 #include "element/shell/director/linear_rotation.h"
 #include "element/shell/physics/isotropic_shell.h"
-#include "element/shell/basis/lagrange_basis.h"
-#include "element/shell/mitc_shell.h"
+// #include "element/shell/basis/lagrange_basis.h"
+// #include "element/shell/mitc_shell.h"
 
 template <typename Quad, typename Basis>
 void time_assembly(int nxe) {
@@ -28,7 +31,10 @@ void time_assembly(int nxe) {
     constexpr bool is_nonlinear = false;
     using Data = ShellIsotropicData<T, has_ref_axis>;
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
-    using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
+
+    // MITC higher order is really slow to assemble (cause tying so we just do CFI higher order)
+    // using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
+    using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
 
     int nye = nxe;
     double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 0.005;
@@ -113,21 +119,21 @@ void run_with_order(int order, int nxe) {
 
         case 1: {
             using Quad = QuadLinearQuadrature<T>;
-            using Basis = LagrangeQuadBasis<T, Quad, 1>;
+            using Basis = ChebyshevQuadBasis<T, Quad, 1>;
             time_assembly<Quad, Basis>(nxe);
             break;
         }
 
         case 2: {
             using Quad = QuadQuadraticQuadrature<T>;
-            using Basis = LagrangeQuadBasis<T, Quad, 2>;
+            using Basis = ChebyshevQuadBasis<T, Quad, 2>;
             time_assembly<Quad, Basis>(nxe);
             break;
         }
 
         case 3: {
             using Quad = QuadCubicQuadrature<T>;
-            using Basis = LagrangeQuadBasis<T, Quad, 3>;
+            using Basis = ChebyshevQuadBasis<T, Quad, 3>;
             time_assembly<Quad, Basis>(nxe);
             break;
         }
