@@ -1,19 +1,25 @@
 #pragma once
+#include "../solvers/solve_utils.h"
 #include "linalg/vec.h"
 
 template <class Assembler>
-class DampedJacobiSmoother {
+class DampedJacobiSmoother : public BaseSolver {
     /* a lexigraphic gauss seidel smoother */
-    using T = Assembler::T;
+    using T = typename Assembler::T;
 
-    DampedJacobiSmoother(Assembler &assembler_, BsrMat<DeviceVec<T>> Kmat_) {
+   public:
+    DampedJacobiSmoother(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
+                         Assembler &assembler_, BsrMat<DeviceVec<T>> Kmat_, T omega_ = 0.7,
+                         int nsmooth_ = 10)
+        : cublasHandle(cublasHandle_), cusparseHandle(cusparseHandle_) {
         Kmat = Kmat_;
-        d_rhs = d_rhs_;
-        h_color_rowp = h_color_rowp_;
         block_dim = assembler.getBsrData().block_dim;
         N = assembler_.get_num_vars();
         nnodes = N / block_dim;
         assembler = assembler_;
+
+        nsmooth = nsmooth_;
+        omegaJac = omega_;
 
         // get data out of kmat
         auto d_kmat_bsr_data = Kmat.getBsrData();
@@ -27,28 +33,50 @@ class DampedJacobiSmoother {
         buildDiagInvMat<startup>();
     }
 
-    void update_assembly() {
+    bool solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) {
+        /* solve method for the smoother if it is used as a preconditioner instead */
+
+        // setup rhs and soln with init guess of 0
+        cudaMemcpy(d_rhs, rhs.getPtr(), N * sizeof(T), cudaMemcpyDeviceToDevice);
+        cudaMemset(d_inner_soln, 0.0, N * sizeof(T));  // re-zero the solution
+
+        // call smoother on the defect=rhs and solution pair
+        this->smoothDefect(d_rhs_vec, d_inner_soln_vec, nsmooth, false, 10, omegaJac);
+
+        // copy internal soln to external solution of the solve method
+        cudaMemcpy(soln.getPtr(), d_inner_soln, N * sizeof(T), cudaMemcpyDeviceToDevice);
+        return false;  // fail = False
+    }
+
+    void update_after_assembly(DeviceVec<T> &vars) {
         const bool startup = false;
         buildDiagInvMat<startup>();
     }
 
+    void set_abs_tol(T atol) {}
+    void set_rel_tol(T atol) {}
+    int get_num_iterations() { return 0; }
+    void set_print(bool print) {}
+    void free() {}  // TBD on this one
+
     void initCuda() {
-        // init handles
-        CHECK_CUBLAS(cublasCreate(&cublasHandle));
-        CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+        d_rhs_vec = DeviceVec<T>(N);
+        d_rhs = d_rhs_vec.getPtr();
+        d_inner_soln_vec = DeviceVec<T>(N);
+        d_inner_soln = d_inner_soln_vec.getPtr();
 
         // init some util vecs
         d_temp_vec = DeviceVec<T>(N);
         d_temp = d_temp_vec.getPtr();
+        d_temp2 = DeviceVec<T>(N).getPtr();
+
+        d_resid_vec = DeviceVec<T>(N);
+        d_resid = d_resid_vec.getPtr();
 
         // make mat handles for SpMV
         CHECK_CUSPARSE(cusparseCreateMatDescr(&descrKmat));
         CHECK_CUSPARSE(cusparseSetMatType(descrKmat, CUSPARSE_MATRIX_TYPE_GENERAL));
         CHECK_CUSPARSE(cusparseSetMatIndexBase(descrKmat, CUSPARSE_INDEX_BASE_ZERO));
-
-        CHECK_CUSPARSE(cusparseCreateMatDescr(&descrDinvMat));
-        CHECK_CUSPARSE(cusparseSetMatType(descrDinvMat, CUSPARSE_MATRIX_TYPE_GENERAL));
-        CHECK_CUSPARSE(cusparseSetMatIndexBase(descrDinvMat, CUSPARSE_INDEX_BASE_ZERO));
     }
 
     template <bool startup = true>
@@ -76,8 +104,8 @@ class DampedJacobiSmoother {
             d_diag_cols = HostVec<int>(nnodes, h_diag_cols).createDeviceVec().getPtr();
 
             // create the bsr data object on device
-            d_diag_bsr_data = BsrData(nnodes, block_dim, diag_inv_nnzb, d_diag_rowp, d_diag_cols, nullptr,
-                                      nullptr, false);
+            d_diag_bsr_data = BsrData(nnodes, block_dim, diag_inv_nnzb, d_diag_rowp, d_diag_cols,
+                                      nullptr, nullptr, false);
             delete[] h_diag_rowp;
             delete[] h_diag_cols;
 
@@ -119,10 +147,7 @@ class DampedJacobiSmoother {
 
         // now compute Dinv linear operator from LU triang solves (so don't need triang solves in
         // main solve), costs 6 triang solves of D^-1 = U^-1 L^-1
-        build_lu_inv_operator =
-            (smoother == MULTICOLOR_GS_FAST2 || smoother == MULTICOLOR_GS_FAST2_JUNCTION ||
-             smoother == DAMPED_JACOBI) &&
-            !full_LU;  // dense matrix should not modify LU vals on coarsest grid..
+        bool build_lu_inv_operator = true;
         if (build_lu_inv_operator) {
             // startup part of Dinv linear operator
             if constexpr (startup) {
@@ -167,9 +192,8 @@ class DampedJacobiSmoother {
         }  // end of Dinv linear operator if block
     }
 
-    void smoothDefect(DeviceVec<T> d_defect, DeviceVec<T> d_soln,
-        int n_iters, bool print = false, int print_freq = 10, T omega = 0.8) {
-
+    void smoothDefect(DeviceVec<T> d_defect, DeviceVec<T> d_soln, int n_iters, bool print = false,
+                      int print_freq = 10, T omega = 0.8) {
         /* damped jacobi smoothing */
 
         for (int iter = 0; iter < n_iters; iter++) {
@@ -209,18 +233,18 @@ class DampedJacobiSmoother {
     Assembler assembler;
     int N, nelems, block_dim, nnodes;
     BsrMat<DeviceVec<T>> Kmat, D_LU_mat;  // can't get Dinv_mat directly at moment
-    DeviceVec<T> d_temp_vec;
-    T *d_temp;
+    DeviceVec<T> d_temp_vec, d_resid_vec;
+    T *d_temp, *d_resid, *d_temp2;
+
+    T omegaJac;
+    int nsmooth;
+
+    DeviceVec<T> d_rhs_vec, d_inner_soln_vec;
+    T *d_rhs, *d_inner_soln;
 
     // CUSPARSE and cublas data
-    cusparseHandle_t cusparseHandle = NULL;
-    cublasHandle_t cublasHandle = NULL;
-    cusparseMatDescr_t descr_L = 0;
-    bsrsv2Info_t info_L = 0;
-    void *pBuffer = 0;
-    const cusparseSolvePolicy_t policy_L = CUSPARSE_SOLVE_POLICY_USE_LEVEL;
-    const cusparseOperation_t trans_L = CUSPARSE_OPERATION_NON_TRANSPOSE;
-    const cusparseDirection_t dir = CUSPARSE_DIRECTION_ROW;
+    cusparseHandle_t &cusparseHandle;
+    cublasHandle_t &cublasHandle;
 
     // for kmat
     int kmat_nnzb, *d_kmat_rowp, *d_kmat_cols;
@@ -228,6 +252,15 @@ class DampedJacobiSmoother {
     cusparseMatDescr_t descrKmat = 0;
     size_t bufferSizeMV;
     void *buffer_MV = nullptr;
+
+    cusparseMatDescr_t descr_L = 0, descr_U = 0;
+    bsrsv2Info_t info_L = 0, info_U = 0;
+    void *pBuffer = 0;
+    const cusparseSolvePolicy_t policy_L = CUSPARSE_SOLVE_POLICY_USE_LEVEL,
+                                policy_U = CUSPARSE_SOLVE_POLICY_USE_LEVEL;
+    const cusparseOperation_t trans_L = CUSPARSE_OPERATION_NON_TRANSPOSE,
+                              trans_U = CUSPARSE_OPERATION_NON_TRANSPOSE;
+    const cusparseDirection_t dir = CUSPARSE_DIRECTION_ROW;
 
     // for diag inv mat
     int diag_inv_nnzb, *d_diag_rowp, *d_diag_cols;

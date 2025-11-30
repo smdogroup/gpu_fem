@@ -81,6 +81,19 @@ class GMRESSolver : public BaseSolver {
     void set_abs_tol(T atol) { options.atol = atol; }
     void set_rel_tol(T rtol) { options.rtol = rtol; }
 
+    T getResidualNorm(DeviceVec<T> rhs_in, DeviceVec<T> soln_in) {
+        // compute r_0 = b - Ax
+        CHECK_CUDA(cudaMemcpy(d_resid, rhs_in.getPtr(), N * sizeof(T), cudaMemcpyDeviceToDevice));
+        T a = -1.0, b = 1.0;
+        CHECK_CUSPARSE(cusparseDbsrmv(
+            cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb,
+            &a, descrK, d_vals, d_rowp, d_cols, block_dim, soln_in.getPtr(), &b, d_resid));
+
+        T resid_norm;
+        CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_resid, 1, &resid_norm));
+        return resid_norm;
+    }
+
     bool solve(DeviceVec<T> rhs_in, DeviceVec<T> soln_out, bool check_conv = false) {
         // assumes rhs_in and soln_out are in permutation for solve (not natural order)
         // performs full K-cycle with left-precond flexible PCG (note this shows true resid even
@@ -239,7 +252,7 @@ class GMRESSolver : public BaseSolver {
                 // no preconditioner
                 cudaMemcpy(d_tmp, d_xR, N * sizeof(T), cudaMemcpyDeviceToDevice);
             }
-            
+
             CHECK_CUDA(cudaMemcpy(d_xR, d_tmp, N * sizeof(T), cudaMemcpyDeviceToDevice));
 
             // then update x = x_0 + xR
@@ -263,10 +276,11 @@ class GMRESSolver : public BaseSolver {
         CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_resid, 1, &final_resid));
 
         if (options.print) {
-            if (converged) {    
+            if (converged) {
                 printf("GMRES converged to %.4e resid in %d iterations\n", final_resid, total_iter);
             } else {
-                printf("GMRES did NOT CONVERGE with %.4e resid in %d iterations\n", final_resid, total_iter);
+                printf("GMRES did NOT CONVERGE with %.4e resid in %d iterations\n", final_resid,
+                       total_iter);
             }
         }
 

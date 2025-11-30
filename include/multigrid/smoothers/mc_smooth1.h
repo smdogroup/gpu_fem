@@ -51,7 +51,6 @@ class MulticolorGSSmoother_V1 : public BaseSolver {
 
         // copy internal soln to external solution of the solve method
         cudaMemcpy(soln.getPtr(), d_inner_soln, N * sizeof(T), cudaMemcpyDeviceToDevice);
-
         return false;  // fail = False
     }
 
@@ -119,8 +118,8 @@ class MulticolorGSSmoother_V1 : public BaseSolver {
             d_diag_cols = HostVec<int>(nnodes, h_diag_cols).createDeviceVec().getPtr();
 
             // create the bsr data object on device
-            d_diag_bsr_data = BsrData(nnodes, block_dim, diag_inv_nnzb, d_diag_rowp, d_diag_cols, nullptr,
-                                      nullptr, false);
+            d_diag_bsr_data = BsrData(nnodes, block_dim, diag_inv_nnzb, d_diag_rowp, d_diag_cols,
+                                      nullptr, nullptr, false);
             delete[] h_diag_rowp;
             delete[] h_diag_cols;
 
@@ -408,7 +407,7 @@ class MulticolorGSSmoother_V1 : public BaseSolver {
                 if (time_debug) CHECK_CUDA(cudaDeviceSynchronize());
                 auto prelim_time = std::chrono::high_resolution_clock::now();
                 // int _icolor2 = (_icolor + iter) % num_colors;  // permute order as you go
-                bool rev_colors = symmetric ? iter % 2 == 0 : false;
+                bool rev_colors = symmetric ? iter % 2 == 1 : false;
                 int icolor = rev_colors ? num_colors - 1 - _icolor : _icolor;
 
                 // get active rows / cols for this color
@@ -505,9 +504,9 @@ class MulticolorGSSmoother_V1 : public BaseSolver {
         }  // next block-GS iteration
     }
 
-    void smoothMatrix(BsrMat<DeviceVec<T>> *prolong_mat, BsrMat<DeviceVec<T>> *Z_mat,  
-        BsrMat<DeviceVec<T>> *Zprev_mat, int n_iters, int nnzb_prod, int *d_P_prodBlocks, 
-        int *d_K_prodblocks, int *d_Z_prodblocks) {
+    void smoothMatrix(BsrMat<DeviceVec<T>> *prolong_mat, BsrMat<DeviceVec<T>> *Z_mat,
+                      BsrMat<DeviceVec<T>> *Zprev_mat, int n_iters, int nnzb_prod,
+                      int *d_P_prodBlocks, int *d_K_prodblocks, int *d_Z_prodblocks) {
         printf("WARNING: MC-Smoother doesn't smooth the matrix yet\n");
     }
 

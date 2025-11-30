@@ -712,36 +712,34 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
     for (int ih = 0; ih < nnh; ih++) {
         for (int ix = 0; ix < nnx; ix++) {
             int inode = nnx * ih + ix;
-            if (ix % order == 0 && ih % order == 0)
-                continue;  // only apply loads to non mid-side nodes?
 
             T *xpt_node = &xpts[Geo::spatial_dim * inode];
-            T x, th, R_mid;
+            T x[1] = {0}, th[1] = {0}, R_mid[1] = {0};
             if constexpr (Basis::order == 1) {
-                x = dx * ix;
-                th = dth * ih;
-                R_mid = R;
+                x[0] = dx * ix;
+                th[0] = dth * ih;
+                R_mid[0] = R;
             } else {
                 int ix_corner = (ix / n) * n, ih_corner = (ih / n) * n;
                 // here nx is the number of points in element (related to elem order)
                 T xi = Basis::getGaussPoint(ix % n), eta = Basis::getGaussPoint(ih % n);
-                x = dx * ix_corner + 0.5 * (1 + xi) * (dx * order);
-                th = dth * ih_corner + 0.5 * (1 + eta) * (dth * order);
-                R_mid = R;
+                x[0] = dx * ix_corner + 0.5 * (1 + xi) * (dx * order);
+                th[0] = dth * ih_corner + 0.5 * (1 + eta) * (dth * order);
+                R_mid[0] = R;
             }
             if (imperfection) {
-                T x_hat = x / L;
-                T th_hat = th / 2 / M_PI;
+                T x_hat = x[0] / L;
+                T th_hat = th[0] / 2 / M_PI;
 
                 // can change settings here
                 T imp_mag = 0.5;
                 T imp_shape = sin(x_hat * imp_x * M_PI) * sin(th_hat * imp_hoop * M_PI);
-                R_mid += thick * imp_mag * imp_shape;
+                R_mid[0] += thick * imp_mag * imp_shape;
             }
 
-            xpt_node[0] = x;
-            xpt_node[1] = R_mid * sin(th);
-            xpt_node[2] = R_mid * cos(th);
+            xpt_node[0] = x[0];
+            xpt_node[1] = R_mid[0] * sin(th[0]);
+            xpt_node[2] = R_mid[0] * cos(th[0]);
         }
     }
 

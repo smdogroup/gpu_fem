@@ -58,16 +58,29 @@ class PCGSolver : public BaseSolver {
 
     // nothing
     // void update_after_assembly(DeviceVec<T> &vars) {}
-    void update_after_assembly(DeviceVec<T> &vars) { 
+    void update_after_assembly(DeviceVec<T> &vars) {
         bool perm = true;
         grid->setStateVars(vars, perm);
         grid->update_after_assembly();
-        if (pc) pc->update_after_assembly(vars); 
+        if (pc) pc->update_after_assembly(vars);
     }
 
     void set_print(bool print) { options.print = print; }
     void set_abs_tol(T atol) { options.atol = atol; }
     void set_rel_tol(T rtol) { options.rtol = rtol; }
+
+    T getResidualNorm(DeviceVec<T> rhs_in, DeviceVec<T> soln_in) {
+        // compute r_0 = b - Ax
+        CHECK_CUDA(cudaMemcpy(d_resid, rhs_in.getPtr(), N * sizeof(T), cudaMemcpyDeviceToDevice));
+        T a = -1.0, b = 1.0;
+        CHECK_CUSPARSE(cusparseDbsrmv(
+            cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb,
+            &a, descrK, d_vals, d_rowp, d_cols, block_dim, soln_in.getPtr(), &b, d_resid));
+
+        T resid_norm;
+        CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, d_resid, 1, &resid_norm));
+        return resid_norm;
+    }
 
     bool solve(DeviceVec<T> rhs_in, DeviceVec<T> soln_out, bool check_conv = false) {
         // assumes rhs_in and soln_out are in permutation for solve (not natural order)
