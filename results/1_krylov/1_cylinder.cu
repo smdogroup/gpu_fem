@@ -449,6 +449,14 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, T pressure = 5.0e7)
     printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
+    int nx = nxe + 1;
+    int ndof = nx * nx * 6;
+    double total = startup_time.count() + solve_time.count();
+    size_t bytes_per_double = sizeof(double);
+    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
+    printf("ILU(%d)-memory in MB %.4e with NDOF %d\n", fill_level, mem_mb, ndof);
+
+
     if (fail) {
         printf("\tPCG linear solver failed\n");
         return;
@@ -579,9 +587,19 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     std::chrono::duration<double> solve_time = end_solve - start_solve;
 
     // compute log residual reduction per unit time
-    T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nGSMC-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    // it's converging about 1e14 resid drop, only need like 1e7 so half
+    T log_resid_drop = (log(init_resid) - log(final_resid)) / log(10.0);
+    // T log_resid_cap = log(1e6) / log(10.0); // cap out past 1e6 because don't need deeper than this really for Newton-Krylov..
+    T log_red_rate =  0.5 * log_resid_drop / solve_time.count();
+    printf("\nDirectLU-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
+
+    int nx = nxe + 1;
+    int ndof = nx * nx * 6;
+    double total = startup_time.count() + solve_time.count();
+    size_t bytes_per_double = sizeof(double);
+    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
+    printf("fullLU-memory in MB %.4e with NDOF %d\n", mem_mb, ndof);
 
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;

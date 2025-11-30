@@ -2,11 +2,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-
-for case in ["cylinder", "wingbox"]:
+for case in ["cylinder-A100"]:
+# for case in ["cylinder", "wingbox"]:
 
     if case == "cylinder":
         filename = "out/cylinder-times.csv"
+    elif case == "cylinder-A100":
+        filename = "out/cylinder-A100-times.csv"
     else: # wingbox
         filename = "out/wingbox-times.csv"
 
@@ -32,7 +34,7 @@ for case in ["cylinder", "wingbox"]:
         'axes.labelsize': 20,
         'xtick.labelsize': 20,
         'ytick.labelsize': 20,
-        'legend.fontsize': 20,
+        'legend.fontsize': 18,
         'figure.titlesize': 20
     })
 
@@ -54,16 +56,25 @@ for case in ["cylinder", "wingbox"]:
 
     names = ['Jacobi', 'GSMC', 'CP-8', 'ILU0', 'ILU1', 'ILU2']
     for i in range(6):
-        plt.plot(toverR, arr[:, i+1], "o-", linewidth=3, color=colors[i], label=names[i])
+        if i >= 3:
+            _arr = arr[:, 9 - i]
+            _name = names[8 - i]
+        else:
+            _arr = arr[:,i+1]
+            _name = names[i]
+        plt.plot(toverR, _arr, "o-" if i != 1 else "o--", linewidth=3, color=colors[i], label=_name)
 
-    plt.legend(loc='center left', bbox_to_anchor=(0, 0.45))
+    plt.legend(loc='center left', bbox_to_anchor=(0, 0.4))
 
     plt.xlabel("Normalized Thickness, " + r"$\frac{t}{R}$")
     plt.xscale('log')
+    # plt.yscale('log')
     plt.ylabel(r"$\log_{10}(resid) \, / \, sec$")
     plt.tight_layout()
     if case == "cylinder":
         plt.savefig("out/1_cylinder_smoother.png", dpi=400)
+    elif case == "cylinder-A100":
+        plt.savefig("out/1_cylinder_A100_smoother.png", dpi=400)
     else: # wingbox
         plt.savefig("out/1_wingbox_smoother.png", dpi=400)
     plt.close('all')
