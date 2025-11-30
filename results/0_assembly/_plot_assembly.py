@@ -61,20 +61,39 @@ gpu3_arr = gpu3_df.to_numpy()
 gpu3_dof, gpu3_jac, gpu3_res = gpu3_arr[:,1], gpu3_arr[:,2], gpu3_arr[:,3]
 
 
+
 fig, ax = plt.subplots(figsize=(9, 7.5))
 
-plt.plot(dof, gpu_jac, 'o-', linewidth=3.0, color=colors[0], label='jac,p=1')
-plt.plot(gpu2_dof, gpu2_jac, 'o-', linewidth=3.0, color=colors[1], label='jac,p=2')
-plt.plot(gpu3_dof, gpu3_jac, 'o-', linewidth=3.0, color=colors[2], label='jac,p=3')
+colors = ['#440154', '#31688e', '#35b779']   # purple, blue, green
 
-plt.plot(dof, gpu_res, 'o--', linewidth=3.0, color=colors[0], label='res,p=1')
-plt.plot(gpu2_dof, gpu2_res, 'o--', linewidth=3.0, color=colors[1], label='res,p=2')
-plt.plot(gpu3_dof, gpu3_res, 'o--', linewidth=3.0, color=colors[2], label='res,p=3')
+# ------------------ Jacobian curves (colored) ------------------
+p1_jac, = ax.plot(dof,      gpu_jac,  'o-', linewidth=3.0, color=colors[0], label='p=1')
+p2_jac, = ax.plot(gpu2_dof, gpu2_jac, 'o-', linewidth=3.0, color=colors[1], label='p=2')
+p3_jac, = ax.plot(gpu3_dof, gpu3_jac, 'o-', linewidth=3.0, color=colors[2], label='p=3')
 
-plt.legend()
-plt.xlabel("N, Degree of Freedom")
-plt.ylabel("Runtime (s)")
-plt.xscale('log')
-plt.yscale('log')
+# ------------------ Residual curves (same colors, no labels) ------------------
+ax.plot(dof,      gpu_res,  'o--', linewidth=3.0, color=colors[0])
+ax.plot(gpu2_dof, gpu2_res, 'o--', linewidth=3.0, color=colors[1])
+ax.plot(gpu3_dof, gpu3_res, 'o--', linewidth=3.0, color=colors[2])
+
+# ------------------ Proxy handles for Jacobian & Residual ------------------
+jac_proxy, = ax.plot([], [], 'o-',  color='black', linewidth=3.0, label='jacobian')
+res_proxy, = ax.plot([], [], 'o--', color='black', linewidth=3.0, label='residual')
+
+# ------------------ Legend 1: only p=1,2,3 ------------------
+legend1 = ax.legend(handles=[p3_jac, p2_jac, p1_jac],
+                    loc='upper left') #title="Polynomial Order")
+ax.add_artist(legend1)
+
+# ------------------ Legend 2: jacobian & residual proxies ------------------
+legend2 = ax.legend(handles=[jac_proxy, res_proxy],
+                    loc='upper center') #title="Quantities")
+
+# ------------------ Axes settings ------------------
+ax.set_xlabel("N, Degree of Freedom")
+ax.set_ylabel("Assembly time (s)")
+ax.set_xscale('log')
+ax.set_yscale('log')
 
 plt.savefig("out/assembly_orders.png", dpi=400)
+
