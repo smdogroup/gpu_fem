@@ -55,7 +55,8 @@ class MITCShellAssembler
         // method for testing out faster jacobian GPU
 
         mat.zeroValues();
-        int cols_per_elem = (Quadrature::num_quad_pts <= 4) ? 24 : 9;
+        // int cols_per_elem = (Quadrature::num_quad_pts <= 4) ? 24 : 9;
+        int cols_per_elem = (Basis::order == 1 ? 24 : Basis::order == 2 ? 9 : 4);
         dim3 block(num_quad_pts, cols_per_elem,
                    elems_per_block);  // better order for consecutive threads and mem reads
         int elem_cols_per_block = cols_per_elem * elems_per_block;
@@ -433,7 +434,7 @@ class MITCShellAssembler
     }      // add_element_quadpt_jacobian_col
 
     template <class Data, STRAIN strain = ALL>
-    __DEVICE__ __noinline__ static void add_element_quadpt_residual_fast(
+    __DEVICE__ static void add_element_quadpt_residual_fast(
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
         const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
         const T vars[dof_per_elem], T res[dof_per_elem]) {
@@ -546,7 +547,7 @@ class MITCShellAssembler
     }  // add_element_quadpt_residual_fast
 
     template <class Data, STRAIN strain = ALL>
-    __DEVICE__ __noinline__ static void add_element_quadpt_jacobian_col_fast(
+    __DEVICE__ static void add_element_quadpt_jacobian_col_fast(  // __noinline__ is slower actually
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
         const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
         const T vars[dof_per_elem], const T pvars[dof_per_elem], T matCol[dof_per_elem]) {

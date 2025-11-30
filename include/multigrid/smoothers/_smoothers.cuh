@@ -132,6 +132,65 @@ __global__ void k_compute_mat_mat_prod(int nnzb_prod, int block_dim, T scale,
     }
 }
 
+
+template <typename T>
+__global__ void k_compute_Dinv_P_mmprod(int nnzb_prod, int block_dim, 
+    const T *d_Dinv_vals, int *d_PF_rows, T *d_PF_vals) {
+    
+    // computes K * P => new P array as mat-mat product with pre-computed nonzero block pattern
+    int iblock = blockIdx.x;
+    // int iblock = threadIdx.x + blockIdx.x * blockDim.x;
+    if (iblock >= nnzb_prod) return;
+
+    int brow = d_PF_rows[iblock];
+    // parallelize over the dense product
+    int block_dim2 = block_dim * block_dim;
+    int block_dim3 = block_dim2 * block_dim;
+    // int ndense_prods = block_dim3; // do need blockDim.x > ndense_prods to work correctly 
+    // aka need >= 216 block dim here to work well
+
+    const T *Dinv = &d_Dinv_vals[block_dim2 * brow]; // since diagonal matrix brow = block
+    T *PF = &d_PF_vals[block_dim2 * iblock];
+
+    // load values of PF first into shared mem
+    __shared__ T PF_vals0[36];
+    for (int i = threadIdx.x; i < 36; i += blockDim.x) {
+        PF_vals0[i] = PF[i];
+    }
+    __syncthreads();
+
+    // now zero this block (since we'll be adding into it in a sec)
+    for (int i = threadIdx.x; i < block_dim2; i += blockDim.x) {
+        PF[i] = 0.0;
+    }
+    __syncthreads();
+
+    // now do the product in-place into PF output
+    for (int iprod = threadIdx.x; iprod < block_dim3; iprod += blockDim.x) {
+        int ix = iprod / block_dim2, iyz = iprod % block_dim2;
+        int iy = iyz / block_dim, iz = iyz % block_dim;
+        atomicAdd(&PF[block_dim * ix + iz], Dinv[block_dim * ix + iy] * PF_vals0[block_dim * iy + iz]);  
+    }
+}
+
+template <typename T>
+__global__ void k_add_colored_submat_PFP(int color_nnzb, int block_dim, T omegaMC, int start_block, 
+    const T *d_PF_vals, T *d_P_vals) {
+    /* add colored rows of Dinv*PF=>PF previous step into P matrix as color smoother update */
+    
+    // P and PF both have K*P filled-in sparsity
+    int tid = blockIdx.x;
+    if (tid >= color_nnzb) return;
+    int block_dim2 = block_dim * block_dim;
+    int iblock = tid + start_block;
+    const T *PF = &d_PF_vals[block_dim2 * iblock];
+    T *P = &d_P_vals[block_dim2 * iblock];
+
+    for (int ii = threadIdx.x; ii < block_dim2; ii += blockDim.x) {
+        P[ii] += omegaMC * PF[ii]; // no atomic add, all separate
+    }
+}
+
 template <typename T>
 __global__ static void k_copy_color_submat(const int nnodes, const int submat_nnzb, const int start_col, const int block_dim, 
     const int *d_submat_rows, const int *d_submat_cols, const int *d_kmat_rowp, const int *d_kmat_cols, const T *d_kmat_vals, T *d_submat_vals) {

@@ -101,7 +101,7 @@ class HellingerReissnerShellAssembler
     }
 
     template <class Data, STRAIN strain = ALL>
-    __DEVICE__ __noinline__ static void add_element_quadpt_residual_fast(
+    __DEVICE__ static void add_element_quadpt_residual_fast(  // __noinline__
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
         const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
         const T full_vars[dof_per_elem], T full_res[dof_per_elem]) {
@@ -259,7 +259,7 @@ class HellingerReissnerShellAssembler
     }  // add_element_quadpt_residual_fast
 
     template <class Data, STRAIN strain = ALL>
-    __DEVICE__ __noinline__ static void add_element_quadpt_jacobian_col_fast(
+    __DEVICE__ static void add_element_quadpt_jacobian_col_fast(  // __noinline__
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
         const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
         const T full_vars[dof_per_elem], const T full_pvars[dof_per_elem],

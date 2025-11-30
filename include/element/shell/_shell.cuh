@@ -150,7 +150,7 @@ __GLOBAL__ static void k_add_jacobian_fast(int32_t vars_num_nodes, int32_t num_e
         int elem_inner_row = ideriv % Phys::vars_per_node;
         mat.addElementMatRow(true, elem_block_row, elem_inner_row, global_elem, iquad, Quadrature::num_quad_pts,
             Phys::vars_per_node, Basis::num_nodes, vars_elem_conn, local_mat_col);
-    } else if (Quadrature::num_quad_pts == 9) {
+    } else if (Quadrature::num_quad_pts != 4) {
         // 9 quadpts not sure how to warp reduce that yet (some groups of 9 lie on different warps)
         // so just atomicAdd directly into global mem (slower for now, TBD)
 
@@ -284,14 +284,12 @@ __GLOBAL__ static void k_add_residual_fast(int32_t vars_num_nodes, int32_t num_e
         res.addElementValuesFromShared(true, threadIdx.x, blockDim.x, Phys::vars_per_node,
                                     Basis::num_nodes, vars_elem_conn,
                                     local_res);
-    } else if (Quadrature::num_quad_pts == 9) {
+    } else if (Quadrature::num_quad_pts != 4) {
         // 9 quadpts not sure how to warp reduce that yet (some groups of 9 lie on different warps)
         // so just atomicAdd directly into global mem (slower for now, TBD)
         res.addElementValuesFromShared(true, 0, 1, Phys::vars_per_node,
                                     Basis::num_nodes, vars_elem_conn,
                                     local_res);
     }
-
-
     
 }  // end of add_jacobian_fast

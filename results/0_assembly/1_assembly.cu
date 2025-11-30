@@ -61,6 +61,8 @@ void time_assembly(int nxe) {
     // assemble the kmat
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_jac = std::chrono::high_resolution_clock::now();
+    // const int cols_per_elem = 4;
+    // // const int cols_per_elem = 9;
     assembler.add_jacobian_fast(kmat);
     assembler.apply_bcs(kmat);
     CHECK_CUDA(cudaDeviceSynchronize());

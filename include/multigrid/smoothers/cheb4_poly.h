@@ -153,8 +153,8 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
             d_diag_cols = HostVec<int>(nnodes, h_diag_cols).createDeviceVec().getPtr();
 
             // create the bsr data object on device
-            d_diag_bsr_data = BsrData(nnodes, block_dim, diag_inv_nnzb, d_diag_rowp, d_diag_cols, nullptr,
-                                      nullptr, false);
+            d_diag_bsr_data = BsrData(nnodes, block_dim, diag_inv_nnzb, d_diag_rowp, d_diag_cols,
+                                      nullptr, nullptr, false);
             delete[] h_diag_rowp;
             delete[] h_diag_cols;
 
@@ -480,9 +480,9 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
 
     /* prolong matrix-smoothing area (AMG) */
 
-    void smoothMatrix(int n_iters, BsrMat<DeviceVec<T>> *prolong_mat, BsrMat<DeviceVec<T>> *Z_mat,  
-        BsrMat<DeviceVec<T>> *Zprev_mat, int nnzb_prod, int *d_P_prodBlocks, 
-        int *d_K_prodblocks, int *d_Z_prodblocks) {
+    void smoothMatrix(int n_iters, BsrMat<DeviceVec<T>> *prolong_mat, BsrMat<DeviceVec<T>> *Z_mat,
+                      BsrMat<DeviceVec<T>> *Zprev_mat, int nnzb_prod, int *d_P_prodblocks,
+                      int *d_K_prodblocks, int *d_Z_prodblocks) {
         // smooth the prolongation matrix using Kmat and Dinv mat, Z_mat is temp matrix for
         // smoothing process
         // TODO : add option if we want to do fewer smoothing steps (if using higher-order)?
@@ -497,7 +497,9 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
         int *d_P_cols = prolong_bsr_data.cols;
 
         if constexpr (Assembler::Phys::vars_per_node > 6) {
-            printf("WARNING: vpn > 6, smooth matrix exited. Devel to get this to work, change block sizes for HR element\n");
+            printf(
+                "WARNING: vpn > 6, smooth matrix exited. Devel to get this to work, change block "
+                "sizes for HR element\n");
             return;
         }
 
@@ -509,47 +511,50 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
             Zprev_mat->zeroValues();
 
             // iteration starts by first computing z_1 so k=1 (as z_0 = 0)
-            for (int k = 1; k < ORDER + 1; k++) { 
-
-                // compute -omega/rho(Dinv*A) * beta_k * A*P into Z first (scaled prolong defect matrix)
-                Z_mat.zeroValues();
+            for (int k = 1; k < ORDER + 1; k++) {
+                // compute -omega/rho(Dinv*A) * beta_k * A*P into Z first (scaled prolong defect
+                // matrix)
+                Z_mat->zeroValues();
                 dim3 PKP_block(216), PKP_grid(nnzb_prod);
                 T beta_k = (8.0 * k - 4.0) / (2.0 * k + 1.0);
                 T a = -omega / spectral_radius * beta_k;
-                k_compute_mat_mat_prod<T><<<PKP_grid, PKP_block>>>(nnzb_prod, block_dim, a, d_K_prodblocks, 
-                    d_P_prodblocks, d_Z_prodblocks, d_kmat_vals, d_P_vals, d_Z_vals);
+                k_compute_mat_mat_prod<T><<<PKP_grid, PKP_block>>>(
+                    nnzb_prod, block_dim, a, d_K_prodblocks, d_P_prodblocks, d_Z_prodblocks,
+                    d_kmat_vals, d_P_vals, d_Z_vals);
 
                 // compute Dinv*Z into Z in-place (equiv to Dinv*scale*A*P => Z)
                 dim3 DP_block(216), DP_grid(P_nnzb);
-                k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(P_nnzb, block_dim, 
-                    d_dinv_vals.getPtr(), d_P_rows, d_P_vals);
+                k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(
+                    P_nnzb, block_dim, d_dinv_vals.getPtr(), d_P_rows, d_P_vals);
 
                 // add alpha_k * Zprev into Z
                 dim3 add_block(64);
                 T alpha_k = (2.0 * k - 3.0) / (2.0 * k + 1.0);
-                k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(P_nnzb, block_dim, alpha_k, 0,
-                    d_Zprev_vals, d_Z_vals);
+                k_add_colored_submat_PFP<T>
+                    <<<DP_grid, add_block>>>(P_nnzb, block_dim, alpha_k, 0, d_Zprev_vals, d_Z_vals);
 
-                // do orthogonal projector on Z (only really needed for coarse-grid galerkin AMG, not smooth GMG)
-                // if constexpr (do_orthog_projector) {
+                // do orthogonal projector on Z (only really needed for coarse-grid galerkin AMG,
+                // not smooth GMG) if constexpr (do_orthog_projector) {
                 //     dim3 OP_block(32), OP_grid(nnodes_fine);
                 //     d_SU_vals.zeroValues();
                 //     // compute SU matrix
-                //     k_orthog_projector_computeSU<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
+                //     k_orthog_projector_computeSU<T><<<OP_grid, OP_block>>>(nnodes_fine,
+                //     block_dim, d_Bc,
                 //         d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_PF_vals, d_SU_vals.getPtr());
 
                 //     // remove rigid-body row-sums
-                //     k_orthog_projector_removeRowSums<T><<<OP_grid, OP_block>>>(nnodes_fine, block_dim, d_Bc, 
-                //     d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_SU_vals.getPtr(), d_UTUinv_vals.getPtr(), d_PF_vals);
+                //     k_orthog_projector_removeRowSums<T><<<OP_grid, OP_block>>>(nnodes_fine,
+                //     block_dim, d_Bc, d_free_dof_ptr, d_PF_rowp, d_PF_cols, d_SU_vals.getPtr(),
+                //     d_UTUinv_vals.getPtr(), d_PF_vals);
                 // }
 
                 // add Z into P (the prolongation update)
                 T scale = 1.0;
-                k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(P_nnzb, block_dim, scale, 0,
-                    d_Z_vals, d_P_vals);
+                k_add_colored_submat_PFP<T>
+                    <<<DP_grid, add_block>>>(P_nnzb, block_dim, scale, 0, d_Z_vals, d_P_vals);
 
                 // now copy Z into Zprev
-                Z_mat.copyValuesTo(Zprev_mat);
+                Z_mat->copyValuesTo(*Zprev_mat);
 
             }  // end of chebyshev recursion
         }

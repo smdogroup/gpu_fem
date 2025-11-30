@@ -71,11 +71,35 @@ void printToVTK(Assembler assembler, Vec soln, std::string filename) {
             }
             myfile << "\n";
         }
+    } else if (nodes_per_elem == 16) {
+        // VTK_LAGRANGE_QUADRILATERAL (order 3 → 16 nodes)
+        const int32_t local_perm[16] = {
+            // corners (LL, LR, UR, UL)
+            0, 3, 15, 12,
+            // edge internal nodes (bottom left->right, right bottom->top,
+            //                      top right->left, left top->bottom)
+            1, 2, 7, 11, 14, 13, 8, 4,
+            // interior nodes (row-major for i=1..2, j=1..2, bottom->top)
+            5, 6, 9, 10};
+
+        for (int ielem = 0; ielem < num_elems; ielem++) {
+            const int *elem_conn = &conn_ptr[nodes_per_elem * ielem];
+            myfile << nodes_per_elem;
+            for (int inode = 0; inode < nodes_per_elem; inode++) {
+                myfile << sp << elem_conn[local_perm[inode]];
+            }
+            myfile << "\n";
+        }
     }
 
     // cell type 9 is for CQUAD4 basically
     myfile << "CELL_TYPES " << num_elems << "\n";
-    int cell_type = (nodes_per_elem == 4) ? 9 : 23;  // CQUAD4 is type 9, CQUAD9 is type 23
+    int cell_type = (nodes_per_elem == 4) ? 9 :  // VTK_QUAD
+                        (nodes_per_elem == 9) ? 28
+                                              :  // VTK_BIQUADRATIC_QUAD
+                        (nodes_per_elem == 16) ? 70
+                                               :  // VTK_LAGRANGE_QUADRILATERAL
+                        -1;
     for (int ielem = 0; ielem < num_elems; ielem++) {
         myfile << cell_type << "\n";
     }

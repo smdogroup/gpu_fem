@@ -587,6 +587,18 @@ int main(int argc, char **argv) {
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    } else if (elem_type == "MITC9") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        using Quad = QuadQuadraticQuadrature<T>;
+        using Basis = LagrangeQuadBasis<T, Quad, 2>;
+        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    } else if (elem_type == "MITC16") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        using Quad = QuadCubicQuadrature<T>;
+        using Basis = LagrangeQuadBasis<T, Quad, 3>;
+        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI4") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadLinearQuadrature<T>;
@@ -600,6 +612,13 @@ int main(int argc, char **argv) {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    } else if (elem_type == "CFI16") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        // probably do need quadratic, but need to fix assembly issues with 9 quadpts
+        using Quad = QuadCubicQuadrature<T>;
+        using Basis = ChebyshevQuadBasis<T, Quad, 3>;
+        using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "HR4") {
         // hellinger-reissner element
         const bool HR = true; // whether is HR element (then physics has 5 extra DOF at start for strain-gap)
@@ -611,7 +630,6 @@ int main(int argc, char **argv) {
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }
-    
 
     return 0;
 
