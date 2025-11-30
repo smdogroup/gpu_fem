@@ -573,6 +573,8 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
 
+    pc->factor_matrix(); // run factor again so fair comparison
+
     // get initial residual
     T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
 
