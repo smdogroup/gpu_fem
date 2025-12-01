@@ -52,7 +52,7 @@ class LagrangeQuadBasis {
 
     __HOST_DEVICE__ static T getGaussPoint(int i) {
         // evenly spaced gauss-points
-        return -1.0 + 1.0 * i / nx;
+        return -1.0 + 2.0 * i / (nx-1);
     }
 
     // generic evalBasis call for interps in multigrid and FEA
@@ -309,10 +309,32 @@ class LagrangeQuadBasis {
     }  // end of interpFieldsGrad method
 
     __HOST_DEVICE__ static void getTyingKnots(T red_knots[], T full_knots[]) {
+        // reduced integration points (not the same as lagrange-lobatto)
         if constexpr (nx == 2) {
-            red_knots[0] = 0.0;
             full_knots[0] = -1.0;
             full_knots[1] = 1.0;
+
+            red_knots[0] = 0.0;
+        }
+
+        if constexpr (nx == 3) {
+            full_knots[0] = -0.774596669241483;
+            full_knots[1] = 0.0;
+            full_knots[2] = 0.774596669241483;
+
+            red_knots[0] = -0.577350269189626;
+            red_knots[1] = 0.577350269189626;
+        }
+
+        if constexpr (nx == 4) {
+            full_knots[0] = -0.861136311594053;
+            full_knots[1] = -0.339981043584856;
+            full_knots[2] = 0.339981043584856;
+            full_knots[3] = 0.861136311594053;
+
+            red_knots[0] = -0.774596669241483;
+            red_knots[1] = 0.0;
+            red_knots[2] = 0.774596669241483;
         }
     }
 

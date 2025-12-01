@@ -150,7 +150,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         int nxe_per_comp = c_nxe, nye_per_comp = c_nye; // for now (should have 25 grids)
         auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
         double uniform_force = pressure * 1.0 * 1.0;
-        double nodal_loads = uniform_force / (c_nxe - 1) / (c_nye - 1);
+        double nodal_loads = uniform_force; // / (c_nxe - 1) / (c_nye - 1); // no longer need to normalize (it's an integral of pressure now)
         nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
         T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
         printf("making grid with nxe %d\n", c_nxe);
@@ -348,7 +348,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 
     // get plate loads
     double uniform_force = pressure * 1.0 * 1.0;
-    double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
+    double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1); // no longer need to normalize (it's an integral of pressure now)
     nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
     // T *my_loads = getPlatePointLoad<T, Physics>(c_nxe, c_nye, Lx, Ly, Q);
     T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nye, Lx, Ly, nodal_loads);
@@ -488,13 +488,10 @@ int main(int argc, char **argv) {
     double SR = 100.0; // default, the less slender it is, solves much faster
     int n_vcycles = 50;
     double pressure = 8.0e6;
-    double omega = 0.9; // works better with omega near 1
-
-    // int nsmooth = 2; // typically faster right now
-    // int ninnercyc = 2; // inner V-cycles to precond K-cycle
+    double omega = 0.8; // works better with omega near 1
 
     // old GSMC settings
-    int nsmooth = 1;
+    int nsmooth = 1; // use nsmooth = 2 for 3rd order elements (needed)
     int ninnercyc = 1;
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9', 'HR4'
@@ -588,18 +585,18 @@ int main(int argc, char **argv) {
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     // MITC higher order don't really work? but LFI16 would..
-    // } else if (elem_type == "MITC9") {
-    //     using Physics = IsotropicShell<T, Data, is_nonlinear>;
-    //     using Quad = QuadQuadraticQuadrature<T>;
-    //     using Basis = LagrangeQuadBasis<T, Quad, 2>;
-    //     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-    //     gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    // } else if (elem_type == "MITC16") {
-    //     using Physics = IsotropicShell<T, Data, is_nonlinear>;
-    //     using Quad = QuadCubicQuadrature<T>;
-    //     using Basis = LagrangeQuadBasis<T, Quad, 3>;
-    //     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-    //     gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    } else if (elem_type == "MITC9") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        using Quad = QuadQuadraticQuadrature<T>;
+        using Basis = LagrangeQuadBasis<T, Quad, 2>;
+        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    } else if (elem_type == "MITC16") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        using Quad = QuadCubicQuadrature<T>;
+        using Basis = LagrangeQuadBasis<T, Quad, 3>;
+        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI4") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadLinearQuadrature<T>;

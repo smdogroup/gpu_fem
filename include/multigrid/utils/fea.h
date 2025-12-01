@@ -182,7 +182,6 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
 
     // printf("elem_conn with nnodes_per_elem %d: ", Basis::num_nodes);
     // printVec<int>(N, elem_conn);
-
     // printf("checkpoint 3 - post elem_conn\n");
 
     HostVec<int32_t> geo_conn(N, elem_conn);
@@ -202,19 +201,35 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
                 xpt_node[1] = dy * iy;
                 xpt_node[2] = 0.0;
             } else {
-                // higher order needs to now the current mid-side node location
-                int ix_corner = (ix / n) * n, iy_corner = (iy / n) * n;
-                // here nx is the number of points in element (related to elem order)
-                T xi = Basis::getGaussPoint(ix % n), eta = Basis::getGaussPoint(iy % n);
-                xpt_node[0] = dx * ix_corner + (1.0 + xi) * 0.5 * (dx * order);
-                xpt_node[1] = dy * iy_corner + (1.0 + eta) * 0.5 * (dy * order);
+                // higher-order nodes
+                int ix_corner = (ix / order) * order;
+                int iy_corner = (iy / order) * order;
+
+                // local node index inside element
+                int ix_local = ix % order;
+                int iy_local = iy % order;
+
+                // get reference Gauss point [-1,1]
+                T xi  = Basis::getGaussPoint(ix_local);
+                T eta = Basis::getGaussPoint(iy_local);
+
+                // physical element corners
+                T x0 = dx * ix_corner;
+                T x1 = dx * (ix_corner + (n - 1));  // last node in this element
+                T y0 = dy * iy_corner;
+                T y1 = dy * (iy_corner + (n - 1));
+
+                // map reference [-1,1] → [x0,x1] and [y0,y1]
+                xpt_node[0] = 0.5 * (1.0 - xi) * x0 + 0.5 * (1.0 + xi) * x1;
+                xpt_node[1] = 0.5 * (1.0 - eta) * y0 + 0.5 * (1.0 + eta) * y1;
                 xpt_node[2] = 0.0;
+
+                // printf("xi %.4e, eta %.4e with (x %.4e, y %.4e, z %.4e)\n", xi, eta, xpt_node[0], xpt_node[1], xpt_node[2]);
             }
         }
     }
 
     // printf("checkpoint 4 - post xpts\n");
-
     HostVec<Data> physData(num_elements, Data(E, nu, thick, rho, ys));
 
     // printf("checkpoint 5 - create physData\n");
@@ -350,26 +365,82 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
     T *my_loads = new T[num_dof];
     memset(my_loads, 0.0, num_dof * sizeof(T));
 
-    // technically we should be integrating this somehow or distributing this
-    // among the elements somehow..
-    // the actual rhs is integral q(x,y) * phi_i(x,y) dxdy, fix later if want
-    // better error conv.
-    for (int iy = 0; iy < nny; iy++) {
-        for (int ix = 0; ix < nnx; ix++) {
-            int inode = nnx * iy + ix;
-            T x = ix * dx, y = iy * dy;
-            // T nodal_load = load_mag * sin(PI * x / Lx) * sin(PI * y / Ly);
-            T r = sqrt(x * x + y * y);
-            T th = atan2(y, x);
-            T nodal_load = load_mag * sin(5.0 * PI * r) * cos(4.0 * th);
+    // for (int iy = 0; iy < nny; iy++) {
+    //     for (int ix = 0; ix < nnx; ix++) {
+    //         int inode = nnx * iy + ix;
+    //         T x = ix * dx, y = iy * dy;
+    //         // T nodal_load = load_mag * sin(PI * x / Lx) * sin(PI * y / Ly);
+    //         T r = sqrt(x * x + y * y);
+    //         T th = atan2(y, x);
+    //         T nodal_load = load_mag * sin(5.0 * PI * r) * cos(4.0 * th);
 
-            if (ix % order == 0 && iy % order == 0) {
-                // no loads on mid-side nodes
-                // don't put loads on mid-side nodes etc of higher order (weird results)
-                my_loads[vpn * inode + offset + 2] = nodal_load;  // * dx * dy;
+    //         if (ix % order == 0 && iy % order == 0) {
+    //             // no loads on mid-side nodes
+    //             // don't put loads on mid-side nodes etc of higher order (weird results)
+    //             my_loads[vpn * inode + offset + 2] = nodal_load;  // * dx * dy;
+    //         }
+    //     }
+    // }
+
+    using Quadrature = typename Basis::Quadrature;
+    const int n = Basis::nx;
+
+    // the actual rhs is integral q(x,y) * phi_i(x,y) dxdy, fix later if want
+    // better error conv. (loop over each element to add loads in)
+    for (int iye = 0; iye < nye; iye++) {
+        for (int ixe = 0; ixe < nxe; ixe++) {
+            int ielem = nxe * iye + ixe;
+
+            // no sorted order like in MITC?
+            for (int iloc = 0; iloc < n * n; iloc++) {
+                int ilx = iloc % n, ily = iloc / n;
+                int ix = order * ixe + ilx;
+                int iy = order * iye + ily;
+
+                // higher-order nodes
+                int ix_corner = (ix / order) * order;
+                int iy_corner = (iy / order) * order;
+
+                // local node index inside element
+                int ix_local = ix % order;
+                int iy_local = iy % order;
+
+                // get reference Gauss point [-1,1]
+                T xi  = Basis::getGaussPoint(ix_local);
+                T eta = Basis::getGaussPoint(iy_local);
+
+                // physical element corners
+                T x0 = dx * ix_corner;
+                T x1 = dx * (ix_corner + (n - 1));  // last node in this element
+                T y0 = dy * iy_corner;
+                T y1 = dy * (iy_corner + (n - 1));
+
+                // map reference [-1,1] → [x0,x1] and [y0,y1]
+                T x = 0.5 * (1.0 - xi) * x0 + 0.5 * (1.0 + xi) * x1;
+                T y = 0.5 * (1.0 - eta) * y0 + 0.5 * (1.0 + eta) * y1;
+                T z = 0.0;
+                
+                int inode = nnx * iy + ix;
+
+                // darea and quadrature points in the element
+                T J = dx * order * dy * order / 4;
+                T pt[2] = { 0 };
+                // pt[0] = xi, pt[1] = eta;
+                // this multiplies both weights internally
+                T weight = Quadrature::getQuadraturePoint(iloc, pt); 
+
+                T r = sqrt(x * x + y * y);
+                T th = atan2(y, x);
+                T nodal_load = load_mag * sin(5.0 * PI * r) * cos(4.0 * th);
+                // somehow need to scale by local dGP area though no?
+                nodal_load *= weight * J;
+
+                my_loads[vpn * inode + offset + 2] += nodal_load;            
             }
         }
     }
+
+
     return my_loads;
 }
 
