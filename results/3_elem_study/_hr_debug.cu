@@ -107,7 +107,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     MG *mg;
     KMG *kmg;
 
-    T omegaLS_min = 0.1, omegaLS_max = 2.0;
+    T omegaLS_min = 0.001, omegaLS_max = 4.0;
+    // T omegaLS_min = 0.1, omegaLS_max = 2.0;
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     // T omegaLS_min = 0.5, omegaLS_max = 2.0;
 
@@ -120,7 +121,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     }
 
     // get nxe_min for not exactly power of 2 case
-    int nxe_start = 64 / Basis::order;
+    int nxe_start = 32 / Basis::order;
     int pre_nxe_min = nxe > nxe_start ? nxe_start : 4;
     int nxe_min = pre_nxe_min;
     for (int c_nxe = nxe; c_nxe >= pre_nxe_min; c_nxe /= 2) {
@@ -169,6 +170,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         auto end0 = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> assembly_time = end0 - start0;
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
+
+        // kmat.add_diag_nugget(1e-4);
 
         // build smoother and prolongations..
         int ORDER = 4;
