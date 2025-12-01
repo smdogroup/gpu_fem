@@ -95,7 +95,7 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
         int nxe_per_comp = c_nxe / 4, nye_per_comp = c_nye/4; // for now (should have 25 grids)
         auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
         double uniform_force = 5e7 * 1.0 * 1.0;
-        double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
+        double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
         T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
         printf("making grid with nxe %d\n", c_nxe);
 
@@ -244,7 +244,7 @@ void solve_direct(int nxe, double SR) {
     int nxe_per_comp = nxe / 4, nye_per_comp = nxe/4; // for now (should have 25 grids)
     auto assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
     double uniform_force = 5e7 * 1.0 * 1.0;
-    double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
+    double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
     T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nxe, Lx, Ly, nodal_loads);
     printf("making grid with nxe %d\n", nxe);
 

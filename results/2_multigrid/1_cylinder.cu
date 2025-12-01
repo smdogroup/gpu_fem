@@ -100,8 +100,8 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
         constexpr bool compressive = false;
         const int load_case = 3; // petal and chirp load
         double uniform_force = 5e7 * 1.0 * 1.0;
-        double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
-        T *my_loads = getCylinderLoads<T, Physics, load_case>(c_nxe, c_nhe, L, R, nodal_loads);
+        double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
+        T *my_loads = getCylinderloads<T,  Basis,Physics, load_case>(c_nxe, c_nhe, L, R, nodal_loads);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -255,10 +255,10 @@ void solve_direct(int nxe, double SR) {
     const int load_case = 3; // petal and chirp load
     T pressure = 5.0e7;
     double uniform_force = pressure * 1.0 * 1.0;
-    double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
+    double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
     nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
     double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderLoads<T, Physics, load_case>(nxe, nxe, L, R, nodal_loads);
+    T *my_loads = getCylinderloads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
     printf("making grid with nxe %d\n", nxe);
 
     // perform multicolor reordering

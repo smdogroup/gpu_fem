@@ -693,10 +693,6 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
     int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
     int vpn = Physics::vars_per_node;
 
-    if constexpr (Basis::order > 1) {
-        printf("ERROR TODO, need to add different GP spacing of mid-side nodes for cylinder\n");
-    }
-
     // cylinder is in x direction along its axis, circle planes are in yz plane
 
     // make our bcs vec (note I use 1-based terminology from nastran in
@@ -805,11 +801,26 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
                 th[0] = dth * ih;
                 R_mid[0] = R;
             } else {
-                int ix_corner = (ix / n) * n, ih_corner = (ih / n) * n;
-                // here nx is the number of points in element (related to elem order)
-                T xi = Basis::getGaussPoint(ix % n), eta = Basis::getGaussPoint(ih % n);
-                x[0] = dx * ix_corner + 0.5 * (1 + xi) * (dx * order);
-                th[0] = dth * ih_corner + 0.5 * (1 + eta) * (dth * order);
+                // higher-order nodes
+                int ix_corner = (ix / order) * order;
+                int ih_corner = (ih / order) * order;
+
+                // local node index inside element
+                int ix_local = ix % order;
+                int ih_local = ih % order;
+
+                // get reference Gauss point [-1,1]
+                T xi  = Basis::getGaussPoint(ix_local);
+                T eta = Basis::getGaussPoint(ih_local);
+
+                // physical element corners
+                T x0 = dx * ix_corner;
+                T x1 = dx * (ix_corner + (n - 1));  // last node in this element
+                T th0 = dth * ih_corner;
+                T th1 = dth * (ih_corner + (n - 1));
+
+                x[0] = 0.5 * (1.0 - xi) * x0 + 0.5 * (1.0 + xi) * x1;
+                th[0] = 0.5 * (1.0 - eta) * th0 + 0.5 * (1.0 + eta) * th1;
                 R_mid[0] = R;
             }
             if (imperfection) {
@@ -863,7 +874,7 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
     return assembler;
 }
 
-template <typename T, class Phys, int load_case = 2>
+template <typename T, class Basis, class Phys, int load_case = 2>
 T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
     /*
     make compressive loads on the xpos edge of cylinder whose axis is in the (1,0,0) or x-direction
@@ -882,34 +893,57 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
     T dx = L / nxe;
     T dth = 2 * M_PI / nhe;
 
+    const int order = Basis::order;
+    const int n = order + 1;
+    using Quadrature = typename Basis::Quadrature;
+
     int num_dof = Phys::vars_per_node * num_nodes;
     T *my_loads = new T[num_dof];
     memset(my_loads, 0.0, num_dof * sizeof(T));
 
-    for (int ih = 0; ih < nnh; ih++) {
-        for (int ix = 0; ix < nnx; ix++) {
-            T x = dx * ix;
-            T th = dth * ih;
-            T y = R * sin(th);
-            T z = R * cos(th);
-            int inode = nnx * ih + ix;
-            if constexpr (load_case == 1) {
-                if (ix == nnx - 1) {
-                    // on xpos edge, make compressive loads in x-direction
-                    // printf("compressive load on %d\n", inode);
-                    my_loads[vpn * inode + offset] = -load_mag;
-                }
-            } else if (load_case == 2) {  // otherwise transverse simply sine-sine load
-                // transverse sinusoidal magnitude
-                T x_hat = x / L;
-                T th_hat = th / 2 / M_PI;
-                T mag = load_mag * sin(x_hat * 5 * M_PI) * sin(th_hat * 4 * M_PI);
+    // the actual rhs is integral q(x,y) * phi_i(x,y) dxdy, fix later if want
+    // better error conv. (loop over each element to add loads in)
+    for (int ihe = 0; ihe < nhe - 1; ihe++) { // delay the last hoop element
+        for (int ixe = 0; ixe < nxe; ixe++) {
+            int ielem = nxe * ihe + ixe;
 
-                // y and z transverse loads in radial direction only
-                my_loads[vpn * inode + offset + 1] = sin(th) * mag;
-                my_loads[vpn * inode + offset + 2] = cos(th) * mag;
-            } else if (load_case == 3) {  // petal load
-                // rose shape in hoop, chirp in x direction
+            // no sorted order like in MITC?
+            for (int iloc = 0; iloc < n * n; iloc++) {
+                int ilx = iloc % n, ilh = iloc / n;
+                int ix = order * ixe + ilx;
+                int ih = order * ihe + ilh;
+
+                // higher-order nodes
+                int ix_corner = (ix / order) * order;
+                int ih_corner = (ih / order) * order;
+
+                // local node index inside element
+                int ix_local = ix % order;
+                int ih_local = ih % order;
+
+                // get reference Gauss point [-1,1]
+                T xi  = Basis::getGaussPoint(ix_local);
+                T eta = Basis::getGaussPoint(ih_local);
+
+                // physical element corners
+                T x0 = dx * ix_corner;
+                T x1 = dx * (ix_corner + (n - 1));  // last node in this element
+                T th0 = dth * ih_corner;
+                T th1 = dth * (ih_corner + (n - 1));
+
+                // map reference [-1,1] → [x0,x1] and [y0,y1]
+                T x = 0.5 * (1.0 - xi) * x0 + 0.5 * (1.0 + xi) * x1;
+                T th = 0.5 * (1.0 - eta) * th0 + 0.5 * (1.0 + eta) * th1;
+                T z = 0.0;
+                
+                int inode = nnx * ih + ix;
+
+                // darea and quadrature points in the element
+                T J = dx * order * R * dth * order / 4;
+                T pt[2] = { 0 };
+                T weight = Quadrature::getQuadraturePoint(iloc, pt); 
+
+                // compute load magnitude based on load field
                 T x_hat = x / L;
                 T th_hat = th / 2 / M_PI;
                 // T mag = load_mag * (0.7 * cos(5 * th) + 0.3 * cos(10 * th + 3.14159 / 6.0)) *
@@ -918,13 +952,71 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
                         (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
                          0.7 * cos(10 * th + 3.14159 / 6.0 + 5.3 * M_PI * x_hat)) *
                         sin(5 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
+                mag *= weight * J;
 
                 // y and z transverse loads in radial direction only
                 my_loads[vpn * inode + offset + 1] = sin(th) * mag;
-                my_loads[vpn * inode + offset + 2] = cos(th) * mag;
+                my_loads[vpn * inode + offset + 2] = cos(th) * mag;        
             }
         }
     }
+
+    // then repeat for the last hoop elements to close the loop
+    int ihe = nhe - 1;
+    for (int ixe = 0; ixe < nxe; ixe++) {
+        int ielem = nxe * ihe + ixe;
+        for (int iloc = 0; iloc < n * n; iloc++) {
+            int ilx = iloc % n, ily = iloc / n;
+            int ix = order * ixe + ilx;
+            int iy = order * ihe + ily;
+            if (ily == n - 1) iy = 0;  // loops back around
+            int inode = nnx * iy + ix;
+
+            // higher-order nodes
+            int ix_corner = (ix / order) * order;
+            int ih_corner = (iy / order) * order;
+
+            // local node index inside element
+            int ix_local = ix % order;
+            int ih_local = iy % order;
+
+            // get reference Gauss point [-1,1]
+            T xi  = Basis::getGaussPoint(ix_local);
+            T eta = Basis::getGaussPoint(ih_local);
+
+            // physical element corners
+            T x0 = dx * ix_corner;
+            T x1 = dx * (ix_corner + (n - 1));  // last node in this element
+            T th0 = dth * ih_corner;
+            T th1 = dth * (ih_corner + (n - 1));
+
+            // map reference [-1,1] → [x0,x1] and [y0,y1]
+            T x = 0.5 * (1.0 - xi) * x0 + 0.5 * (1.0 + xi) * x1;
+            T th = 0.5 * (1.0 - eta) * th0 + 0.5 * (1.0 + eta) * th1;
+            T z = 0.0;
+
+            // darea and quadrature points in the element
+            T J = dx * order * R * dth * order / 4;
+            T pt[2] = { 0 };
+            T weight = Quadrature::getQuadraturePoint(iloc, pt); 
+
+            // compute load magnitude based on load field
+            T x_hat = x / L;
+            T th_hat = th / 2 / M_PI;
+            // T mag = load_mag * (0.7 * cos(5 * th) + 0.3 * cos(10 * th + 3.14159 / 6.0)) *
+            // sin(2 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
+            T mag = load_mag *
+                    (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
+                        0.7 * cos(10 * th + 3.14159 / 6.0 + 5.3 * M_PI * x_hat)) *
+                    sin(5 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
+            mag *= weight * J;
+
+            // y and z transverse loads in radial direction only
+            my_loads[vpn * inode + offset + 1] = sin(th) * mag;
+            my_loads[vpn * inode + offset + 2] = cos(th) * mag;    
+        }
+    }
+
     return my_loads;
 }
 
@@ -953,7 +1045,8 @@ Assembler createHemisphereAssembler(int nxe, int nhe, double phi, double R, doub
     int vpn = Physics::vars_per_node;
 
     if constexpr (Basis::order > 1) {
-        printf("ERROR TODO, need to add different GP spacing of mid-side nodes for hemisphere\n");
+        printf("ERROR TODO, need to add different GP spacing of mid-side nodes for assembler of hemisphere\n");
+        exit(0);
     }
 
     // hemisphere is in x direction along its axis, circle planes are in yz plane (like the
@@ -1124,6 +1217,11 @@ T *getHemisphereLoads(int nxe, int nhe, double phi, double R, double load_mag) {
     make compressive loads on the xpos edge of cylinder whose axis is in the (1,0,0) or x-direction
     TODO : later we will switch from this load control to disp control
     */
+
+    // if constexpr (Basis::order > 1) {
+    //     printf("ERROR TODO, need to add different GP spacing of mid-side nodes for loads on hemisphere\n");
+    //     exit(0);
+    // }
 
     // number of nodes per direction
     int nnx = nxe + 1;
