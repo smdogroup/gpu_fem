@@ -369,7 +369,7 @@ void gatekeeper_method(std::string smoother_type, int nxe, double SR, int nsmoot
 int main(int argc, char **argv) {
     // input ----------
     int nxe = 256; // default value
-    double SR = 10.0; // default
+    double SR = 50.0; // default
     int n_vcycles = 50;
     double omega = 0.3;
     int ORDER = 8; // for chebyshev
