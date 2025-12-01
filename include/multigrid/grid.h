@@ -29,7 +29,8 @@ class SingleGrid {
 
     SingleGrid(Assembler &assembler_, Prolongation *prolongation_, Smoother *smoother_,
                BsrMat<DeviceVec<T>> Kmat_, DeviceVec<T> d_rhs_, cublasHandle_t &cublasHandle_,
-               cusparseHandle_t &cusparseHandle_, T omega_min_ = 0.5, T omega_max_ = 2.0)
+               cusparseHandle_t &cusparseHandle_, T omega_min_ = 0.5, T omega_max_ = 2.0,
+               int smooth_matrix_iters_ = 0)
         : assembler(assembler_),
           prolongation(prolongation_),
           smoother(smoother_),
@@ -43,6 +44,7 @@ class SingleGrid {
 
         omega_min = omega_min_;
         omega_max = omega_max_;
+        smooth_matrix_iters = smooth_matrix_iters_;
 
         // get data out of kmat
         auto d_kmat_bsr_data = Kmat.getBsrData();
@@ -58,6 +60,9 @@ class SingleGrid {
         if (prolongation) prolongation->update_after_assembly();
         if (restriction) restriction->update_after_assembly();
         if (smoother) smoother->update_after_assembly(d_vars);
+        if (smoother && smooth_matrix_iters > 0) {
+            smoothMatrix(smooth_matrix_iters);
+        }
     }
 
     double get_memory_usage_mb() {
@@ -169,8 +174,9 @@ class SingleGrid {
     void smoothMatrix(int n_iters = 5) {
         /* call the smoother on the prolongation matrix */
         smoother->smoothMatrix(n_iters, prolongation->prolong_mat, prolongation->Z_mat,
-            prolongation->Zprev_mat, prolongation->nnzb_prod, prolongation->d_P_prodBlocks, 
-            prolongation->d_K_prodBlocks, prolongation->d_Z_prodBlocks);
+                               prolongation->Zprev_mat, prolongation->nnzb_prod,
+                               prolongation->d_P_prodBlocks, prolongation->d_K_prodBlocks,
+                               prolongation->d_Z_prodBlocks);
     }
 
     void prolongate(DeviceVec<T> coarse_soln_in) {
@@ -314,6 +320,7 @@ class SingleGrid {
 
     T *d_temp2, *d_temp;  // temporarily not private
     T omega;
+    int smooth_matrix_iters;
 
    private:
     T *d_resid;

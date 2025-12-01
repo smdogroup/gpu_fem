@@ -125,13 +125,27 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
             my_bcs.push_back(vpn * inode + 4);  // v3 equiv to gam13 strain-gap disp (like thy)
         }
     }
-    // pos (x1,x2) corner node, add thy DOF
+    // (+x1,+x2) corner node, add thy DOF
     int inode = nnx * (nny - 1) + nnx - 1;
     my_bcs.push_back(vpn * inode + offset + 4);  // set thy DOF zero here too
     if constexpr (IS_HR_ELEM) {
         my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
         // my_bcs.push_back(vpn * inode + 2);  // v2 equiv to e22 strain-gap disp (zero like v)
         my_bcs.push_back(vpn * inode + 4);  // v3 equiv to gam13 strain-gap disp (like thy)
+    }
+    // (-x1,+x2) corner node, top left
+    inode = nnx * (nny - 1);
+    my_bcs.push_back(vpn * inode + offset + 4);  // set thy DOF zero here too
+    if constexpr (IS_HR_ELEM) {
+        my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
+        my_bcs.push_back(vpn * inode + 4);  // v4 equiv to gam23 strain-gap disp (like thy)
+    }
+    // (+x1,-x2) corner node, bottom right
+    inode = nnx - 1;
+    my_bcs.push_back(vpn * inode + offset + 3);  // corresp dof 3 for thx
+    if constexpr (IS_HR_ELEM) {
+        // my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
+        my_bcs.push_back(vpn * inode + 3);  // v3 equiv to gam13 strain-gap disp (like thx)
     }
 
     HostVec<int> bcs(my_bcs.size());

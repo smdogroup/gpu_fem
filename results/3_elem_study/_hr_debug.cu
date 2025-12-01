@@ -29,7 +29,8 @@
 #include "multigrid/utils/fea.h"
 #include "multigrid/smoothers/cheb4_poly.h"
 #include "multigrid/smoothers/mc_smooth1.h"
-#include "multigrid/prolongation/structured.h"
+// #include "multigrid/prolongation/structured.h"
+#include "multigrid/prolongation/unstruct_smooth.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>
 #include <chrono>
@@ -79,12 +80,14 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     using Physics = typename Assembler::Phys;
     // using Smoother = MulticolorGSSmoother_V1<Assembler>;
     using Smoother = ChebyshevPolynomialSmoother<Assembler>;
-    using Prolongation = StructuredProlongation<Assembler, PLATE>;
+    // using Prolongation = StructuredProlongation<Assembler, PLATE>;
+    using Prolongation = UnstructuredSmoothProlongation<Assembler, Basis, true>;
+    
     
     // sometimes line search helps, sometimes not
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
     // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
-    
+
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
 
@@ -94,7 +97,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     using KrylovSolve = PCGSolver<T, GRID>;
     using TwoLevelSolve = MultigridTwoLevelSolver<GRID, full_approx_scheme>;
     using KMG = MultilevelKcycleSolver<GRID, CoarseSolver, TwoLevelSolve, KrylovSolve>;
-
     auto start0 = std::chrono::high_resolution_clock::now();
 
     // create cublas and cusparse handles (single one each)
@@ -107,9 +109,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     MG *mg;
     KMG *kmg;
 
-    T omegaLS_min = 0.001, omegaLS_max = 4.0;
+    // T omegaLS_min = 0.01, omegaLS_max = 4.0;
     // T omegaLS_min = 0.1, omegaLS_max = 2.0;
-    // T omegaLS_min = 0.25, omegaLS_max = 2.0;
+    T omegaLS_min = 0.25, omegaLS_max = 2.0;
     // T omegaLS_min = 0.5, omegaLS_max = 2.0;
 
 
@@ -135,8 +137,10 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
         int nxe_per_comp = c_nxe / 4, nye_per_comp = c_nye/4; // for now (should have 25 grids)
         auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
-        double Q = 1.0; // load magnitude
-        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+        double uniform_force = pressure * 1.0 * 1.0;
+        double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
+        nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
+        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -176,8 +180,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         // build smoother and prolongations..
         int ORDER = 4;
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
-        auto prolongation = new Prolongation(assembler);
-        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, omegaLS_min, omegaLS_max);
+        auto prolongation = new Prolongation(cusparseHandle, assembler);
+        int matrix_smooth_iters = 4;
+        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, omegaLS_min, omegaLS_max, matrix_smooth_iters);
 
         smoother->setup_cg_lanczos(grid.d_defect);
         
@@ -219,16 +224,54 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
 
-    // fastest is K-cycle usually
+    printf("prior to smooth matrix\n");
+    mg->smooth_matrix();
+    printf("\tend of smooth matrix\n");
+
+    // ==============================
+    // also make a fine direct solver (for debug), full LU pattern
+    // make the assembler
+    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+    int nxe_per_comp = nxe / 4, nye_per_comp = nxe/4; // for now (should have 25 grids)
+    auto fine_assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+    double Q = 1.0; // load magnitude
+    // T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nxe, Lx, Ly, Q);
+    printf("making fine grid direct solver with nxe %d\n", nxe);
+
+    auto &fine_bsr_data = fine_assembler.getBsrData();
+    // make the grid
+    fine_bsr_data.AMD_reordering();
+    fine_bsr_data.compute_full_LU_pattern(10.0, false);
+    fine_assembler.moveBsrDataToDevice();
+    // auto loads = fine_assembler.createVarsVec(my_loads);
+    // fine_assembler.apply_bcs(loads);
+    auto fine_kmat = createBsrMat<Assembler, VecType<T>>(fine_assembler);
+    fine_assembler.add_jacobian_fast(fine_kmat);
+    fine_assembler.apply_bcs(fine_kmat);
+
+    // fine grid direct solver
+    auto fine_solver = new CoarseSolver(cublasHandle, cusparseHandle, fine_assembler, fine_kmat);
+    fine_solver->factor_matrix();
+
+    // ====================================
+
     if (cycle_type == "V") {
-        mg->vcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); //(good option)
-    } else if (cycle_type == "W") {
-        mg->wcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol);
-    } else if (cycle_type == "F") {
-        mg->fcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); // also decent
-    } else if (cycle_type == "K") {
-        kmg->solve(); // best
+        // debug solve
+        mg->template debug_vcycle_solve<Assembler>(fine_solver, fine_bsr_data, 0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); //(good option)
+    } else {
+        printf("rerun and change to V-cycle for now (debug)\n");
     }
+
+    // fastest is K-cycle usually
+    // if (cycle_type == "V") {
+    //     mg->vcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); //(good option)
+    // } else if (cycle_type == "W") {
+    //     mg->wcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol);
+    // } else if (cycle_type == "F") {
+    //     mg->fcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); // also decent
+    // } else if (cycle_type == "K") {
+    //     kmg->solve(); // best
+    // }
 
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start1;
