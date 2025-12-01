@@ -82,8 +82,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     using Prolongation = StructuredProlongation<Assembler, PLATE>;
     
     // sometimes line search helps, sometimes not
-    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
     
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;

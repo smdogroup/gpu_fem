@@ -12,6 +12,7 @@ class StructuredProlongation {
     static constexpr int32_t order = Basis::order;
     static constexpr bool structured = true;
     static constexpr bool assembly = false;
+    static constexpr bool smoothed = false;
 
     static constexpr int32_t vars_per_node = Assembler::Phys::vars_per_node;
 

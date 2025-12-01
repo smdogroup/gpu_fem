@@ -20,6 +20,7 @@ class UnstructuredSmoothProlongation {
     static constexpr bool structured = false;
     static constexpr bool assembly = true;
     static constexpr bool is_bsr = true;  // uses full BSR matrix (no CSR)
+    static constexpr bool smoothed = true;
 
     UnstructuredSmoothProlongation(cusparseHandle_t &cusparseHandle_, Assembler &fine_assembler_,
                                    int ELEM_MAX_ = 10)

@@ -13,6 +13,7 @@ class UnstructuredProlongation {
     static constexpr bool structured = false;
     static constexpr bool assembly = true;
     static constexpr int is_bsr = is_bsr_;
+    static constexpr bool smoothed = false;
 
     UnstructuredProlongation(cusparseHandle_t &cusparseHandle_, Assembler &fine_assembler_,
                              int ELEM_MAX_ = 10)
