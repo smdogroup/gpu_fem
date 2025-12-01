@@ -82,6 +82,7 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
 
     int pre_nxe_min = nxe > 32 ? 32 : 4;
+    // int pre_nxe_min = nxe > 64 ? 64 : 4;
     int nxe_min = pre_nxe_min;
     for (int c_nxe = nxe; c_nxe >= pre_nxe_min; c_nxe /= 2) {
         nxe_min = c_nxe;
@@ -91,17 +92,17 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     for (int c_nxe = nxe; c_nxe >= nxe_min; c_nxe /= 2) {
         // make the assembler
         int c_nhe = c_nxe;
-        double L = 1.0, R = 0.5, thick = L / SR;
+        double R = 0.5, thick = R / SR;
         double E = 70e9, nu = 0.3;
+        double pi = 3.14159; // radians conversion
+        double phi = 80 * pi / 180;
         // double rho = 2500, ys = 350e6;
-        bool imperfection = false; // option for geom imperfection
-        int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-        auto assembler = createCylinderAssembler<Assembler>(c_nxe, c_nhe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
+        auto assembler = createHemisphereAssembler<Assembler>(c_nxe, c_nhe, phi, R, E, nu, thick);
         constexpr bool compressive = false;
         const int load_case = 3; // petal and chirp load
         double uniform_force = 5e7 * 1.0 * 1.0;
         double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
-        T *my_loads = getCylinderLoads<T, Physics, load_case>(c_nxe, c_nhe, L, R, nodal_loads);
+        T *my_loads = getHemisphereLoads<T, Physics, load_case>(c_nxe, c_nhe, phi, R, nodal_loads);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -204,17 +205,17 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     int ndof = kmg->grids[0].N;
     double total = startup_time.count() + solve_time.count();
     double mem_MB = kmg->get_memory_usage_mb();
-    printf("cylinder GMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
+    printf("hemisphere GMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nGMG-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\nGMG-PCG on hemisphere case with %d nxe and %.4e SR\n", nxe, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // print some of the data of host residual
     int *d_perm = kmg->grids[0].d_perm;
     auto h_soln = soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/cylinder_mg_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/hemisphere_mg_lin.vtk");
 }
 
 template <typename T, class Assembler>
@@ -245,20 +246,18 @@ void solve_direct(int nxe, double SR) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start0 = std::chrono::high_resolution_clock::now();
 
-    double L = 1.0, R = 0.5, thick = L / SR;
+    double R = 0.5, thick = R / SR;
     double E = 70e9, nu = 0.3;
+    double pi = 3.14159; // radians conversion
+    double phi = 80 * pi / 180;
     // double rho = 2500, ys = 350e6;
-    bool imperfection = false; // option for geom imperfection
-    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-    auto assembler = createCylinderAssembler<Assembler>(nxe, nxe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
+    auto assembler = createHemisphereAssembler<Assembler>(nxe, nxe, phi, R, E, nu, thick);
     constexpr bool compressive = false;
     const int load_case = 3; // petal and chirp load
-    T pressure = 5.0e7;
-    double uniform_force = pressure * 1.0 * 1.0;
+    double uniform_force = 5e7 * 1.0 * 1.0;
     double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
-    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-    double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderLoads<T, Physics, load_case>(nxe, nxe, L, R, nodal_loads);
+    T *my_loads = getHemisphereLoads<T, Physics, load_case>(nxe, nxe, phi, R, nodal_loads);
+
     printf("making grid with nxe %d\n", nxe);
 
     // perform multicolor reordering
@@ -348,7 +347,7 @@ void solve_direct(int nxe, double SR) {
     T log_resid_drop = (log(init_resid) - log(final_resid)) / log(10.0);
     // T log_resid_cap = log(1e6) / log(10.0); // cap out past 1e6 because don't need deeper than this really for Newton-Krylov..
     T log_red_rate =  0.5 * log_resid_drop / solve_time.count();
-    printf("\nDirectLU-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\nDirectLU-PCG on hemisphere case with %d nxe and %.4e SR\n", nxe, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     int nx = nxe + 1;
@@ -361,7 +360,7 @@ void solve_direct(int nxe, double SR) {
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/cylinder_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/hemisphere_lin.vtk");
     // T lin_max_disp = get_max_disp(lin_soln);
 
     if (fail) {
@@ -467,7 +466,7 @@ int main(int argc, char **argv) {
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
 
-    printf("cylinder mesh with MITC4 elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
+    printf("hemisphere mesh with MITC4 elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
     if (smoother_type == "chebyshev" || smoother_type == "jacobi") {
         using Smoother = ChebyshevPolynomialSmoother<Assembler, false>;
         gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);

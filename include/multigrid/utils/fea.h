@@ -842,3 +842,244 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
     }
     return my_loads;
 }
+
+template <class Assembler>
+Assembler createHemisphereAssembler(int nxe, int nhe, double phi, double R, double E, double nu,
+                                    double thick, double rho = 2500, double ys = 350e6,
+                                    int nx_comp = 1, int ny_comp = 1) {
+    using T = typename Assembler::T;
+    using Basis = typename Assembler::Basis;
+    using Geo = typename Assembler::Geo;
+    using Data = typename Assembler::Data;
+    using Physics = typename Assembler::Phys;
+
+    // hemisphere is like a cylinder in terms of topology..
+
+    // number of nodes per direction
+    const int order = Basis::order;
+    int n = order + 1;
+    int nnx = order * nxe + 1;  // axial nodes
+    int nnh = order * nhe;      // number of hoop nodes
+    int num_nodes = nnx * nnh;
+    int num_elements = nxe * nhe;
+
+    constexpr bool IS_HR_ELEM = Physics::hellingerReissner;
+    int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
+    int vpn = Physics::vars_per_node;
+
+    if constexpr (Basis::order > 1) {
+        printf("ERROR TODO, need to add different GP spacing of mid-side nodes for hemisphere\n");
+    }
+
+    // hemisphere is in x direction along its axis, circle planes are in yz plane (like the
+    // cylinder)
+
+    // make our bcs vec (note I use 1-based terminology from nastran in
+    // description above) but since this is in C++ I apply BCs here 0-based as
+    // in 012345
+    std::vector<int> my_bcs;
+    // TODO : will change to use disp control BCs later
+    // node 0 has dof 123456, changed now to just 123
+    // for (int idof = 0; idof < 3; idof++) {
+    for (int idof = 0; idof < vpn; idof++) {  // clamped
+        my_bcs.push_back(idof);
+    }
+    // rest of nodes on xneg hoop are simply supported and with no axial disp
+    for (int ih = 0; ih < nnh; ih++) {
+        int inode_L = ih * nnx;           // xneg node
+        int inode_R = inode_L + nnx - 1;  // xpos node
+        if (inode_L != 0) {               // xneg nodes
+            // for (int idof = 0; idof < 3; idof++) {  // simply supported
+            for (int idof = 0; idof < 6; idof++) {  // clamped
+                // constrain u,v,w disp on xneg edge
+                if (inode_L != 0) my_bcs.push_back(vpn * inode_L + offset + idof);
+            }
+            // also constrain the thx rotation?
+            // then hellinger reissner bcs
+            if constexpr (IS_HR_ELEM) {
+                my_bcs.push_back(vpn * inode_L + 0);  // e11 strain-gap disp
+                my_bcs.push_back(vpn * inode_L + 1);  // e12 strain-gap disp
+                my_bcs.push_back(vpn * inode_L + 2);  // e22 strain-gap disp
+                my_bcs.push_back(vpn * inode_L + 3);  // gam13 strain-gap disp
+                my_bcs.push_back(vpn * inode_L + 4);  // gam23 strain-gap disp
+            }
+        }
+        // xpos nodes
+        // for (int idof = 1; idof < 3; idof++) {  // simply supported
+        for (int idof = 0; idof < 6; idof++) {  // clamped
+            // only constraint v,w on xpos edge (TODO : later make disp control here)
+            my_bcs.push_back(6 * inode_R + offset + idof);
+        }
+        if constexpr (IS_HR_ELEM) {
+            my_bcs.push_back(vpn * inode_R + 0);  // e11 strain-gap disp
+            my_bcs.push_back(vpn * inode_R + 1);  // e12 strain-gap disp
+            my_bcs.push_back(vpn * inode_R + 2);  // e22 strain-gap disp
+            my_bcs.push_back(vpn * inode_R + 3);  // gam13 strain-gap disp
+            my_bcs.push_back(vpn * inode_R + 4);  // gam23 strain-gap disp
+        }
+    }
+
+    // make hostvec of bcs now
+    HostVec<int> bcs(my_bcs.size());
+    // deep copy here
+    for (int ibc = 0; ibc < my_bcs.size(); ibc++) {
+        bcs[ibc] = my_bcs.at(ibc);
+    }
+
+    // now initialize the element connectivity
+    int N = Basis::num_nodes * num_elements;
+    int32_t *elem_conn = new int[N];
+    // all elements done with same pattern except last one before closing hoop
+    for (int ihe = 0; ihe < nhe - 1; ihe++) {
+        for (int ixe = 0; ixe < nxe; ixe++) {
+            int ielem = nxe * ihe + ixe;
+            for (int iloc = 0; iloc < n * n; iloc++) {
+                int ilx = iloc % n, ily = iloc / n;
+                int ix = order * ixe + ilx;
+                int iy = order * ihe + ily;
+                int inode = nnx * iy + ix;
+
+                elem_conn[Basis::num_nodes * ielem + iloc] = inode;
+            }
+        }
+    }
+    // last elements to close hoop
+    int ihe = nhe - 1;
+    for (int ixe = 0; ixe < nxe; ixe++) {
+        int ielem = nxe * ihe + ixe;
+        for (int iloc = 0; iloc < n * n; iloc++) {
+            int ilx = iloc % n, ily = iloc / n;
+            int ix = order * ixe + ilx;
+            int iy = order * ihe + ily;
+            if (ily == n - 1) iy = 0;  // loops back around
+            int inode = nnx * iy + ix;
+
+            elem_conn[Basis::num_nodes * ielem + iloc] = inode;
+        }
+    }
+
+    // printf("checkpoint 3 - post elem_conn\n");
+
+    // make element connectivities now
+    HostVec<int32_t> geo_conn(N, elem_conn);
+    HostVec<int32_t> vars_conn(N, elem_conn);
+
+    // now set the xyz-coordinates of the cylinder
+    int32_t num_xpts = Geo::spatial_dim * num_nodes;
+    HostVec<T> xpts(num_xpts);
+    T dx_phi = phi / (nnx - 1);  // spherical arc angle along x direction
+    T dth = 2 * M_PI / nnh;
+    for (int ih = 0; ih < nnh; ih++) {
+        for (int ix = 0; ix < nnx; ix++) {
+            int inode = nnx * ih + ix;
+
+            T *xpt_node = &xpts[Geo::spatial_dim * inode];
+            T x_phi[1] = {0}, th[1] = {0}, R_mid[1] = {0};
+            if constexpr (Basis::order == 1) {
+                x_phi[0] = dx_phi * ix;
+                th[0] = dth * ih;
+                R_mid[0] = R;
+            } else {
+                int ix_corner = (ix / n) * n, ih_corner = (ih / n) * n;
+                // here nx is the number of points in element (related to elem order)
+                T xi = Basis::getGaussPoint(ix % n), eta = Basis::getGaussPoint(ih % n);
+                x_phi[0] = dx_phi * ix_corner + 0.5 * (1 + xi) * (dx_phi * order);
+                th[0] = dth * ih_corner + 0.5 * (1 + eta) * (dth * order);
+                R_mid[0] = R;
+            }
+
+            // now use spherical coordinates here with radius of sphere R
+            T R_yz = R_mid[0] * cos(x_phi[0]);
+            T x = R_mid[0] * sin(x_phi[0]);
+
+            xpt_node[0] = x;
+            xpt_node[1] = R_yz * sin(th[0]);
+            xpt_node[2] = R_yz * cos(th[0]);
+        }
+    }
+
+    // printf("checkpoint 4 - post xpts\n");
+
+    HostVec<Data> physData(num_elements, Data(E, nu, thick, rho, ys));
+
+    // printf("checkpoint 5 - create physData\n");
+
+    // make elem_components
+    assert(nxe % nx_comp == 0);
+    assert(nhe % ny_comp == 0);
+    int num_components = nx_comp * ny_comp;
+    int nxe_per_comp = nxe / nx_comp;
+    int nye_per_comp = nhe / ny_comp;
+
+    HostVec<int> elem_components(num_elements);
+    for (int iye = 0; iye < nhe; iye++) {
+        for (int ixe = 0; ixe < nxe; ixe++) {
+            int ielem = nxe * iye + ixe;
+            int ix_comp = ixe / nxe_per_comp;
+            int iy_comp = iye / nye_per_comp;
+
+            int icomp = nx_comp * iy_comp + ix_comp;
+
+            elem_components[ielem] = icomp;
+        }
+    }
+
+    // make the assembler
+    Assembler assembler(num_nodes, num_nodes, num_elements, geo_conn, vars_conn, xpts, bcs,
+                        physData, num_components, elem_components);
+
+    // printf("checkpoint 6 - create assembler\n");
+
+    return assembler;
+}
+
+template <typename T, class Phys, int load_case = 2>
+T *getHemisphereLoads(int nxe, int nhe, double phi, double R, double load_mag) {
+    /*
+    make compressive loads on the xpos edge of cylinder whose axis is in the (1,0,0) or x-direction
+    TODO : later we will switch from this load control to disp control
+    */
+
+    // number of nodes per direction
+    int nnx = nxe + 1;
+    int nnh = nhe + 1;
+    int num_nodes = nnx * nnh;
+
+    constexpr bool IS_HR_ELEM = Phys::hellingerReissner;
+    int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
+    int vpn = Phys::vars_per_node;
+
+    T dx_phi = phi / nxe;  // spherical arc angle
+    T dth = 2 * M_PI / nhe;
+
+    int num_dof = Phys::vars_per_node * num_nodes;
+    T *my_loads = new T[num_dof];
+    memset(my_loads, 0.0, num_dof * sizeof(T));
+
+    for (int ih = 0; ih < nnh; ih++) {
+        for (int ix = 0; ix < nnx; ix++) {
+            T c_phi = dx_phi * ix;
+            T th = dth * ih;
+            T R_yz = R * cos(c_phi);
+            T x = R * sin(c_phi);
+            T y = R_yz * sin(th);
+            T z = R_yz * cos(th);
+            int inode = nnx * ih + ix;
+            // petal load
+            // rose shape in hoop, chirp in x direction
+            T x_hat = c_phi / phi;
+            T th_hat = th / 2 / M_PI;
+            // T mag = load_mag * (0.7 * cos(5 * th) + 0.3 * cos(10 * th + 3.14159 / 6.0)) *
+            // sin(2 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
+            T mag = load_mag *
+                    (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
+                     0.7 * cos(10 * th + 3.14159 / 6.0 + 5.3 * M_PI * x_hat)) *
+                    sin(5 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
+
+            // y and z transverse loads in radial direction only
+            my_loads[vpn * inode + offset + 1] = sin(th) * mag;
+            my_loads[vpn * inode + offset + 2] = cos(th) * mag;
+        }
+    }
+    return my_loads;
+}

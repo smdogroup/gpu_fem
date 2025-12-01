@@ -20,9 +20,10 @@
 // local multigrid imports
 #include "multigrid/grid.h"
 #include "multigrid/utils/fea.h"
+#include "multigrid/smoothers/_wingbox_coloring.h"
 #include "multigrid/smoothers/cheb4_poly.h"
 #include "multigrid/smoothers/mc_smooth1.h"
-#include "multigrid/prolongation/structured.h"
+#include "multigrid/prolongation/unstructured.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>
 #include <chrono>
@@ -52,14 +53,16 @@ void to_lowercase(char *str) {
 }
 
 template <typename T, class Smoother, class Assembler>
-void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDER) {
+void multigrid_solve(MPI_Comm &comm, int level, std::string smoother_type, double SR, int nsmooth, int ninnercyc, T omega, int ORDER) {
     // geometric multigrid method here..
     // need to make a number of grids..
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
+    using Data = typename Physics::Data;
     const SCALER scaler  = LINE_SEARCH;
-    using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
+    const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
+    using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     // using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
@@ -80,63 +83,68 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     CHECK_CUBLAS(cublasCreate(&cublasHandle));
     cusparseHandle_t cusparseHandle = NULL;
     CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+    
+    for (int i = level; i >= 0; i--) {
 
-    int pre_nxe_min = nxe > 32 ? 32 : 4;
-    int nxe_min = pre_nxe_min;
-    for (int c_nxe = nxe; c_nxe >= pre_nxe_min; c_nxe /= 2) {
-        nxe_min = c_nxe;
-    }
+        // read the ESP/CAPS => nastran mesh for TACS
+        TACSMeshLoader mesh_loader{comm};
+        std::string fname = "../../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(i) + ".bdf";
+        mesh_loader.scanBDFFile(fname.c_str());
+        double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+        // TODO : run optimized design from AOB case
+        printf("making assembler+GMG for mesh '%s'\n", fname.c_str());
+        
+        // create the TACS Assembler from the mesh loader
+        auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
 
-    // make each grid
-    for (int c_nxe = nxe; c_nxe >= nxe_min; c_nxe /= 2) {
-        // make the assembler
-        int c_nhe = c_nxe;
-        double L = 1.0, R = 0.5, thick = L / SR;
-        double E = 70e9, nu = 0.3;
-        // double rho = 2500, ys = 350e6;
-        bool imperfection = false; // option for geom imperfection
-        int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-        auto assembler = createCylinderAssembler<Assembler>(c_nxe, c_nhe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
-        constexpr bool compressive = false;
-        const int load_case = 3; // petal and chirp load
-        double uniform_force = 5e7 * 1.0 * 1.0;
-        double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
-        T *my_loads = getCylinderLoads<T, Physics, load_case>(c_nxe, c_nhe, L, R, nodal_loads);
-        printf("making grid with nxe %d\n", c_nxe);
+        // create the loads (really only needed on finer mesh.. TBD how to setup nonlinear case..)
+        int nvars = assembler.get_num_vars();
+        int nnodes = assembler.get_num_nodes();
+        HostVec<T> h_loads(nvars);
+        double load_mag = 10.0;
+        double *my_loads = h_loads.getPtr();
+        for (int inode = 0; inode < nnodes; inode++) {
+            my_loads[6 * inode + 2] = load_mag;
+        }
 
+        // do multicolor junction reordering
         auto &bsr_data = assembler.getBsrData();
         int num_colors, *_color_rowp;
 
-        // make the grid
-        bool full_LU = c_nxe == nxe_min;
-        if (full_LU) {
+        bool coarsest_grid = i == 0;
+        if (!coarsest_grid) {
+            WingboxMultiColoring<Assembler>::apply_coloring(assembler, bsr_data, num_colors, _color_rowp);
+            bsr_data.compute_nofill_pattern();
+        } else {
+            // full LU pattern for coarsest grid
             bsr_data.AMD_reordering();
             bsr_data.compute_full_LU_pattern(10.0, false);
-        } else {
-            bsr_data.multicolor_reordering(num_colors, _color_rowp);
-            bsr_data.compute_nofill_pattern();
+            num_colors = 0;
+            _color_rowp = new int[2];
+            _color_rowp[0] = 0, _color_rowp[1] = nnodes;
         }
-        // auto grid = *GRID::buildFromAssembler(assembler, my_loads, full_LU, reorder);
         auto h_color_rowp = HostVec<int>(num_colors + 1, _color_rowp);
-
         assembler.moveBsrDataToDevice();
+
+        // now compute loads, bcs and assemble kmat
         auto loads = assembler.createVarsVec(my_loads);
         assembler.apply_bcs(loads);
         auto kmat = createBsrMat<Assembler, VecType<T>>(assembler);
+        auto vars = assembler.createVarsVec();
+        assembler.set_variables(vars);
         auto res = assembler.createVarsVec();
-        int N = res.getSize();
-
-        // assemble the kmat
-        auto start0 = std::chrono::high_resolution_clock::now();
-        assembler.add_jacobian(res, kmat);
-        // assembler.apply_bcs(res);
+        auto starta = std::chrono::high_resolution_clock::now();
+        // assembler.add_jacobian(res, kmat);
+        const int elems_per_blockk = 1; // 1 versus 2 elements => similar runtime (1 slightly better)
+        // const int elems_per_blockk = 2;
+        assembler.template add_jacobian_fast<elems_per_blockk>(kmat);
         assembler.apply_bcs(kmat);
         CHECK_CUDA(cudaDeviceSynchronize());
-        auto end0 = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> assembly_time = end0 - start0;
+        auto enda = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> assembly_time = enda - starta;
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
-        // build smoother and prolongations..
+        // build smoother and prolongations
         Smoother *smoother = nullptr;
         if constexpr (std::is_same_v<Smoother, ChebyshevPolynomialSmoother<Assembler, false>>) {
             // both chebyshev or jacobi here (jacobi is special case of order 1)
@@ -155,9 +163,10 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
             static_assert(sizeof(Smoother) == 0, "Unsupported smoother type");
         }
 
-
-        auto prolongation = new Prolongation(assembler);
-        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, omegaLS_min, omegaLS_max);
+        int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
+        // int ELEM_MAX = 4;
+        auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
+        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
         kmg->grids.push_back(grid);
     }
 
@@ -204,29 +213,31 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     int ndof = kmg->grids[0].N;
     double total = startup_time.count() + solve_time.count();
     double mem_MB = kmg->get_memory_usage_mb();
-    printf("cylinder GMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
+    printf("AOB-wing GMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nGMG-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\nGMG-PCG on AOB-wing case with %d level and %.4e SR\n", level, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // print some of the data of host residual
     int *d_perm = kmg->grids[0].d_perm;
     auto h_soln = soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/cylinder_mg_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/wing_mg_lin.vtk");
 }
 
 template <typename T, class Assembler>
-void solve_direct(int nxe, double SR) {
+void solve_direct(MPI_Comm &comm, int level, double SR) {
 
     /* direct NL solve used to check that how NL the problem is and how */
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
+    using Data = typename Physics::Data;
     const SCALER scaler  = LINE_SEARCH;
     using Smoother = MulticolorGSSmoother_V1<Assembler>;
-    using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
+    const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
+    using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
 
     // for K-cycles
@@ -241,25 +252,32 @@ void solve_direct(int nxe, double SR) {
     cusparseHandle_t cusparseHandle = NULL;
     CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
 
-
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start0 = std::chrono::high_resolution_clock::now();
 
-    double L = 1.0, R = 0.5, thick = L / SR;
-    double E = 70e9, nu = 0.3;
-    // double rho = 2500, ys = 350e6;
-    bool imperfection = false; // option for geom imperfection
-    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-    auto assembler = createCylinderAssembler<Assembler>(nxe, nxe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
-    constexpr bool compressive = false;
-    const int load_case = 3; // petal and chirp load
-    T pressure = 5.0e7;
-    double uniform_force = pressure * 1.0 * 1.0;
-    double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
-    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-    double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderLoads<T, Physics, load_case>(nxe, nxe, L, R, nodal_loads);
-    printf("making grid with nxe %d\n", nxe);
+    TACSMeshLoader mesh_loader{comm};
+    std::string fname = "../../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    mesh_loader.scanBDFFile(fname.c_str());
+
+    //   double E = 70e9, nu = 0.3, thick = 0.005;  // material & thick properties
+    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties
+
+    // make the assembler from the uCRM mesh
+    auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
+
+    // get the loads
+    int nvars = assembler.get_num_vars();
+    int nnodes = assembler.get_num_nodes();
+    HostVec<T> h_loads(nvars);
+    double load_mag = 10.0;
+    double *h_loads_ptr = h_loads.getPtr();
+    for (int inode = 0; inode < nnodes; inode++) {
+    h_loads_ptr[6 * inode + 2] = load_mag;
+    }
+    auto loads = h_loads.createDeviceVec();
+    assembler.apply_bcs(loads);
+
+    printf("making grid with level %d\n", level);
 
     // perform multicolor reordering
     auto &bsr_data = assembler.getBsrData();
@@ -271,8 +289,6 @@ void solve_direct(int nxe, double SR) {
     assembler.moveBsrDataToDevice();
 
     // create the loads and kmat
-    auto loads = assembler.createVarsVec(my_loads);
-    assembler.apply_bcs(loads);
     auto kmat = createBsrMat<Assembler, VecType<T>>(assembler);
     auto res = assembler.createVarsVec();
     auto lin_soln = assembler.createVarsVec();
@@ -294,7 +310,9 @@ void solve_direct(int nxe, double SR) {
     T omegaMC = 1.0;
     int nsmooth = 1; // not used
     auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
-    auto prolongation = new Prolongation(assembler);
+    int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
+    // int ELEM_MAX = 4;
+    auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
     auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
 
     // the ILU preconditioner
@@ -348,11 +366,10 @@ void solve_direct(int nxe, double SR) {
     T log_resid_drop = (log(init_resid) - log(final_resid)) / log(10.0);
     // T log_resid_cap = log(1e6) / log(10.0); // cap out past 1e6 because don't need deeper than this really for Newton-Krylov..
     T log_red_rate =  0.5 * log_resid_drop / solve_time.count();
-    printf("\nDirectLU-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\nDirectLU-PCG on AOB-wing case with %d level and %.4e SR\n", level, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
-    int nx = nxe + 1;
-    int ndof = nx * nx * 6;
+    int ndof = assembler.get_num_vars();
     double total = startup_time.count() + solve_time.count();
     size_t bytes_per_double = sizeof(double);
     double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
@@ -361,7 +378,7 @@ void solve_direct(int nxe, double SR) {
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/cylinder_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/wing_lin.vtk");
     // T lin_max_disp = get_max_disp(lin_soln);
 
     if (fail) {
@@ -371,21 +388,25 @@ void solve_direct(int nxe, double SR) {
 }
 
 template <typename T, class Smoother, class Assembler>
-void gatekeeper_method(std::string smoother_type, int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDER) {
+void gatekeeper_method(std::string smoother_type, MPI_Comm &comm, int level, double SR, int nsmooth, int ninnercyc, T omega, int ORDER) {
     if (smoother_type != "direct") {
-        multigrid_solve<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);
+        multigrid_solve<T, Smoother, Assembler>(comm, level, smoother_type, SR, nsmooth, ninnercyc, omega, ORDER);
     } else {
-        solve_direct<T, Assembler>(nxe, SR);
+        solve_direct<T, Assembler>(comm, level, SR);
     }
 }
 
 int main(int argc, char **argv) {
     // input ----------
-    int nxe = 256; // default value
+    int level = 1; // default value
     double SR = 10.0; // default
     int n_vcycles = 50;
     double omega = 0.3;
     int ORDER = 8; // for chebyshev
+
+    // Intialize MPI and declare communicator
+    MPI_Init(&argc, &argv);
+    MPI_Comm comm = MPI_COMM_WORLD;
 
     int nsmooth = 1; // typically faster right now
     int ninnercyc = 1; // inner V-cycles to precond K-cycle
@@ -398,11 +419,11 @@ int main(int argc, char **argv) {
         char* arg = argv[i];
         to_lowercase(arg);
 
-        if (strcmp(arg, "--nxe") == 0) {
+        if (strcmp(arg, "--level") == 0) {
             if (i + 1 < argc) {
-                nxe = std::atoi(argv[++i]);
+                level = std::atoi(argv[++i]);
             } else {
-                std::cerr << "Missing value for --nxe\n";
+                std::cerr << "Missing value for --level\n";
                 return 1;
             }
         } else if (strcmp(arg, "--omega") == 0) {
@@ -467,13 +488,13 @@ int main(int argc, char **argv) {
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
 
-    printf("cylinder mesh with MITC4 elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
+    printf("AOB-wing level %d mesh with MITC4 elements, and SR %.2e\n------------\n", level, SR);
     if (smoother_type == "chebyshev" || smoother_type == "jacobi") {
         using Smoother = ChebyshevPolynomialSmoother<Assembler, false>;
-        gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);
+        gatekeeper_method<T, Smoother, Assembler>(smoother_type, comm, level, SR, nsmooth, ninnercyc, omega, ORDER);
     } else if (smoother_type == "gsmc" || smoother_type == "direct") {
         using Smoother = MulticolorGSSmoother_V1<Assembler>; // still calls direct later if direct
-        gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);
+        gatekeeper_method<T, Smoother, Assembler>(smoother_type, comm, level, SR, nsmooth, ninnercyc, omega, ORDER);
     }
 
     return 0;

@@ -26,6 +26,9 @@ for case in ["cylinder-A100"]:
 
     toverR = 1.0 / SR
 
+    # show_time = True
+    show_time = False # then show rat eof resid/sec
+
     plt.rcParams.update({
         # 'font.family': 'Courier New',  # monospace font
         'font.family' : 'monospace', # since Courier new not showing up?
@@ -43,7 +46,7 @@ for case in ["cylinder-A100"]:
 
     fig, ax = plt.subplots(figsize=(9, 7.5))
 
-    plt.plot(toverR, LU, "o-", linewidth=3, color="tab:gray", label="Full-LU")
+    plt.plot(toverR, 6.0 / LU, "o-", linewidth=3, color="tab:gray", label="Full-LU")
 
 
     six_colors1 = ["#ef476f", "#f78c6b", "#ffd166", "#06d6a0", "#118ab2", "#073b4c"]
@@ -62,14 +65,21 @@ for case in ["cylinder-A100"]:
         else:
             _arr = arr[:,i+1]
             _name = names[i]
+        if show_time:
+            _arr = 6.0 / _arr
+            _arr[_arr > 2.0] = np.nan
         plt.plot(toverR, _arr, "o-" if i != 1 else "o--", linewidth=3, color=colors[i], label=_name)
 
-    plt.legend(loc='center left', bbox_to_anchor=(0, 0.4))
+    plt.legend(loc='center left', bbox_to_anchor=(0, 0.3))
 
     plt.xlabel("Normalized Thickness, " + r"$\frac{t}{R}$")
     plt.xscale('log')
-    # plt.yscale('log')
-    plt.ylabel(r"$\log_{10}(resid) \, / \, sec$")
+    plt.yscale('log')
+    if show_time:
+        plt.ylabel("Runtime (sec)")
+    else:
+        plt.ylabel(r"$\log_{10}(resid) \, / \, sec$")
+    
     plt.tight_layout()
     if case == "cylinder":
         plt.savefig("out/1_cylinder_smoother.png", dpi=400)

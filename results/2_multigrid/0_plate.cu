@@ -59,7 +59,7 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
     const SCALER scaler  = LINE_SEARCH;
-    using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
+    using Prolongation = StructuredProlongation<Assembler, PLATE>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     // using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
@@ -90,18 +90,13 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     // make each grid
     for (int c_nxe = nxe; c_nxe >= nxe_min; c_nxe /= 2) {
         // make the assembler
-        int c_nhe = c_nxe;
-        double L = 1.0, R = 0.5, thick = L / SR;
-        double E = 70e9, nu = 0.3;
-        // double rho = 2500, ys = 350e6;
-        bool imperfection = false; // option for geom imperfection
-        int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-        auto assembler = createCylinderAssembler<Assembler>(c_nxe, c_nhe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
-        constexpr bool compressive = false;
-        const int load_case = 3; // petal and chirp load
+        int c_nye = c_nxe;
+        double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+        int nxe_per_comp = c_nxe / 4, nye_per_comp = c_nye/4; // for now (should have 25 grids)
+        auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
         double uniform_force = 5e7 * 1.0 * 1.0;
         double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
-        T *my_loads = getCylinderLoads<T, Physics, load_case>(c_nxe, c_nhe, L, R, nodal_loads);
+        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -204,17 +199,17 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     int ndof = kmg->grids[0].N;
     double total = startup_time.count() + solve_time.count();
     double mem_MB = kmg->get_memory_usage_mb();
-    printf("cylinder GMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
+    printf("plate GMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nGMG-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\nGMG-PCG on plate case with %d nxe and %.4e SR\n", nxe, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // print some of the data of host residual
     int *d_perm = kmg->grids[0].d_perm;
     auto h_soln = soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/cylinder_mg_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_mg_lin.vtk");
 }
 
 template <typename T, class Assembler>
@@ -245,20 +240,12 @@ void solve_direct(int nxe, double SR) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start0 = std::chrono::high_resolution_clock::now();
 
-    double L = 1.0, R = 0.5, thick = L / SR;
-    double E = 70e9, nu = 0.3;
-    // double rho = 2500, ys = 350e6;
-    bool imperfection = false; // option for geom imperfection
-    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-    auto assembler = createCylinderAssembler<Assembler>(nxe, nxe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
-    constexpr bool compressive = false;
-    const int load_case = 3; // petal and chirp load
-    T pressure = 5.0e7;
-    double uniform_force = pressure * 1.0 * 1.0;
+    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+    int nxe_per_comp = nxe / 4, nye_per_comp = nxe/4; // for now (should have 25 grids)
+    auto assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+    double uniform_force = 5e7 * 1.0 * 1.0;
     double nodal_loads = uniform_force / (nxe - 1) / (nxe - 1);
-    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-    double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderLoads<T, Physics, load_case>(nxe, nxe, L, R, nodal_loads);
+    T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nxe, Lx, Ly, nodal_loads);
     printf("making grid with nxe %d\n", nxe);
 
     // perform multicolor reordering
@@ -348,7 +335,7 @@ void solve_direct(int nxe, double SR) {
     T log_resid_drop = (log(init_resid) - log(final_resid)) / log(10.0);
     // T log_resid_cap = log(1e6) / log(10.0); // cap out past 1e6 because don't need deeper than this really for Newton-Krylov..
     T log_red_rate =  0.5 * log_resid_drop / solve_time.count();
-    printf("\nDirectLU-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\nDirectLU-PCG on plate case with %d nxe and %.4e SR\n", nxe, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     int nx = nxe + 1;
@@ -361,7 +348,7 @@ void solve_direct(int nxe, double SR) {
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/cylinder_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_lin.vtk");
     // T lin_max_disp = get_max_disp(lin_soln);
 
     if (fail) {
@@ -467,7 +454,7 @@ int main(int argc, char **argv) {
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
 
-    printf("cylinder mesh with MITC4 elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
+    printf("plate mesh with MITC4 elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
     if (smoother_type == "chebyshev" || smoother_type == "jacobi") {
         using Smoother = ChebyshevPolynomialSmoother<Assembler, false>;
         gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);
