@@ -347,7 +347,7 @@ void solve_direct(int nxe, double SR) {
     // it's converging about 1e14 resid drop, only need like 1e7 so half
     T log_resid_drop = (log(init_resid) - log(final_resid)) / log(10.0);
     // T log_resid_cap = log(1e6) / log(10.0); // cap out past 1e6 because don't need deeper than this really for Newton-Krylov..
-    T log_red_rate =  0.5 * log_resid_drop / solve_time.count();
+    T log_red_rate =  log_resid_drop / solve_time.count();
     printf("\nDirectLU-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
@@ -382,7 +382,7 @@ void gatekeeper_method(std::string smoother_type, int nxe, double SR, int nsmoot
 int main(int argc, char **argv) {
     // input ----------
     int nxe = 256; // default value
-    double SR = 10.0; // default
+    double SR = 50.0; // default
     int n_vcycles = 50;
     double omega = 0.3;
     int ORDER = 8; // for chebyshev
