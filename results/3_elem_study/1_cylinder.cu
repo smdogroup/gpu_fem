@@ -155,7 +155,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         constexpr bool compressive = false;
         constexpr int load_case = 3; // petal and chirp load
         // double nodal_loads = uniform_force; // (don't normalize anymore, integrated out) / (nxe - 1) / (nxe - 1);
-        T *my_loads = getCylinderLoads<T,  Basis, Physics, load_case>(c_nxe, c_nhe, L, R, pressure);
+        // T *my_loads = getCylinderLoads<T,  Basis, Physics, load_case>(c_nxe, c_nhe, L, R, pressure);
+        T *my_loads = getCylinderLoadsRobust<T,  Assembler>(assembler, c_nxe, c_nhe, L, R, pressure);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -264,10 +265,14 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     kmg->set_print(true);
     kmg->solve();
     kmg->set_print(false);
+
+    T lin_max_disp = get_max_disp(kmg->grids[0].d_soln);
+    printf("lin max disp = %.4e\n", lin_max_disp);
+
     int *d_perm = kmg->grids[0].d_perm;
     auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
     printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/cylinder_mg_lin.vtk");
-    T lin_max_disp = get_max_disp(kmg->grids[0].d_soln);
+    
 
 
     // -----------------------------------------------------------
@@ -339,7 +344,8 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     auto assembler = createCylinderAssembler<Assembler>(nxe, nxe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
     constexpr int load_case = 3; // petal and chirp load
     // double nodal_loads = uniform_force; // (don't normalize anymore, integrated out) / (nxe - 1) / (nxe - 1);
-    T *my_loads = getCylinderLoads<T,  Basis, Physics, load_case>(nxe, nxe, L, R, pressure);
+    // T *my_loads = getCylinderLoads<T,  Basis, Physics, load_case>(nxe, nxe, L, R, pressure);
+    T *my_loads = getCylinderLoadsRobust<T,  Assembler>(assembler, nxe, nxe, L, R, pressure);
     printf("making grid with nxe %d\n", nxe);
 
     // BSR factorization
@@ -424,6 +430,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 
     T lin_max_disp = get_max_disp(soln);
     auto h_soln = soln.createHostVec();
+    printf("lin max disp = %.4e\n", lin_max_disp);
     printf("print solution\n");
     printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/cylinder_lin.vtk");
     printf("\tprinted solution\n");

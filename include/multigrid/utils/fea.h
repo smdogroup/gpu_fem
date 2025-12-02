@@ -810,8 +810,9 @@ Assembler createCylinderAssembler(int nxe, int nhe, double L, double R, double E
                 int ih_local = ih % order;
 
                 // get reference Gauss point [-1,1]
-                T xi  = Basis::getGaussPoint(ix_local);
-                T eta = Basis::getGaussPoint(ih_local);
+                T node_pt[2];
+                Basis::getNodePoint(n * ih_local + ix_local, node_pt);
+                T xi = node_pt[0], eta = node_pt[1];
 
                 // physical element corners
                 T x0 = dx * ix_corner;
@@ -881,141 +882,235 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
     TODO : later we will switch from this load control to disp control
     */
 
+    const int order = Basis::order;
+    const int n = order + 1;
+    using Quadrature = typename Basis::Quadrature;
+
     // number of nodes per direction
-    int nnx = nxe + 1;
-    int nnh = nhe + 1;
+    int nnx = order * nxe + 1;
+    int nnh = order * nhe;
     int num_nodes = nnx * nnh;
 
     constexpr bool IS_HR_ELEM = Phys::hellingerReissner;
     int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
     int vpn = Phys::vars_per_node;
 
-    T dx = L / nxe;
-    T dth = 2 * M_PI / nhe;
-
-    const int order = Basis::order;
-    const int n = order + 1;
-    using Quadrature = typename Basis::Quadrature;
+    T dx = L / (nnx-1);
+    T dth = 2 * M_PI / nnh;
 
     int num_dof = Phys::vars_per_node * num_nodes;
     T *my_loads = new T[num_dof];
     memset(my_loads, 0.0, num_dof * sizeof(T));
 
-    // the actual rhs is integral q(x,y) * phi_i(x,y) dxdy, fix later if want
-    // better error conv. (loop over each element to add loads in)
-    for (int ihe = 0; ihe < nhe - 1; ihe++) { // delay the last hoop element
+    // loop over each element to compute load shape-function integrals
+    for (int ihe = 0; ihe < nhe; ihe++) {
+        // bool last_hoop = ihe == nhe - 1;
         for (int ixe = 0; ixe < nxe; ixe++) {
             int ielem = nxe * ihe + ixe;
 
-            // no sorted order like in MITC?
-            for (int iloc = 0; iloc < n * n; iloc++) {
-                int ilx = iloc % n, ilh = iloc / n;
-                int ix = order * ixe + ilx;
-                int ih = order * ihe + ilh;
+            // build element nodes
+            int elem_nodes[Basis::num_nodes] = { 0 };
+            // get nodal coords of the element
+            T elem_xpts[3 * Basis::num_nodes] = { 0 };
+            for (int lnode = 0; lnode < n * n; lnode++) {
+                int lx = lnode % n, lh = lnode / n;
+                int ix = order * ixe + lx, ih = order * ihe + lh;
 
-                // higher-order nodes
-                int ix_corner = (ix / order) * order;
-                int ih_corner = (ih / order) * order;
-
-                // local node index inside element
-                int ix_local = ix % order;
-                int ih_local = ih % order;
-
-                // get reference Gauss point [-1,1]
-                T xi  = Basis::getGaussPoint(ix_local);
-                T eta = Basis::getGaussPoint(ih_local);
-
-                // physical element corners
-                T x0 = dx * ix_corner;
-                T x1 = dx * (ix_corner + (n - 1));  // last node in this element
-                T th0 = dth * ih_corner;
-                T th1 = dth * (ih_corner + (n - 1));
-
-                // map reference [-1,1] → [x0,x1] and [y0,y1]
-                T x = 0.5 * (1.0 - xi) * x0 + 0.5 * (1.0 + xi) * x1;
-                T th = 0.5 * (1.0 - eta) * th0 + 0.5 * (1.0 + eta) * th1;
-                T z = 0.0;
+                // get xi and eta at a node point
+                T node_pt[2];
+                Basis::getNodePoint(lnode, node_pt);
+                T xi = node_pt[0], eta = node_pt[1];
                 
-                int inode = nnx * ih + ix;
+                // higher-order nodes
+                int ix_corner = (ix / order) * order, ih_corner = (ih / order) * order;
+                // int ix_local = ix % order, ih_local = ih % order;
+                if (lx == n-1) ix_corner -= order;
+                if (lh == n-1) ih_corner -= order; // so x0, x1 same for whole element, etc.
+                // physical element corners
+                T x0 = dx * ix_corner, x1 = dx * (ix_corner + (n - 1));
+                T th0 = dth * ih_corner, th1 = dth * (ih_corner + (n - 1));
+                // map reference [-1,1] → [x0,x1] and [y0,y1]
+                elem_xpts[3 * lnode] = 0.5 * (1.0 - xi) * x0 + 0.5 * (1.0 + xi) * x1;
+                T th = 0.5 * (1.0 - eta) * th0 + 0.5 * (1.0 + eta) * th1;
 
-                // darea and quadrature points in the element
-                T J = dx * order * R * dth * order / 4;
-                T pt[2] = { 0 };
-                T weight = Quadrature::getQuadraturePoint(iloc, pt); 
+                // if (ielem < 20) {
+                //     printf("node %d: x0 %.4e to x1 %.4e with x %.4e, th %.4e\n", nnx * ih + ix, x0, x1, elem_xpts[3 * lnode], th);
+                //     printf("\txi %.4e, eta %.4e\n", xi, eta);
+                // }
+                elem_xpts[3 * lnode + 1] = R * sin(th);
+                elem_xpts[3 * lnode + 2] = R * cos(th);
 
-                // compute load magnitude based on load field
-                T x_hat = x / L;
+                if (ih == nnh) ih = 0; // hoop closes back on itself // only put here otherwise nodes not quite right for closing loop elems
+                elem_nodes[lnode] = nnx * ih + ix;
+            }
+
+            // debug, compute dXdxi and dXdeta for first node
+            T _pt[2];
+            Basis::getNodePoint(0, _pt);
+            // compute the computational coord gradients of Xpts for xi, eta
+            T dXdxi[3], dXdeta[3];
+            Basis::template interpFieldsGrad<3, 3>(_pt, elem_xpts, dXdxi, dXdeta);
+
+            // compute shell normals
+            T fn[3 * Basis::num_nodes] = { 0.0 };
+            ShellComputeNodeNormals<T, Basis>(elem_xpts, fn);
+
+            // if (ielem < 10) {
+            //     printf("ielem %d, elem_nodes: ", ielem);
+            //     printVec<int>(Basis::num_nodes, elem_nodes);
+            //     printf("elem_xpts: ");
+            //     printVec<T>(3 * Basis::num_nodes, elem_xpts);
+            //     printf("elem_fn: ");
+            //     printVec<T>(3 * Basis::num_nodes, fn);
+            //     printf("_dXdxi: ");
+            //     printVec<T>(3, dXdxi);
+            //     printf("_dXdeta: ");
+            //     printVec<T>(3, dXdeta);
+            // }
+
+            // now do gauss quadrature integral
+            for (int iquad = 0; iquad < Quadrature::num_quad_pts; iquad++) {
+                T pt[2];
+                T weight = Quadrature::getQuadraturePoint(iquad, pt);
+
+                // interp x,y,z to the quadrature point (using element basis functions)
+                T xpt[3] = { 0 };
+                Basis::template interpFields<3,3>(pt, elem_xpts, xpt);
+
+                // compute J = d(x,y,z)/dxi,deta
+                T J = getDetXd<T, Basis>(pt, elem_xpts, fn);
+
+                // compute load magnitudes at the quadrature point
+                T x_hat = xpt[0] / L;
+                // don't do that cause sometimes not on surface, mag may change some
+                // T y_hat = xpt[1] / R;
+                // T z_hat = xpt[2] / R;
+                T th = atan2(xpt[1], xpt[2]);
                 T th_hat = th / 2 / M_PI;
-                // T mag = load_mag * (0.7 * cos(5 * th) + 0.3 * cos(10 * th + 3.14159 / 6.0)) *
-                // sin(2 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
-                T mag = load_mag *
-                        (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
+                T mag = load_mag * (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
                          0.7 * cos(10 * th + 3.14159 / 6.0 + 5.3 * M_PI * x_hat)) *
                         sin(5 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
                 mag *= weight * J;
 
-                // y and z transverse loads in radial direction only
-                my_loads[vpn * inode + offset + 1] = sin(th) * mag;
-                my_loads[vpn * inode + offset + 2] = cos(th) * mag;        
+                // compute element basis functions at the quadpt (for nodal load distribution)
+                T N[Basis::num_nodes] = { 0.0 };
+                Basis::getBasis(pt, N);
+
+                // if (ielem < 10) {
+                //     printf("quadpt (%.4e, %.4e), xpt: ", pt[0], pt[1]);
+                //     printVec<T>(3, xpt);
+                //     printf("J %.4e, x_hat %.4e, th %.4e\n", J, x_hat, th);
+                // }
+
+                // now loop over each node to distribute load integral among nodes
+                for (int lnode = 0; lnode < n * n; lnode++) {
+                    int inode = elem_nodes[lnode];
+                    T nodal_mag = mag * N[lnode];
+
+                    // if (ielem < 100) {
+                    //     printf("load mag %.4e and th %.4e and inode %d\n", nodal_mag, th, inode);
+                    // }
+
+                    // add to each node now using element shape functions
+                    // y and z components of the load
+                    my_loads[vpn * inode + offset + 1] += sin(th) * nodal_mag;
+                    my_loads[vpn * inode + offset + 2] += cos(th) * nodal_mag;
+                } // end of nodal distribution loop
+            } // end of quadpt loop
+
+        } // end of x element loop
+    } // end of hoop element loop
+
+    return my_loads;
+}
+
+template <typename T, class Assembler>
+T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, double R, double load_mag) {
+    /* more robust version of cylinder loads */
+
+    using Phys = typename Assembler::Phys;
+    using Basis = typename Assembler::Basis;
+
+    const int order = Basis::order;
+    const int n = order + 1;
+    using Quadrature = typename Basis::Quadrature;
+
+    // number of nodes per direction
+    int nnx = order * nxe + 1;
+    int nnh = order * nhe;
+    int num_nodes = nnx * nnh;
+
+    constexpr bool IS_HR_ELEM = Phys::hellingerReissner;
+    int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
+    int vpn = Phys::vars_per_node;
+
+    int num_dof = Phys::vars_per_node * num_nodes;
+    T *my_loads = new T[num_dof];
+    memset(my_loads, 0.0, num_dof * sizeof(T));
+
+    // get importnat data out of assembler and move to host
+    T *h_xpts = assembler.getXpts().createHostVec().getPtr();
+    int *h_conn = assembler.getConn().createHostVec().getPtr();
+
+    // loop over each element to compute load shape-function integrals
+    for (int ihe = 0; ihe < nhe; ihe++) {
+        // bool last_hoop = ihe == nhe - 1;
+        for (int ixe = 0; ixe < nxe; ixe++) {
+            int ielem = nxe * ihe + ixe;
+
+            // build element nodes and xpts from assembler
+            int *elem_nodes = &h_conn[Basis::num_nodes * ielem];
+            // get nodal coords of the element
+            T elem_xpts[3 * Basis::num_nodes] = { 0 };
+            for (int lnode = 0; lnode < Basis::num_nodes; lnode++) {
+                int inode = elem_nodes[lnode];
+                for (int dir = 0; dir < 3; dir++) {
+                    elem_xpts[3 * lnode + dir] = h_xpts[3 * inode + dir];
+                }
             }
-        }
-    }
 
-    // then repeat for the last hoop elements to close the loop
-    int ihe = nhe - 1;
-    for (int ixe = 0; ixe < nxe; ixe++) {
-        int ielem = nxe * ihe + ixe;
-        for (int iloc = 0; iloc < n * n; iloc++) {
-            int ilx = iloc % n, ily = iloc / n;
-            int ix = order * ixe + ilx;
-            int iy = order * ihe + ily;
-            if (ily == n - 1) iy = 0;  // loops back around
-            int inode = nnx * iy + ix;
+            // compute shell normals
+            T fn[3 * Basis::num_nodes] = { 0.0 };
+            ShellComputeNodeNormals<T, Basis>(elem_xpts, fn);
 
-            // higher-order nodes
-            int ix_corner = (ix / order) * order;
-            int ih_corner = (iy / order) * order;
+            // now do gauss quadrature integral
+            for (int iquad = 0; iquad < Quadrature::num_quad_pts; iquad++) {
+                T pt[2];
+                T weight = Quadrature::getQuadraturePoint(iquad, pt);
 
-            // local node index inside element
-            int ix_local = ix % order;
-            int ih_local = iy % order;
+                // interp x,y,z to the quadrature point (using element basis functions)
+                T xpt[3] = { 0 };
+                Basis::template interpFields<3,3>(pt, elem_xpts, xpt);
 
-            // get reference Gauss point [-1,1]
-            T xi  = Basis::getGaussPoint(ix_local);
-            T eta = Basis::getGaussPoint(ih_local);
+                // compute J = d(x,y,z)/dxi,deta
+                T J = getDetXd<T, Basis>(pt, elem_xpts, fn);
 
-            // physical element corners
-            T x0 = dx * ix_corner;
-            T x1 = dx * (ix_corner + (n - 1));  // last node in this element
-            T th0 = dth * ih_corner;
-            T th1 = dth * (ih_corner + (n - 1));
+                // compute load magnitudes at the quadrature point
+                T x_hat = xpt[0] / L;
+                T th = atan2(xpt[1], xpt[2]);
+                T th_hat = th / 2 / M_PI;
+                T mag = load_mag * (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
+                         0.7 * cos(10 * th + 3.14159 / 6.0 + 5.3 * M_PI * x_hat)) *
+                        sin(5 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
 
-            // map reference [-1,1] → [x0,x1] and [y0,y1]
-            T x = 0.5 * (1.0 - xi) * x0 + 0.5 * (1.0 + xi) * x1;
-            T th = 0.5 * (1.0 - eta) * th0 + 0.5 * (1.0 + eta) * th1;
-            T z = 0.0;
+                // compute element basis functions at the quadpt (for nodal load distribution)
+                T N[Basis::num_nodes] = { 0.0 };
+                Basis::getBasis(pt, N);
 
-            // darea and quadrature points in the element
-            T J = dx * order * R * dth * order / 4;
-            T pt[2] = { 0 };
-            T weight = Quadrature::getQuadraturePoint(iloc, pt); 
+                // now loop over each node to distribute load integral among nodes
+                for (int lnode = 0; lnode < Basis::num_nodes; lnode++) {
+                    int inode = elem_nodes[lnode];
+                    T nodal_mag = mag * N[lnode] * weight * J;
 
-            // compute load magnitude based on load field
-            T x_hat = x / L;
-            T th_hat = th / 2 / M_PI;
-            // T mag = load_mag * (0.7 * cos(5 * th) + 0.3 * cos(10 * th + 3.14159 / 6.0)) *
-            // sin(2 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
-            T mag = load_mag *
-                    (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
-                        0.7 * cos(10 * th + 3.14159 / 6.0 + 5.3 * M_PI * x_hat)) *
-                    sin(5 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
-            mag *= weight * J;
+                    // add to each node now using element shape functions
+                    // y and z components of the load
+                    my_loads[vpn * inode + offset + 1] += sin(th) * nodal_mag;
+                    my_loads[vpn * inode + offset + 2] += cos(th) * nodal_mag;
+                } // end of nodal distribution loop
+            } // end of quadpt loop
 
-            // y and z transverse loads in radial direction only
-            my_loads[vpn * inode + offset + 1] = sin(th) * mag;
-            my_loads[vpn * inode + offset + 2] = cos(th) * mag;    
-        }
-    }
+        } // end of x element loop
+    } // end of hoop element loop
 
     return my_loads;
 }

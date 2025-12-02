@@ -261,10 +261,13 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     kmg->set_print(true);
     kmg->solve();
     kmg->set_print(false);
+
+    T lin_max_disp = get_max_disp(kmg->grids[0].d_soln);
+    printf("lin max disp = %.4e\n", lin_max_disp);
+
     int *d_perm = kmg->grids[0].d_perm;
     auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
     printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_mg_lin.vtk");
-    T lin_max_disp = get_max_disp(kmg->grids[0].d_soln);
 
 
     // -----------------------------------------------------------
@@ -425,6 +428,8 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     printf("\tdone with linear solve\n");
 
     T lin_max_disp = get_max_disp(soln);
+    printf("lin max disp = %.4e\n", lin_max_disp);
+
     auto h_soln = soln.createHostVec();
     printf("print solution\n");
     printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/plate_lin.vtk");
