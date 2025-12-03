@@ -378,12 +378,12 @@ class HellingerReissnerShellAssembler
 
             /* 2) nonlinear forward and pforward then linear backprop to strain-gap */
             // nonlinear forward
-            T d[3 * num_nodes];  // need directors in reverse for nonlinear strains
+            A2D::Vec<T, 3 * num_nodes> d;
             if constexpr (is_nonlinear) {
-                Director::template computeDirector<standard_vpn, num_nodes>(vars, fn, d);
+                Director::template computeDirector<standard_vpn, num_nodes>(vars, fn, d.get_data());
                 A2D::SymMat<T, 3> gty;
-                computeFullTyingStrain<T, Phys, Basis, is_nonlinear>(pt, xpts, fn, vars, d,
-                                                                     gty.get_data());
+                computeFullTyingStrain<T, Phys, Basis, is_nonlinear>(pt, xpts, fn, vars,
+                                                                     d.get_data(), gty.get_data());
                 A2D::SymMatRotateFrame<T, 3>(XdinvT, gty, e0ty.value());
                 computeEngineerTyingStrains<T>(e0ty.value());
             }
@@ -392,8 +392,8 @@ class HellingerReissnerShellAssembler
             {
                 Director::template computeDirectorHfwd<standard_vpn, num_nodes>(pvars, fn, p_d);
                 A2D::SymMat<T, 3> p_gty;
-                computeFullTyingStrainHfwd<T, Phys, Basis>(pt, xpts, fn, vars, d, pvars, p_d,
-                                                           p_gty.get_data());
+                computeFullTyingStrainHfwd<T, Phys, Basis>(pt, xpts, fn, vars, d.get_data(), pvars,
+                                                           p_d, p_gty.get_data());
                 A2D::SymMatRotateFrame<T, 3>(XdinvT, p_gty, e0ty.pvalue());
                 computeEngineerTyingStrains<T>(e0ty.pvalue());
             }
@@ -431,9 +431,9 @@ class HellingerReissnerShellAssembler
                 A2D::SymMat3x3RotateFrameReverse<T>(XdinvT, e0ty.hvalue().get_data(),
                                                     gty_hat.get_data());
                 A2D::Vec<T, 3 * num_nodes> d_hat;
-                computeFullTyingStrainHrev<T, Phys, Basis>(pt, xpts, fn, vars, d, pvars, p_d,
-                                                           gty_bar.get_data(), gty_hat.get_data(),
-                                                           matCol, d_hat.get_data());
+                computeFullTyingStrainHrev<T, Phys, Basis>(
+                    pt, xpts, fn, vars, d.get_data(), pvars, p_d, gty_bar.get_data(),
+                    gty_hat.get_data(), matCol, d_hat.get_data());
                 Director::template computeDirectorHrev<standard_vpn, num_nodes>(
                     fn, d_hat.get_data(), matCol);
             }
