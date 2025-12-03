@@ -110,7 +110,7 @@ class TacsMGInterface {
         }
 
         // additional assembly steps like update factor, smoother, etc.
-        mg.update_after_assembly();
+        mg.update_after_assembly(this->vars);
     }
 
     void solve_adjoint(MyFunction &func, const Vec *adj_rhs = nullptr) {
