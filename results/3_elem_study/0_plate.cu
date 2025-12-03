@@ -4,6 +4,8 @@
 #include "mesh/TACSMeshLoader.h"
 #include "mesh/vtk_writer.h"
 
+#include <iomanip>
+
 // new nonlinear solvers
 #include "solvers/nonlinear_static/inexact_newton.h"
 #include "solvers/nonlinear_static/continuation.h"
@@ -309,7 +311,9 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start1 = std::chrono::high_resolution_clock::now();
 
-    nl_solver->solve(fine_vars, lambda0, inner_atol);
+    if constexpr (!Physics::hellingerReissner) {
+        nl_solver->solve(fine_vars, lambda0, inner_atol);
+    }
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end1 = std::chrono::high_resolution_clock::now();
@@ -337,6 +341,8 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
         csv << "t/R,nxe,NDOF,elem_type,lin_disp,nl_disp,lin_runtime(s),nl_runtime(s),solver\n";
 
     double lin_runtime = lin_solve_time.count(), nl_runtime = solve_time.count();
+    // Set high precision for CSV output
+    csv << std::setprecision(15) << std::scientific;
     csv << (1.0/SR) << "," << nxe << "," << ndof << ","
         << elem_type << "," << lin_max_disp << "," << nl_max_disp << ","
         << lin_runtime << "," << nl_runtime << ","
@@ -496,7 +502,10 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start11 = std::chrono::high_resolution_clock::now();
     
-    nl_solver->solve(vars, lambda0);
+    // skip hellinger-reissner NL solve for now
+    if constexpr (!Physics::hellingerReissner) {
+        nl_solver->solve(vars, lambda0);
+    }
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start11;
@@ -523,6 +532,8 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
         csv << "t/R,nxe,NDOF,elem_type,lin_disp,nl_disp,lin_runtime(s),nl_runtime(s)\n";
 
     double lin_runtime = lin_solve_time.count(), nl_runtime = solve_time.count();
+    // Set high precision for CSV output
+    csv << std::setprecision(15) << std::scientific;
     csv << (1.0/SR) << "," << nxe << "," << ndof << ","
         << elem_type << "," << lin_max_disp << "," << nl_max_disp << ","
         << lin_runtime << "," << nl_runtime << ","
@@ -678,6 +689,13 @@ int main(int argc, char **argv) {
         // probably do need quadratic, but need to fix assembly issues with 9 quadpts
         using Quad = QuadCubicQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 3>;
+        using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    } else if (elem_type == "LFI16") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        // probably do need quadratic, but need to fix assembly issues with 9 quadpts
+        using Quad = QuadCubicQuadrature<T>;
+        using Basis = LagrangeQuadBasis<T, Quad, 3>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "HR4") {
