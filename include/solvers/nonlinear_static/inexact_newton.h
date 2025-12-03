@@ -106,8 +106,8 @@ class InexactNewtonSolver {
             // in solve perm/order (so we permute to and from that)
             update.zeroValues();
             res.permuteData(block_dim,
-                            d_iperm);  // res from VIS => SOLVE order
-            fatalFailure = linear_solver->solve(res, update, true); // check_conv = true
+                            d_iperm);                                // res from VIS => SOLVE order
+            fatalFailure = linear_solver->solve(res, update, true);  // check_conv = true
             update.permuteData(block_dim,
                                d_perm);  // update from SOLVE => VIS order
 
@@ -264,52 +264,60 @@ class InexactNewtonSolver {
         return objective;
     }
 
-    bool compute_optimal_restart(const T init_step, const T max_lambda, DeviceVec<T> &state, T &lambda, T &dlambda) {
+    bool compute_optimal_restart(const T init_step, const T max_lambda, DeviceVec<T> &state,
+                                 T &lambda, T &dlambda) {
         /* compute optimal energy min restart from Ali's paper */
-        //    optLoadScale = (Fe^T dUi + Fi^T dUe) / (-2 Fe^T dUe); where dUi = Kinv * Fi, dUe = Kinv*Fe
+        //    optLoadScale = (Fe^T dUi + Fi^T dUe) / (-2 Fe^T dUe); where dUi = Kinv * Fi, dUe =
+        //    Kinv*Fe
         // first compute the norms of state vec and ext force
         T state_nrm;
         CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, state.getPtr(), 1, &state_nrm));
         T Fe_nrm;
         CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, loads.getPtr(), 1, &Fe_nrm));
         Fe_nrm *= lambda;
-        
+
         bool restart_design = false;
         if (state_nrm > 0.0 and Fe_nrm > 0.0) {
-
             /* compute the energy inner products about current state + external loads */
             T FeUe, FeUi, FiUe;
             _get_energy_inner_products(lambda, FeUe, FeUi, FiUe);
-            
+
             /* now predict the optimal energy load scale */
             T opt_load_scale = (FeUi + FiUe) / (-2.0 * FeUe);
             // then determine if it is reasonable and if we should restart
             if (opt_load_scale > (2.0 * max_lambda) || (opt_load_scale < 0.0)) {
-                // if opt load scale more than double max load scale we're aiming for, or if negative
-                // then it's more efficient to just solve from zero displacements (structure changed too much)
-                state.zeroValues(); // zero state vars (to output)
+                // if opt load scale more than double max load scale we're aiming for, or if
+                // negative then it's more efficient to just solve from zero displacements
+                // (structure changed too much)
+                state.zeroValues();  // zero state vars (to output)
                 state.copyValuesTo(vars);
                 assembler.set_variables(vars);
                 T ratio = opt_load_scale / max_lambda;
-                printf("New Design - reset LAM=0: opt_load_scale %.4e > 2 or <0 so restart to zero disps\n", ratio);
+                printf(
+                    "New Design - reset LAM=0: opt_load_scale %.4e > 2 or <0 so restart to zero "
+                    "disps\n",
+                    ratio);
                 opt_load_scale = init_step;
             } else if (abs(opt_load_scale - max_lambda) < 1e-2) {
                 // opt load scale is so close to target load scale
                 //  that it's more efficient to just solve to target load scale
                 //  useful when optimization is near complete + design changes small
                 T ratio = opt_load_scale / max_lambda;
-                printf("New Design - set LAM_INIT=1.0: since opt_load_scale %.4e close enough\n", ratio);
+                printf("New Design - set LAM_INIT=1.0: since opt_load_scale %.4e close enough\n",
+                       ratio);
                 opt_load_scale = max_lambda;
                 restart_design = true;
-            } else { 
+            } else {
                 // otherwise, we have a reasonable optimal load scale
                 // now in case opt_load_scale is small, take max with suggested init_step
                 //  as that will likely get faster solve
                 T opt_load_scale0 = opt_load_scale;
                 opt_load_scale = max(opt_load_scale, init_step);
                 if (opt_load_scale0 < init_step) {
-                    printf("New Design - set LAM_INIT=%.4e, as energy-opt-lam=%.4e < init step size %.4e\n", 
-                    opt_load_scale, opt_load_scale0, init_step);
+                    printf(
+                        "New Design - set LAM_INIT=%.4e, as energy-opt-lam=%.4e < init step size "
+                        "%.4e\n",
+                        opt_load_scale, opt_load_scale0, init_step);
                 } else {
                     printf("New Design - set LAM_INIT=%.4e\n", opt_load_scale);
                 }
@@ -317,12 +325,12 @@ class InexactNewtonSolver {
                 // if opt load scale larger than max load scale, we need to load downwards,
                 //  so change the sign of load stepping
                 if (opt_load_scale > max_lambda) {
-                    dlambda *= -1; 
+                    dlambda *= -1;
                     printf("\tLAM_INIT=%.4e > 1 so reversed load increments\n");
                 }
-            } // end of opt load scale sanity checks
+            }  // end of opt load scale sanity checks
 
-        } // end of nonzero state check
+        }  // end of nonzero state check
         return restart_design;
     }
 
@@ -334,11 +342,11 @@ class InexactNewtonSolver {
         // keeps states from last time
         updateJacobian();
         // TODO : setting for this here?
-        linear_solver->set_rel_tol(1e-6); 
+        linear_solver->set_rel_tol(1e-6);
 
         // 1) compute dUi = Kinv * Fi
         // where fint in res (temporarily)
-        assembler.add_residual_fast(res); // automatically zeros res
+        assembler.add_residual_fast(res);  // automatically zeros res
         assembler.apply_bcs(res);
         // then do linear solve dUi = Kinv * Fi
         res.permuteData(block_dim, d_iperm);  // res from VIS => SOLVE order
@@ -352,19 +360,19 @@ class InexactNewtonSolver {
         res.zeroValues();
         T a = lambda;
         CHECK_CUBLAS(cublasDaxpy(cublasHandle, nvars, &a, loads.getPtr(), 1, res.getPtr(), 1));
-        assembler.apply_bcs(res); // res thus in VIS order here
+        assembler.apply_bcs(res);  // res thus in VIS order here
         // now do the linear solve
         res.permuteData(block_dim, d_iperm);  // res from VIS => SOLVE order
         linear_solver->solve(res, update, true);
         // keep update (aka Ue) in SOLVE order
         // now do inner product <Fe, dUe>
         CHECK_CUBLAS(cublasDdot(cublasHandle, nvars, res.getPtr(), 1, update.getPtr(), 1, &FeUe));
-        
+
         // 3) compute another inner product FiUe = <Fi, dUe> (keeping dUe in update in SOLVE order)
         // assemble fint back into res
-        assembler.add_residual_fast(res); // automatically zeros res
+        assembler.add_residual_fast(res);  // automatically zeros res
         assembler.apply_bcs(res);
-        res.permuteData(block_dim, d_iperm); // res from VIS => SOLVE order
+        res.permuteData(block_dim, d_iperm);  // res from VIS => SOLVE order
         // now take <Fi, dUe> dot product in SOLVE order
         CHECK_CUBLAS(cublasDdot(cublasHandle, nvars, res.getPtr(), 1, update.getPtr(), 1, &FiUe));
     }

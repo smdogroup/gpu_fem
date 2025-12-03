@@ -52,10 +52,10 @@ __DEVICE__ void computeHR_tyingStrainTranspose(const T pt[], const A2D::SymMat<T
     // note e22 and e13 are swapped in spots 2,3 for this case
     T us_xi_b[5] = {0}, us_eta_b[5] = {0};
     us_xi_b[0] += e0tyb[0] * XdinvT[0];
-    us_eta_b[0] += e0tyb[0] * XdinvT[1];  // e11 back to xi,eta
+    us_eta_b[0] += e0tyb[0] * XdinvT[3];  // e11 back to xi,eta
     us_xi_b[2] += e0tyb[3] * XdinvT[1];
     us_eta_b[2] += e0tyb[3] * XdinvT[4];  // e22
-    us_xi_b[3] += e0tyb[2] * (XdinvT[0] + XdinvT[1]);
+    us_xi_b[3] += e0tyb[2] * XdinvT[0];
     us_eta_b[3] += e0tyb[2] * XdinvT[3];  // gam13
     us_xi_b[4] += e0tyb[4] * XdinvT[1];
     us_eta_b[4] += e0tyb[4] * XdinvT[4];  // gam23

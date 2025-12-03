@@ -106,7 +106,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
             // in-plane BCs a bit weird still (needed v12 or v1 = 0 on positive x1,x2 edges but not
             // v0 and v2) my_bcs.push_back(vpn * inode + 0);
             // v0 equiv to e11 strain-gap disp (zero like u)
-            my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like u)
+            // my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like u)
             my_bcs.push_back(vpn * inode + 3);  // v4 equiv to gam23 strain-gap disp (zero like
             // thx)
         }
@@ -120,7 +120,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
         my_bcs.push_back(vpn * inode + offset + 2);  // corresp dof 3 for w
         // no HR constraints needed on positive edges
         if constexpr (IS_HR_ELEM) {
-            my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
+            // my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
             // my_bcs.push_back(vpn * inode + 2);  // v2 equiv to e22 strain-gap disp (zero like v)
             my_bcs.push_back(vpn * inode + 4);  // v3 equiv to gam13 strain-gap disp (like thy)
         }
@@ -129,7 +129,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
     int inode = nnx * (nny - 1) + nnx - 1;
     my_bcs.push_back(vpn * inode + offset + 4);  // set thy DOF zero here too
     if constexpr (IS_HR_ELEM) {
-        my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
+        // my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
         // my_bcs.push_back(vpn * inode + 2);  // v2 equiv to e22 strain-gap disp (zero like v)
         my_bcs.push_back(vpn * inode + 4);  // v3 equiv to gam13 strain-gap disp (like thy)
     }
@@ -144,7 +144,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
     inode = nnx - 1;
     my_bcs.push_back(vpn * inode + offset + 3);  // corresp dof 3 for thx
     if constexpr (IS_HR_ELEM) {
-        // my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
+        my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
         my_bcs.push_back(vpn * inode + 3);  // v3 equiv to gam13 strain-gap disp (like thx)
     }
 
@@ -210,7 +210,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
                 int iy_local = iy % order;
 
                 // get reference Gauss point [-1,1]
-                T xi  = Basis::getGaussPoint(ix_local);
+                T xi = Basis::getGaussPoint(ix_local);
                 T eta = Basis::getGaussPoint(iy_local);
 
                 // physical element corners
@@ -224,7 +224,8 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
                 xpt_node[1] = 0.5 * (1.0 - eta) * y0 + 0.5 * (1.0 + eta) * y1;
                 xpt_node[2] = 0.0;
 
-                // printf("xi %.4e, eta %.4e with (x %.4e, y %.4e, z %.4e)\n", xi, eta, xpt_node[0], xpt_node[1], xpt_node[2]);
+                // printf("xi %.4e, eta %.4e with (x %.4e, y %.4e, z %.4e)\n", xi, eta, xpt_node[0],
+                // xpt_node[1], xpt_node[2]);
             }
         }
     }
@@ -406,7 +407,7 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
                 int iy_local = iy % order;
 
                 // get reference Gauss point [-1,1]
-                T xi  = Basis::getGaussPoint(ix_local);
+                T xi = Basis::getGaussPoint(ix_local);
                 T eta = Basis::getGaussPoint(iy_local);
 
                 // physical element corners
@@ -419,15 +420,15 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
                 T x = 0.5 * (1.0 - xi) * x0 + 0.5 * (1.0 + xi) * x1;
                 T y = 0.5 * (1.0 - eta) * y0 + 0.5 * (1.0 + eta) * y1;
                 T z = 0.0;
-                
+
                 int inode = nnx * iy + ix;
 
                 // darea and quadrature points in the element
                 T J = dx * order * dy * order / 4;
-                T pt[2] = { 0 };
+                T pt[2] = {0};
                 // pt[0] = xi, pt[1] = eta;
                 // this multiplies both weights internally
-                T weight = Quadrature::getQuadraturePoint(iloc, pt); 
+                T weight = Quadrature::getQuadraturePoint(iloc, pt);
 
                 T r = sqrt(x * x + y * y);
                 T th = atan2(y, x);
@@ -435,11 +436,10 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
                 // somehow need to scale by local dGP area though no?
                 nodal_load *= weight * J;
 
-                my_loads[vpn * inode + offset + 2] += nodal_load;            
+                my_loads[vpn * inode + offset + 2] += nodal_load;
             }
         }
     }
-
 
     return my_loads;
 }
@@ -478,6 +478,97 @@ T *getPlateSineLoads(int nxe, int nye, double Lx, double Ly, int m, int n, doubl
             my_loads[Phys::vars_per_node * inode + 2] = nodal_load;  // * dx * dy;
         }
     }
+    return my_loads;
+}
+
+template <typename T, class Assembler>
+T *getPlateMeshConvLoads(Assembler &assembler, int nxe, int nye, double Lx, double Ly, int mx,
+                         int my, double load_mag) {
+    /* more robust version of cylinder loads */
+
+    using Phys = typename Assembler::Phys;
+    using Basis = typename Assembler::Basis;
+
+    const int order = Basis::order;
+    const int n = order + 1;
+    using Quadrature = typename Basis::Quadrature;
+
+    // number of nodes per direction
+    int nnx = order * nxe + 1;
+    int nny = order * nye + 1;
+    int num_nodes = nnx * nny;
+
+    constexpr bool IS_HR_ELEM = Phys::hellingerReissner;
+    int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
+    int vpn = Phys::vars_per_node;
+
+    int num_dof = Phys::vars_per_node * num_nodes;
+    T *my_loads = new T[num_dof];
+    memset(my_loads, 0.0, num_dof * sizeof(T));
+
+    // get importnat data out of assembler and move to host
+    T *h_xpts = assembler.getXpts().createHostVec().getPtr();
+    int *h_conn = assembler.getConn().createHostVec().getPtr();
+
+    // loop over each element to compute load shape-function integrals
+    for (int iye = 0; iye < nye; iye++) {
+        // bool last_hoop = ihe == nhe - 1;
+        for (int ixe = 0; ixe < nxe; ixe++) {
+            int ielem = nxe * iye + ixe;
+
+            // build element nodes and xpts from assembler
+            int *elem_nodes = &h_conn[Basis::num_nodes * ielem];
+            // get nodal coords of the element
+            T elem_xpts[3 * Basis::num_nodes] = {0};
+            for (int lnode = 0; lnode < Basis::num_nodes; lnode++) {
+                int inode = elem_nodes[lnode];
+                for (int dir = 0; dir < 3; dir++) {
+                    elem_xpts[3 * lnode + dir] = h_xpts[3 * inode + dir];
+                }
+            }
+
+            // compute shell normals
+            T fn[3 * Basis::num_nodes] = {0.0};
+            ShellComputeNodeNormals<T, Basis>(elem_xpts, fn);
+
+            // now do gauss quadrature integral
+            for (int iquad = 0; iquad < Quadrature::num_quad_pts; iquad++) {
+                T pt[2];
+                T weight = Quadrature::getQuadraturePoint(iquad, pt);
+
+                // interp x,y,z to the quadrature point (using element basis functions)
+                T xpt[3] = {0};
+                Basis::template interpFields<3, 3>(pt, elem_xpts, xpt);
+
+                // compute J = d(x,y,z)/dxi,deta
+                T J = getDetXd<T, Basis>(pt, elem_xpts, fn);
+
+                // compute load magnitudes at the quadrature point
+                // T M_PI = 3.141592653589723846;
+                T mag = load_mag * sin(M_PI * mx * xpt[0] / Lx) * sin(M_PI * my * xpt[1] / Ly);
+
+                // compute element basis functions at the quadpt (for nodal load distribution)
+                T N[Basis::num_nodes] = {0.0};
+                Basis::getBasis(pt, N);
+
+                // now loop over each node to distribute load integral among nodes
+                for (int lnode = 0; lnode < Basis::num_nodes; lnode++) {
+                    int inode = elem_nodes[lnode];
+                    T nodal_mag = mag * N[lnode] * weight * J;
+
+                    // (temp debug) add small in-plane loads too (for testing membrane response of
+                    // HR)
+                    // my_loads[vpn * inode + offset] += 0.01 * nodal_mag;
+                    // my_loads[vpn * inode + offset + 1] += 0.01 * nodal_mag;
+
+                    // add to each node now using element shape functions
+                    my_loads[vpn * inode + offset + 2] += nodal_mag;
+                }  // end of nodal distribution loop
+            }      // end of quadpt loop
+
+        }  // end of x element loop
+    }      // end of hoop element loop
+
     return my_loads;
 }
 
@@ -895,7 +986,7 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
     int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
     int vpn = Phys::vars_per_node;
 
-    T dx = L / (nnx-1);
+    T dx = L / (nnx - 1);
     T dth = 2 * M_PI / nnh;
 
     int num_dof = Phys::vars_per_node * num_nodes;
@@ -909,9 +1000,9 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
             int ielem = nxe * ihe + ixe;
 
             // build element nodes
-            int elem_nodes[Basis::num_nodes] = { 0 };
+            int elem_nodes[Basis::num_nodes] = {0};
             // get nodal coords of the element
-            T elem_xpts[3 * Basis::num_nodes] = { 0 };
+            T elem_xpts[3 * Basis::num_nodes] = {0};
             for (int lnode = 0; lnode < n * n; lnode++) {
                 int lx = lnode % n, lh = lnode / n;
                 int ix = order * ixe + lx, ih = order * ihe + lh;
@@ -920,12 +1011,12 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
                 T node_pt[2];
                 Basis::getNodePoint(lnode, node_pt);
                 T xi = node_pt[0], eta = node_pt[1];
-                
+
                 // higher-order nodes
                 int ix_corner = (ix / order) * order, ih_corner = (ih / order) * order;
                 // int ix_local = ix % order, ih_local = ih % order;
-                if (lx == n-1) ix_corner -= order;
-                if (lh == n-1) ih_corner -= order; // so x0, x1 same for whole element, etc.
+                if (lx == n - 1) ix_corner -= order;
+                if (lh == n - 1) ih_corner -= order;  // so x0, x1 same for whole element, etc.
                 // physical element corners
                 T x0 = dx * ix_corner, x1 = dx * (ix_corner + (n - 1));
                 T th0 = dth * ih_corner, th1 = dth * (ih_corner + (n - 1));
@@ -934,13 +1025,15 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
                 T th = 0.5 * (1.0 - eta) * th0 + 0.5 * (1.0 + eta) * th1;
 
                 // if (ielem < 20) {
-                //     printf("node %d: x0 %.4e to x1 %.4e with x %.4e, th %.4e\n", nnx * ih + ix, x0, x1, elem_xpts[3 * lnode], th);
-                //     printf("\txi %.4e, eta %.4e\n", xi, eta);
+                //     printf("node %d: x0 %.4e to x1 %.4e with x %.4e, th %.4e\n", nnx * ih + ix,
+                //     x0, x1, elem_xpts[3 * lnode], th); printf("\txi %.4e, eta %.4e\n", xi, eta);
                 // }
                 elem_xpts[3 * lnode + 1] = R * sin(th);
                 elem_xpts[3 * lnode + 2] = R * cos(th);
 
-                if (ih == nnh) ih = 0; // hoop closes back on itself // only put here otherwise nodes not quite right for closing loop elems
+                if (ih == nnh)
+                    ih = 0;  // hoop closes back on itself // only put here otherwise nodes not
+                             // quite right for closing loop elems
                 elem_nodes[lnode] = nnx * ih + ix;
             }
 
@@ -952,7 +1045,7 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
             Basis::template interpFieldsGrad<3, 3>(_pt, elem_xpts, dXdxi, dXdeta);
 
             // compute shell normals
-            T fn[3 * Basis::num_nodes] = { 0.0 };
+            T fn[3 * Basis::num_nodes] = {0.0};
             ShellComputeNodeNormals<T, Basis>(elem_xpts, fn);
 
             // if (ielem < 10) {
@@ -974,8 +1067,8 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
                 T weight = Quadrature::getQuadraturePoint(iquad, pt);
 
                 // interp x,y,z to the quadrature point (using element basis functions)
-                T xpt[3] = { 0 };
-                Basis::template interpFields<3,3>(pt, elem_xpts, xpt);
+                T xpt[3] = {0};
+                Basis::template interpFields<3, 3>(pt, elem_xpts, xpt);
 
                 // compute J = d(x,y,z)/dxi,deta
                 T J = getDetXd<T, Basis>(pt, elem_xpts, fn);
@@ -987,13 +1080,14 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
                 // T z_hat = xpt[2] / R;
                 T th = atan2(xpt[1], xpt[2]);
                 T th_hat = th / 2 / M_PI;
-                T mag = load_mag * (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
+                T mag = load_mag *
+                        (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
                          0.7 * cos(10 * th + 3.14159 / 6.0 + 5.3 * M_PI * x_hat)) *
                         sin(5 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
                 mag *= weight * J;
 
                 // compute element basis functions at the quadpt (for nodal load distribution)
-                T N[Basis::num_nodes] = { 0.0 };
+                T N[Basis::num_nodes] = {0.0};
                 Basis::getBasis(pt, N);
 
                 // if (ielem < 10) {
@@ -1015,17 +1109,18 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
                     // y and z components of the load
                     my_loads[vpn * inode + offset + 1] += sin(th) * nodal_mag;
                     my_loads[vpn * inode + offset + 2] += cos(th) * nodal_mag;
-                } // end of nodal distribution loop
-            } // end of quadpt loop
+                }  // end of nodal distribution loop
+            }      // end of quadpt loop
 
-        } // end of x element loop
-    } // end of hoop element loop
+        }  // end of x element loop
+    }      // end of hoop element loop
 
     return my_loads;
 }
 
 template <typename T, class Assembler>
-T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, double R, double load_mag) {
+T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, double R,
+                          double load_mag) {
     /* more robust version of cylinder loads */
 
     using Phys = typename Assembler::Phys;
@@ -1061,7 +1156,7 @@ T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, doub
             // build element nodes and xpts from assembler
             int *elem_nodes = &h_conn[Basis::num_nodes * ielem];
             // get nodal coords of the element
-            T elem_xpts[3 * Basis::num_nodes] = { 0 };
+            T elem_xpts[3 * Basis::num_nodes] = {0};
             for (int lnode = 0; lnode < Basis::num_nodes; lnode++) {
                 int inode = elem_nodes[lnode];
                 for (int dir = 0; dir < 3; dir++) {
@@ -1070,7 +1165,7 @@ T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, doub
             }
 
             // compute shell normals
-            T fn[3 * Basis::num_nodes] = { 0.0 };
+            T fn[3 * Basis::num_nodes] = {0.0};
             ShellComputeNodeNormals<T, Basis>(elem_xpts, fn);
 
             // now do gauss quadrature integral
@@ -1079,8 +1174,8 @@ T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, doub
                 T weight = Quadrature::getQuadraturePoint(iquad, pt);
 
                 // interp x,y,z to the quadrature point (using element basis functions)
-                T xpt[3] = { 0 };
-                Basis::template interpFields<3,3>(pt, elem_xpts, xpt);
+                T xpt[3] = {0};
+                Basis::template interpFields<3, 3>(pt, elem_xpts, xpt);
 
                 // compute J = d(x,y,z)/dxi,deta
                 T J = getDetXd<T, Basis>(pt, elem_xpts, fn);
@@ -1089,12 +1184,13 @@ T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, doub
                 T x_hat = xpt[0] / L;
                 T th = atan2(xpt[1], xpt[2]);
                 T th_hat = th / 2 / M_PI;
-                T mag = load_mag * (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
+                T mag = load_mag *
+                        (0.3 * cos(5 * th + 2.0 * M_PI * x_hat) +
                          0.7 * cos(10 * th + 3.14159 / 6.0 + 5.3 * M_PI * x_hat)) *
                         sin(5 * M_PI * x_hat + 0.5 * 2.0 * x_hat * x_hat);
 
                 // compute element basis functions at the quadpt (for nodal load distribution)
-                T N[Basis::num_nodes] = { 0.0 };
+                T N[Basis::num_nodes] = {0.0};
                 Basis::getBasis(pt, N);
 
                 // now loop over each node to distribute load integral among nodes
@@ -1106,11 +1202,11 @@ T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, doub
                     // y and z components of the load
                     my_loads[vpn * inode + offset + 1] += sin(th) * nodal_mag;
                     my_loads[vpn * inode + offset + 2] += cos(th) * nodal_mag;
-                } // end of nodal distribution loop
-            } // end of quadpt loop
+                }  // end of nodal distribution loop
+            }      // end of quadpt loop
 
-        } // end of x element loop
-    } // end of hoop element loop
+        }  // end of x element loop
+    }      // end of hoop element loop
 
     return my_loads;
 }
@@ -1140,7 +1236,9 @@ Assembler createHemisphereAssembler(int nxe, int nhe, double phi, double R, doub
     int vpn = Physics::vars_per_node;
 
     if constexpr (Basis::order > 1) {
-        printf("ERROR TODO, need to add different GP spacing of mid-side nodes for assembler of hemisphere\n");
+        printf(
+            "ERROR TODO, need to add different GP spacing of mid-side nodes for assembler of "
+            "hemisphere\n");
         exit(0);
     }
 
@@ -1314,8 +1412,8 @@ T *getHemisphereLoads(int nxe, int nhe, double phi, double R, double load_mag) {
     */
 
     // if constexpr (Basis::order > 1) {
-    //     printf("ERROR TODO, need to add different GP spacing of mid-side nodes for loads on hemisphere\n");
-    //     exit(0);
+    //     printf("ERROR TODO, need to add different GP spacing of mid-side nodes for loads on
+    //     hemisphere\n"); exit(0);
     // }
 
     // number of nodes per direction
