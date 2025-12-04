@@ -210,6 +210,10 @@ for case in ["cylinder-A100"]:
 
     # ax.set_yticks(list(ax.get_yticks()) + [4e-2])
     # ax.set_yticklabels(list(ax.get_yticks()) + ["4e-2"])
+
+    # ax.grid(True, linestyle='--', alpha=0.75) #which='major',
+    # ax.grid(True, which='minor', linestyle='--', alpha=0.25)
+    # ax.grid(True, which='major', linestyle='--', alpha=0.5)
     
     plt.tight_layout()
     if case == "cylinder":
@@ -315,6 +319,8 @@ plt.legend()
 
 ax.set_xmargin(0.025)
 ax.set_ymargin(0.025)
+
+# ax.grid(True, which='major', linestyle='--', alpha=0.5)
 
 plt.xlabel("Num DOF")
 plt.xscale('log')
