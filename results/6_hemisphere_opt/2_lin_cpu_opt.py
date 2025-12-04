@@ -63,22 +63,19 @@ class LinearPlateAnalysis:
         Lx = np.max(X) - np.min(X)
         nx = int(np.sqrt(X.shape[0]))  # approximate nodes along axis
         dx = Lx / (nx - 1)
-        # dy = dx  # assume uniform spacing in hoop
-        R = 0.5
+        dy = dx  # assume uniform spacing in hoop
         dth = 2.0 * np.pi / nx
-        ds = R * dth
 
         # Identify boundary nodes (ends at X=0 or X=L)
-        # ends = np.logical_or(X == 0.0, X == Lx)
-        # interior = 1.0 - ends  # mask for interior nodes
+        ends = np.logical_or(X == 0.0, X == Lx)
+        interior = 1.0 - ends  # mask for interior nodes
 
         # Cylinder coordinates
-        # R = np.sqrt(Z**2 + Y**2)
-        # TH = np.arctan2(Y, Z)
-        TH = np.arctan2(Z, Y)
+        R = np.sqrt(X**2 + Y**2)
+        TH = np.arctan2(X, Y)
 
         # Base load magnitude
-        load_mag = 5e7 * dx * ds #* interior
+        load_mag = 4e6 * dx * dy * interior
 
         # Correction factor
         load_corr = 2.14 / 3.56
@@ -98,10 +95,8 @@ class LinearPlateAnalysis:
         F = self.fea_assembler.createVec()
 
         # Map quadrature load to y and z components
-        # F[1::6] += np.sin(th) * mag  # y-component
-        # F[2::6] += np.cos(th) * mag  # z-component
-        F[1::6] += np.cos(th) * mag  # y-component
-        F[2::6] += np.sin(th) * mag  # z-component
+        F[1::6] += np.sin(th) * mag  # y-component
+        F[2::6] += np.cos(th) * mag  # z-component
 
         self.fea_assembler.applyBCsToVec(F)
 
@@ -266,10 +261,10 @@ nvars = plate_opt.comm.bcast(nvars)
 
 
 # DEBUG (linear solve)
-# fail, obj, con = plate_opt.evalObjCon(x0)
-# print(f"{obj=} {con=}")
-# plate_opt.writeSolutionVTK()
-# exit()
+fail, obj, con = plate_opt.evalObjCon(x0)
+print(f"{obj=} {con=}")
+plate_opt.writeSolutionVTK()
+exit()
 
 # OPTIMIZATION
 # ======================

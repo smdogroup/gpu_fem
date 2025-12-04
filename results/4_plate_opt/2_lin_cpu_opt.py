@@ -362,5 +362,5 @@ sol = snoptimizer(
 
 print(f"{sol.xStar=}")
 
-if tacs_comm.rank == 0:
-    plate_opt.writeSolutionVTK()
+# if tacs_comm.rank == 0:
+plate_opt.writeSolutionVTK()

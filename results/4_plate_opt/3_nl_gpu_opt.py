@@ -34,7 +34,7 @@ if comm.rank == root:
         rhoKS=100.0,
         safety_factor=1.5,
         load_mag=4e6,
-        omega=0.85,
+        omega=0.3, # much faster
         # nxe=512,
         # nxe=256,
         nxe=128,

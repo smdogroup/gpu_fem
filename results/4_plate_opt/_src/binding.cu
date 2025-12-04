@@ -9,7 +9,7 @@ namespace py = pybind11;
 PYBIND11_MODULE(platemultigrid, m) {
     py::class_<LinearPlateSolver>(m, "LinearPlateSolver")
         // only expose (rhoKS, load_mag)
-        .def(py::init<double, double, double, double, int, int, int, double>(),
+        .def(py::init<double, double, double, double, int, int, int, double, int, double>(),
              py::arg("rhoKS")    = 100.0,
              py::arg("safety_factor") = 1.5,
              py::arg("load_mag") = 100.0,
@@ -17,7 +17,9 @@ PYBIND11_MODULE(platemultigrid, m) {
              py::arg("nxe") = 100,
              py::arg("nx_comp") = 5,
              py::arg("ny_comp") = 5,
-             py::arg("SR") = 50.0)
+             py::arg("SR") = 50.0,
+             py::arg("ORDER") = 8,
+             py::arg("rtol") = 1e-6)
         .def("set_design_variables", &LinearPlateSolver::set_design_variables)
         .def("get_num_vars",         &LinearPlateSolver::get_num_vars)
         .def("get_num_dvs",          &LinearPlateSolver::get_num_dvs)

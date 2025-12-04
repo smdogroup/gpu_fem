@@ -61,7 +61,7 @@ class LinearPlateSolver {
 
     LinearPlateSolver(double rhoKS = 100.0, double safety_factor = 1.5, double load_mag = 100.0,
                       T omega = 1.0, int nxe = 100, int nx_comp = 5, int ny_comp = 5,
-                      double SR = 50.0, int ORDER = 8) {
+                      double SR = 50.0, T rtol = 1e-6, int ORDER = 8) {
         // 1) Build mesh & assembler
         assert(nxe % nx_comp == 0);  // evenly divisible by number of elems_per_comp
         int nye = nxe;
@@ -130,7 +130,7 @@ class LinearPlateSolver {
             auto smoother =
                 new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
             auto prolongation = new Prolongation(assembler);
-            T omegaLS_min = 0.1, omegaLS_max = 2.0;
+            T omegaLS_min = 0.01, omegaLS_max = 4.0;
             auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle,
                              cusparseHandle, omegaLS_min, omegaLS_max);
 
@@ -145,12 +145,13 @@ class LinearPlateSolver {
         // end of startup
 
         // int n_cycles = 200, pre_smooth = 1, post_smooth = 1, print_freq = 3;
-        bool print = true;
-        // bool double_smooth = true;
+        // bool print = true;
+        bool print = false;
+        bool double_smooth = true;
         int nsmooth = 1, ninnercyc = 1, print_freq = 3;
         int n_krylov = 50;
-        T atol = 1e-6, rtol = 1e-6;
-        bool double_smooth = false;  // actually faster sometimes
+        T atol = 1e-6;  //, rtol = 1e-6;
+        // bool double_smooth = false;  // actually faster sometimes
 
         // mg->init_outer_solver(nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq,
         // print);

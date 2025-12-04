@@ -88,18 +88,20 @@ class LinearCylinderSolver {
             int c_nhe = c_nxe;
             double L = 1.0, R = 0.5, thick = L / SR;
             double E = 70e9, nu = 0.3;
-            // double rho = 2500, ys = 350e6;
+            double rho = 2500, ys = 350e6;
             bool imperfection = false;    // option for geom imperfection
             int imp_x = 1, imp_hoop = 1;  // no imperfection this input doesn't matter rn..
-            auto assembler = createCylinderAssembler<Assembler>(c_nxe, c_nhe, L, R, E, nu, thick,
-                                                                imperfection, imp_x, imp_hoop);
+            auto assembler =
+                createCylinderAssembler<Assembler>(c_nxe, c_nhe, L, R, E, nu, thick, imperfection,
+                                                   imp_x, imp_hoop, rho, ys, nx_comp, ny_comp);
+
             constexpr bool compressive = false;
             constexpr int load_case = 3;  // petal and chirp load
             // double nodal_loads = uniform_force; // (don't normalize anymore, integrated out) /
             // (nxe - 1) / (nxe - 1); T *my_loads = getCylinderLoads<T,  Basis, Physics,
             // load_case>(c_nxe, c_nhe, L, R, pressure);
             T *my_loads =
-                getCylinderLoadsRobust<T, Assembler>(assembler, c_nxe, c_nhe, L, R, pressure);
+                getCylinderLoadsRobust<T, Assembler>(assembler, c_nxe, c_nhe, L, R, load_mag);
             printf("making grid with nxe %d\n", c_nxe);
 
             auto &bsr_data = assembler.getBsrData();
@@ -138,7 +140,7 @@ class LinearCylinderSolver {
             auto smoother =
                 new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
             auto prolongation = new Prolongation(assembler);
-            T omegaLS_min = 0.1, omegaLS_max = 2.0;
+            T omegaLS_min = 0.01, omegaLS_max = 4.0;
             auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle,
                              cusparseHandle, omegaLS_min, omegaLS_max);
 
@@ -153,12 +155,13 @@ class LinearCylinderSolver {
         // end of startup
 
         // int n_cycles = 200, pre_smooth = 1, post_smooth = 1, print_freq = 3;
-        bool print = true;
+        // bool print = true;
+        bool print = false;
         // bool double_smooth = true;
         int nsmooth = 1, ninnercyc = 1, print_freq = 3;
         int n_krylov = 50;
         T atol = 1e-6, rtol = 1e-6;
-        bool double_smooth = false;  // actually faster sometimes
+        bool double_smooth = true;  // actually faster sometimes
 
         // mg->init_outer_solver(nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq,
         // print);

@@ -34,13 +34,12 @@ if comm.rank == root:
         rhoKS=100.0,
         safety_factor=1.5,
         load_mag=4e6,
-        omega=0.85,
+        omega=0.3,
         # nxe=512,
         # nxe=256,
         nxe=128,
         nx_comp=ndvs_per_side, # num dvs in x-direction
         ny_comp=ndvs_per_side, # num dvs/comps in y-direction
-        SR=50.0, # slenderness
     )
 
 # init dvs

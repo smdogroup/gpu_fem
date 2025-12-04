@@ -26,13 +26,17 @@ if comm.rank == root:
         rhoKS=100.0,
         safety_factor=1.5,
         load_mag=4e6,
-        omega=0.85,
+        omega=0.3, # much faster
         # nxe=512,
         # nxe=256,
         nxe=128,
         nx_comp=ndvs_per_side, # num dvs in x-direction
         ny_comp=ndvs_per_side, # num dvs/comps in y-direction
         SR=50.0, # slenderness
+        ORDER=8,
+        rtol=1e-6, # almost want to have high rtol like this only later in the optimization tbh..
+        # rtol=1e-5,
+        # rtol=1e-4, # faster optimization, but will it converge though?
     )
 
 # init dvs
