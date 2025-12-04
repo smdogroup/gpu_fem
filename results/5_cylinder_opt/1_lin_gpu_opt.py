@@ -1,7 +1,7 @@
 import sys
 sys.path.append("_src/") # contains gpusolver
 
-import platemultigrid
+import cylindermultigrid
 import numpy as np
 from pyoptsparse import SNOPT, Optimization
 import os
@@ -22,7 +22,7 @@ solver = None
 
 root = 0
 if comm.rank == root:
-    solver = platemultigrid.LinearPlateSolver(
+    solver = cylindermultigrid.LinearPlateSolver(
         rhoKS=100.0,
         safety_factor=1.5,
         load_mag=4e6,

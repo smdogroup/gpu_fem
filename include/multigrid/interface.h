@@ -33,8 +33,10 @@ class TacsMGInterface {
     }
 
     // TODO : have this method write into the inner MG solver..
-    // void set_mg_solver_settings(T rtol_, T atol_, int n_cycles_, int pre_smooth_, int post_smooth_,
-    //                             int print_freq_ = 1, bool double_smooth_ = true, T omega_ = 1.0) {
+    // void set_mg_solver_settings(T rtol_, T atol_, int n_cycles_, int pre_smooth_, int
+    // post_smooth_,
+    //                             int print_freq_ = 1, bool double_smooth_ = true, T omega_ = 1.0)
+    //                             {
     //     rtol = rtol_, atol = atol_, omega = omega_;
     //     n_cycles = n_cycles_, pre_smooth = pre_smooth_, post_smooth = post_smooth_,
     //     print_freq = print_freq_;
@@ -101,13 +103,22 @@ class TacsMGInterface {
         if (this->print) printf("updating assembly\n");
         // for nonlinear case this will change and have to be Galerkin GMG not new coarse grid
         // matrices, TBD on that though
-        for (int ilevel = 0; ilevel < mg.getNumLevels(); ilevel++) {
-            auto &res = mg.grids[ilevel].d_temp_vec;
-            auto &kmat = mg.grids[ilevel].Kmat;
-            auto &i_assembler = mg.grids[ilevel].assembler;
-            i_assembler.add_jacobian(res, kmat);
-            i_assembler.apply_bcs(kmat);
-        }
+        // just do top levels, MG will do other levels
+        int ilevel = 0;
+        // auto &res = mg.grids[ilevel].d_temp_vec;
+        auto &kmat = mg.grids[ilevel].Kmat;
+        auto &i_assembler = mg.grids[ilevel].assembler;
+        i_assembler.add_jacobian_fast(kmat);
+        i_assembler.apply_bcs(kmat);
+
+        // for (int ilevel = 0; ilevel < mg.getNumLevels(); ilevel++) {
+        //     auto &res = mg.grids[ilevel].d_temp_vec;
+        //     auto &kmat = mg.grids[ilevel].Kmat;
+        //     auto &i_assembler = mg.grids[ilevel].assembler;
+        //     i_assembler.add_jacobian(res, kmat);
+        //     i_assembler.apply_bcs(kmat);
+        // }
+        // redundant
 
         // additional assembly steps like update factor, smoother, etc.
         mg.update_after_assembly(this->vars);

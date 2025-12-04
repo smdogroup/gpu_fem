@@ -8,6 +8,14 @@ import os
 import argparse
 from mpi4py import MPI
 
+def load_design(filename):
+    with open(filename) as f:
+        lines = f.readlines()[1:]  # skip first line (mass/ksfail)
+    return np.array([float(line.split()[1]) for line in lines])
+
+# load linear optimal design..
+lin_opt_design = load_design("out/lin_gpu_opt.txt")
+
 # ndvs_per_side = 4
 # ndvs_per_side = 16
 ndvs_per_side = 32
@@ -22,7 +30,7 @@ solver = None
 
 root = 0
 if comm.rank == root:
-    solver = platemultigrid.LinearPlateSolver(
+    solver = platemultigrid.NonlinearPlateSolver(
         rhoKS=100.0,
         safety_factor=1.5,
         load_mag=4e6,
@@ -40,7 +48,8 @@ ndvs = None
 if comm.rank == root:
     ndvs = solver.get_num_dvs()
 ndvs = comm.bcast(ndvs, root=root)
-x0 = np.array([2e-2]*ndvs)
+
+x0 = lin_opt_design.copy()
 
 # debug writing DVs to not same values..
 # solver.set_design_variables(x0)
@@ -118,6 +127,7 @@ def get_function_grad(xdict, funcs):
 
     # print(f"{sens=}")
     return sens, False
+
 
 opt_problem = Optimization("tuning-fork", get_functions)
 opt_problem.addVarGroup(

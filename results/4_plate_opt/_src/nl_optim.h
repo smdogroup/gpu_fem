@@ -13,6 +13,11 @@
 #include "element/shell/mitc_shell.h"
 #include "element/shell/physics/isotropic_shell.h"
 
+// new nonlinear solvers
+#include "solvers/nonlinear_static/continuation.h"
+#include "solvers/nonlinear_static/inexact_newton.h"
+#include "solvers/nonlinear_static/nl_interface.h"
+
 // multigrid imports
 #include "multigrid/grid.h"
 #include "multigrid/utils/fea.h"
@@ -31,7 +36,7 @@
 
 // copied and modified from ../uCRM/_src/optim.h (uCRM optimization example)
 
-class LinearPlateSolver {
+class NonlinearPlateSolver {
    public:
     using T = double;
     // FEM typedefs
@@ -55,13 +60,21 @@ class LinearPlateSolver {
     using KMG = MultilevelKcycleSolver<GRID, CoarseSolver, TwoLevelSolve, KrylovSolve>;
     using StructSolver = TacsMGInterface<T, Assembler, KMG>;
 
+    // build the inexact newton + outer continuation solver
+    using Mat = BsrMat<DeviceVec<T>>;
+    using Vec = DeviceVec<T>;
+    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG>;
+    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
+
+    using StructSolver = TACSNLInterface<T, Assembler, KMG, NL>;
+
     // functions
     using DMass = Mass<T, DeviceVec>;
     using DKSFail = KSFailure<T, DeviceVec>;
 
-    LinearPlateSolver(double rhoKS = 100.0, double safety_factor = 1.5, double load_mag = 100.0,
-                      T omega = 1.0, int nxe = 100, int nx_comp = 5, int ny_comp = 5,
-                      double SR = 50.0, int ORDER = 8) {
+    NonlinearPlateSolver(double rhoKS = 100.0, double safety_factor = 1.5, double load_mag = 100.0,
+                         T omega = 1.0, int nxe = 100, int nx_comp = 5, int ny_comp = 5,
+                         double SR = 50.0, int ORDER = 8) {
         // 1) Build mesh & assembler
         assert(nxe % nx_comp == 0);  // evenly divisible by number of elems_per_comp
         int nye = nxe;
@@ -156,7 +169,6 @@ class LinearPlateSolver {
         // print);
         mg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega,
                               atol, rtol, print_freq, print, double_smooth);
-        solver = new StructSolver(*mg, print);
 
         // get struct loads on finest grid
         auto fine_grid = mg->grids[0];
@@ -177,6 +189,14 @@ class LinearPlateSolver {
 
         dvs_changed = true;
         first_solve = true;
+
+        // create nonlinear solver
+        // -------------------------
+        inner_solver = new INK(cublasHandle, assembler, mg->grids[0].kmat, fine_loads, kmg);
+        bool use_predictor = true, debug = false;
+        // bool use_predictor = false, debug = false;
+        nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
+        solver = new StructSolver(*nl_solver, assembler, *mg, mg->grids[0].d_defect, print);
     }
 
     void set_design_variables(const std::vector<T> &dvs) {
@@ -270,6 +290,9 @@ class LinearPlateSolver {
 
     cublasHandle_t cublasHandle = NULL;
     cusparseHandle_t cusparseHandle = NULL;
+
+    INK *inner_solver;
+    NL *nl_solver;
 
     KMG *mg;  // multigrid object
 
