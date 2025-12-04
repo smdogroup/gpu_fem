@@ -26,14 +26,27 @@ ndvs_per_side = 32
 solver = platemultigrid.NonlinearPlateSolver(
     rhoKS=100.0,
     safety_factor=1.5,
-    load_mag=3000.0,
-    omega=0.85,
-    nxe=512,
+    load_mag=4e6, # original loads from linear case.., gonna lead to NL deflection?
+    # load_mag=8e6,
+    # load_mag=2e7,
+    # load_mag=8e7,
+    omega=0.3, # much faster than 0.85 usually..
+    # nxe=512,
     # nxe=256,
     # nxe=128,
+    # Lx=1.0,
+    # Lx=2.0, # both dimensions
+    # Lx=4.0,
+    Lx=8.0,
+    nxe=64,
     nx_comp=ndvs_per_side, # num dvs in x-direction
     ny_comp=ndvs_per_side, # num dvs/comps in y-direction
     # SR=50.0, # slenderness
+    ORDER=8,
+    # rtol=1e-5,
+    # rtol=1e-4, # faster optimization, but will it converge though?
+    # print=True, # always on for these kinds of tests..
+    print=False,
 )
 
 # init dvs

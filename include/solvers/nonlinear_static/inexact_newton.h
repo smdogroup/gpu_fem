@@ -270,11 +270,13 @@ class InexactNewtonSolver {
         //    optLoadScale = (Fe^T dUi + Fi^T dUe) / (-2 Fe^T dUe); where dUi = Kinv * Fi, dUe =
         //    Kinv*Fe
         // first compute the norms of state vec and ext force
+        printf("compute optimal restart\n");
         T state_nrm;
         CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, state.getPtr(), 1, &state_nrm));
         T Fe_nrm;
         CHECK_CUBLAS(cublasDnrm2(cublasHandle, nvars, loads.getPtr(), 1, &Fe_nrm));
         Fe_nrm *= lambda;
+        printf("\t state_nrm %.4e, Fe_nrm %.4e\n", state_nrm, Fe_nrm);
 
         bool restart_design = false;
         if (state_nrm > 0.0 and Fe_nrm > 0.0) {

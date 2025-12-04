@@ -155,8 +155,8 @@ class LinearCylinderSolver {
         // end of startup
 
         // int n_cycles = 200, pre_smooth = 1, post_smooth = 1, print_freq = 3;
-        // bool print = true;
-        bool print = false;
+        bool print = true;
+        // bool print = false;
         // bool double_smooth = true;
         int nsmooth = 1, ninnercyc = 1, print_freq = 3;
         int n_krylov = 50;

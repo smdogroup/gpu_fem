@@ -17,25 +17,37 @@ ndvs_per_side = 32
 solver = platemultigrid.LinearPlateSolver(
     rhoKS=100.0,
     safety_factor=1.5,
-    load_mag=3000.0,
-    omega=0.85,
-    nxe=512,
+    load_mag=4e6,
+    omega=0.3, # much faster
+    # omega=0.85,
+    # nxe=512,
     # nxe=256,
     # nxe=128,
+    nxe=64,
     nx_comp=ndvs_per_side, # num dvs in x-direction
     ny_comp=ndvs_per_side, # num dvs/comps in y-direction
     # SR=50.0, # slenderness
+    ORDER=8,
+    # ORDER=4,
+    rtol=1e-6, # almost want to have high rtol like this only later in the optimization tbh..
+    # Lx=1.0,
+    # Lx=2.0, # both dimensions
+    # Lx=4.0,
+    Lx=8.0,
+    # rtol=1e-5,
+    # rtol=1e-4, # faster optimization, but will it converge though?
+    print=True, # always on for these kinds of tests..
 )
 
 # init dvs
 ndvs = solver.get_num_dvs()
 # x0 = np.array([3e-2]*ndvs)
-x0 = np.array([4e-3]*ndvs) # very slender
+x0 = np.array([2e-2]*ndvs) # very slender
 # x0 = np.array([2e-3] * ndvs)
 # x0 = np.array([1e-3]*ndvs) # very slender
 
 # debug writing DVs to not same values..
-solver.set_design_variables(x0)
+# solver.set_design_variables(x0)
 solver.solve()
 ksfail = solver.evalFunction("ksfailure")
 print(f"{ksfail=:.2e}")

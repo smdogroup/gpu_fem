@@ -27,7 +27,8 @@ class NonlinearContinuationSolver {
     // need func to set new RHS sometimes?
     bool solve(Vec &u_inout, T lambda0 = 0.2, T inner_atol = 1e-8, T lambdaf = 1.0,
                T inner_crtol = 1e-3, T inner_frtol = 1e-8, int N_STEPS = 20) {
-        
+
+
         // basic initialization
         bool fail = true;
         u_inout.copyValuesTo(state);  // totally permuted

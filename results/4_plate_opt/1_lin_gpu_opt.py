@@ -25,16 +25,22 @@ if comm.rank == root:
     solver = platemultigrid.LinearPlateSolver(
         rhoKS=100.0,
         safety_factor=1.5,
-        load_mag=4e6,
+        load_mag=4e6, # V1 was this.. but that doesn't lead to significant NL plate deflection in optimal design
+        # load_mag=8e6, # try double it.. so less slender? think about physics here..
         omega=0.3, # much faster
         # nxe=512,
         # nxe=256,
         nxe=128,
+        # nxe=64,
         nx_comp=ndvs_per_side, # num dvs in x-direction
         ny_comp=ndvs_per_side, # num dvs/comps in y-direction
-        SR=50.0, # slenderness
+        # SR=50.0, # slenderness
         ORDER=8,
+        # ORDER=4,
         rtol=1e-6, # almost want to have high rtol like this only later in the optimization tbh..
+        # Lx=1.0,
+        # Lx=4.0, # both dimensions increased to give more deflection at NL case...
+        Lx=8.0,
         # rtol=1e-5,
         # rtol=1e-4, # faster optimization, but will it converge though?
     )
@@ -44,16 +50,16 @@ ndvs = None
 if comm.rank == root:
     ndvs = solver.get_num_dvs()
 ndvs = comm.bcast(ndvs, root=root)
-x0 = np.array([2e-2]*ndvs)
+x0 = np.array([5e-2]*ndvs)
 
-# debug writing DVs to not same values..
+
+# # debug writing DVs to not same values..
 # solver.set_design_variables(x0)
 # solver.solve()
 # mass = solver.evalFunction("mass")
 # ksfail = solver.evalFunction("ksfailure")
 # print(f"{mass=:.4e} {ksfail=:.4e}")
 # solver.writeSolution("out/plate_init.vtk")
-
 # # try setting values again, check gradient
 # mass_grad = solver.evalFunctionSens("mass")
 # ksfail_grad = solver.evalFunctionSens("ksfailure")

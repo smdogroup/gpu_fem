@@ -432,7 +432,7 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
 
                 T r = sqrt(x * x + y * y);
                 T th = atan2(y, x);
-                T nodal_load = load_mag * sin(5.0 * PI * r) * cos(4.0 * th);
+                T nodal_load = load_mag * sin(5.0 * PI * r / Lx) * cos(4.0 * th);
                 // somehow need to scale by local dGP area though no?
                 nodal_load *= weight * J;
 

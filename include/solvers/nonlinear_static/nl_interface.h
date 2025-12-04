@@ -13,28 +13,28 @@ class TACSNLInterface {
     // using Mat = typename Assembler::template MatType<Vec>;
     using MyFunction = typename Assembler::MyFunction;
 
-    TacsMGInterface(Continuation &nl_solver_, Assembler &assembler_, LinearSolver &mg_,
-                    Vec &struct_loads, bool print = true, bool include_adjoint_vars = true)
-        : nl_solver(nl_solver),
+    TACSNLInterface(cublasHandle_t &cublasHandle_, Continuation *nl_solver_, Assembler &assembler_, LinearSolver *mg_,
+                    bool print = true, bool include_adjoint_vars = true)
+        : cublasHandle(cublasHandle_),
+          nl_solver(nl_solver_),
           assembler(assembler_),
           mg(mg_),
           include_adjoint_vars(include_adjoint_vars),
           print(print) {
         // create vectors
-        loads = assembler.createVarsVec();
+        // loads = assembler.createVarsVec();
         vars = assembler.createVarsVec();
         res = assembler.createVarsVec();
         soln = assembler.createVarsVec();
         rhs = assembler.createVarsVec();
 
         // copy loads here
-        struct_loads.copyValuesTo(loads);
-        this->assembler.apply_bcs(this->loads);
+        // struct_loads.copyValuesTo(loads);
+        // this->assembler.apply_bcs(this->loads);
 
         if (include_adjoint_vars) {
             dfdu = assembler.createVarsVec();
             psi = assembler.createVarsVec();
-            CHECK_CUBLAS(cublasCreate(&cublasHandle));
         }
     }
 
@@ -59,17 +59,20 @@ class TACSNLInterface {
         return func.value;
     }
 
-    void set_loads(Vec &struct_loads) {
-        // set constant loads in
-        this->loads()
-    }
+    // void set_loads(Vec &struct_loads) {
+    //     // set constant loads in
+    //     this->loads()
+    // }
 
-    void solve() {
+    bool solve() {
+
         // do nonlinear continuation solve
-        this->nl_solver.solve(this->vars);  // inout updates the vars
+        bool fail = this->nl_solver->solve(this->vars);  // inout updates the vars
 
         // set new variables into assembler (for output function evals)
         this->assembler.set_variables(this->vars);
+
+        return fail;
     }
 
     void copy_solution_in(Vec &soln_in) {
@@ -82,33 +85,14 @@ class TACSNLInterface {
     void set_design_variables(Vec &x) {
         this->resetSoln();
         this->assembler.set_design_variables(x);
-        this->mg.set_design_variables(x);
-        this->_update_assembly();
+        this->mg->set_design_variables(x);
+        // this->_update_assembly();
     }
 
-    void _update_assembly() {
-        /* update kmat with new design */
-        if (this->print) printf("updating assembly\n");
-        // for nonlinear case this will change and have to be Galerkin GMG not new coarse grid
-        // matrices, TBD on that though
-        int ilevel = 0;
-        // auto &res = mg.grids[ilevel].d_temp_vec;
-        auto &kmat = mg.grids[ilevel].Kmat;
-        auto &i_assembler = mg.grids[ilevel].assembler;
-        i_assembler.add_jacobian_fast(kmat);
-        i_assembler.apply_bcs(kmat);
-        // for (int ilevel = 0; ilevel < mg.getNumLevels(); ilevel++) {
-        //     auto &res = mg.grids[ilevel].d_temp_vec;
-        //     auto &kmat = mg.grids[ilevel].Kmat;
-        //     auto &i_assembler = mg.grids[ilevel].assembler;
-        //     i_assembler.add_jacobian(res, kmat);
-        //     i_assembler.apply_bcs(kmat);
-        // }
-        // redundant
-
-        // additional assembly steps like update factor, smoother, etc.
-        this->mg.update_after_assembly(this->vars);
-    }
+    // void _update_assembly() {
+    //     /* update kmat with new design */
+    //     // no need to do this => handled by internal inexact_newton solver now
+    // }
 
     void solve_adjoint(MyFunction &func, const Vec *adj_rhs = nullptr) {
         /* adjoint analysis for a single function */
@@ -131,11 +115,11 @@ class TACSNLInterface {
             assembler.apply_bcs(dfdu);  // zero RHS part too?
 
             // make this more general later.. solves adjoint problem here
-            mg.grids[0].zeroSolution();
-            mg.grids[0].setDefect(this->dfdu);
+            mg->grids[0].zeroSolution();
+            mg->grids[0].setDefect(this->dfdu);
             // bool inner_print = false, inner_time = false;
-            mg.solve();
-            mg.grids[0].getSolution(this->psi);
+            mg->solve();
+            mg->grids[0].getSolution(this->psi);
             assembler.apply_bcs(psi);  // dirichlet boundary conditions
         }
 
@@ -150,12 +134,12 @@ class TACSNLInterface {
     }
 
     void free() {
-        loads.free();
+        // loads.free();
         soln.free();
         res.free();
         vars.free();
         rhs.free();
-        mg.free();
+        mg->free();
         if (include_adjoint_vars) {
             dfdu.free();
             psi.free();
@@ -163,12 +147,12 @@ class TACSNLInterface {
     }
 
    protected:
-    Continuation nl_solver;
+    Continuation *nl_solver;
     Assembler assembler;
-    LinearSolver mg;  // usually multigrid (need it separately for linear adjoint solves)
-    Vec loads, soln, res, vars, rhs;
+    LinearSolver *mg;  // usually multigrid (need it separately for linear adjoint solves)
+    Vec soln, res, vars, rhs;
     Vec dfdu, psi;
     bool include_adjoint_vars;
-    cublasHandle_t cublasHandle = NULL;
+    cublasHandle_t &cublasHandle;
     bool print;
 };

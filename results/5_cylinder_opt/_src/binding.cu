@@ -9,7 +9,7 @@ namespace py = pybind11;
 PYBIND11_MODULE(cylindermultigrid, m) {
     py::class_<LinearCylinderSolver>(m, "LinearCylinderSolver")
         // only expose (rhoKS, load_mag)
-        .def(py::init<double, double, double, double, int, int, int, double>(),
+        .def(py::init<double, double, double, double, int, int, int, double, double>(),
              py::arg("rhoKS")    = 100.0,
              py::arg("safety_factor") = 1.5,
              py::arg("load_mag") = 100.0,
@@ -17,7 +17,8 @@ PYBIND11_MODULE(cylindermultigrid, m) {
              py::arg("nxe") = 100,
              py::arg("nx_comp") = 5,
              py::arg("ny_comp") = 5,
-             py::arg("SR") = 50.0)
+             py::arg("SR") = 50.0,
+             py::arg("ORDER") = 1)
         .def("set_design_variables", &LinearCylinderSolver::set_design_variables)
         .def("get_num_vars",         &LinearCylinderSolver::get_num_vars)
         .def("get_num_dvs",          &LinearCylinderSolver::get_num_dvs)

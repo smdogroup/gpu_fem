@@ -44,7 +44,7 @@ class NonlinearPlateSolver {
     using Director = LinearizedRotation<T>;
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Data = ShellIsotropicData<T, false>;
-    using Physics = IsotropicShell<T, Data, false>;
+    using Physics = IsotropicShell<T, Data, true>; // true for nonlinear
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
 
@@ -58,14 +58,12 @@ class NonlinearPlateSolver {
     using KrylovSolve = PCGSolver<T, GRID>;
     using TwoLevelSolve = MultigridTwoLevelSolver<GRID>;
     using KMG = MultilevelKcycleSolver<GRID, CoarseSolver, TwoLevelSolve, KrylovSolve>;
-    using StructSolver = TacsMGInterface<T, Assembler, KMG>;
 
     // build the inexact newton + outer continuation solver
     using Mat = BsrMat<DeviceVec<T>>;
     using Vec = DeviceVec<T>;
     using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG>;
     using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
-
     using StructSolver = TACSNLInterface<T, Assembler, KMG, NL>;
 
     // functions
@@ -74,7 +72,7 @@ class NonlinearPlateSolver {
 
     NonlinearPlateSolver(double rhoKS = 100.0, double safety_factor = 1.5, double load_mag = 100.0,
                          T omega = 1.0, int nxe = 100, int nx_comp = 5, int ny_comp = 5,
-                         double SR = 50.0, int ORDER = 8) {
+                         double SR = 50.0, int ORDER = 8, double Lx = 1.0, bool print = false) {
         // 1) Build mesh & assembler
         assert(nxe % nx_comp == 0);  // evenly divisible by number of elems_per_comp
         int nye = nxe;
@@ -99,7 +97,7 @@ class NonlinearPlateSolver {
         for (int c_nxe = nxe; c_nxe >= nxe_min; c_nxe /= 2) {
             // make the assembler
             int c_nye = c_nxe;
-            double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+            double Ly = Lx, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
             int nxe_per_comp = c_nxe / nx_comp, nye_per_comp = c_nye / ny_comp;
             auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick,
                                                              rho, ys, nxe_per_comp, nye_per_comp);
@@ -159,6 +157,7 @@ class NonlinearPlateSolver {
 
         // int n_cycles = 200, pre_smooth = 1, post_smooth = 1, print_freq = 3;
         // bool print = true;
+        // bool print = false;
         bool double_smooth = true;
         int nsmooth = 1, ninnercyc = 1, print_freq = 3;
         int n_krylov = 50;
@@ -173,7 +172,8 @@ class NonlinearPlateSolver {
         // get struct loads on finest grid
         auto fine_grid = mg->grids[0];
         d_loads = DeviceVec<T>(fine_grid.N);
-        mg->grids[0].getDefect(d_loads);
+        bool perm_out = true;
+        mg->grids[0].getDefect(d_loads, perm_out);
 
         // initialize any vecs needed at this level
         auto &assembler = mg->grids[0].assembler;
@@ -183,20 +183,20 @@ class NonlinearPlateSolver {
         ndvs = assembler.get_num_dvs();
         d_dvs = DeviceVec<T>(ndvs, /*initial=*/0.02);
 
+        // fine grid, create the nonlinear solvers and NL solver interface
+        // -------------------------
+        inner_solver = new INK(cublasHandle, assembler, mg->grids[0].Kmat, d_loads, mg);
+        bool use_predictor = true, debug = false;
+        // bool use_predictor = false, debug = false;
+        nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
+        solver = new StructSolver(cublasHandle, nl_solver, assembler, mg, print);
+
         // 5) Functions
         mass = std::make_unique<DMass>();
         ksfail = std::make_unique<DKSFail>(rhoKS, safety_factor);
 
         dvs_changed = true;
         first_solve = true;
-
-        // create nonlinear solver
-        // -------------------------
-        inner_solver = new INK(cublasHandle, assembler, mg->grids[0].kmat, fine_loads, kmg);
-        bool use_predictor = true, debug = false;
-        // bool use_predictor = false, debug = false;
-        nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
-        solver = new StructSolver(*nl_solver, assembler, *mg, mg->grids[0].d_defect, print);
     }
 
     void set_design_variables(const std::vector<T> &dvs) {
@@ -229,11 +229,12 @@ class NonlinearPlateSolver {
     int get_num_dvs() const { return ndvs; }
     void writeSolution(const std::string &filename) const { solver->writeSoln(filename); }
 
-    void solve() {
+    bool solve() {
+        bool fail = false;
         if (dvs_changed) {
             printf("design changed, new solve\n");
 
-            solver->solve(d_loads);
+            fail = solver->solve();
             num_lin_solves++;
             solver->copy_solution_out(soln);
         } else {
@@ -241,6 +242,7 @@ class NonlinearPlateSolver {
             printf("design didn't change, reload vals\n");
             solver->copy_solution_in(soln);
         }
+        return fail;
     }
 
     T evalFunction(const std::string &name) {

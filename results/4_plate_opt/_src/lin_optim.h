@@ -61,7 +61,8 @@ class LinearPlateSolver {
 
     LinearPlateSolver(double rhoKS = 100.0, double safety_factor = 1.5, double load_mag = 100.0,
                       T omega = 1.0, int nxe = 100, int nx_comp = 5, int ny_comp = 5,
-                      double SR = 50.0, T rtol = 1e-6, int ORDER = 8) {
+                      double SR = 50.0, T rtol = 1e-6, int ORDER = 8, double Lx = 1.0,
+                      bool print = false) {
         // 1) Build mesh & assembler
         assert(nxe % nx_comp == 0);  // evenly divisible by number of elems_per_comp
         int nye = nxe;
@@ -86,7 +87,7 @@ class LinearPlateSolver {
         for (int c_nxe = nxe; c_nxe >= nxe_min; c_nxe /= 2) {
             // make the assembler
             int c_nye = c_nxe;
-            double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+            double Ly = Lx, E = 70e9, nu = 0.3, thick = Lx / SR, rho = 2500, ys = 350e6;
             int nxe_per_comp = c_nxe / nx_comp, nye_per_comp = c_nye / ny_comp;
             auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick,
                                                              rho, ys, nxe_per_comp, nye_per_comp);
@@ -118,7 +119,8 @@ class LinearPlateSolver {
 
             // assemble the kmat
             auto start0 = std::chrono::high_resolution_clock::now();
-            assembler.add_jacobian(res, kmat);
+            // assembler.add_jacobian(res, kmat);
+            assembler.add_jacobian_fast(kmat);
             // assembler.apply_bcs(res);
             assembler.apply_bcs(kmat);
             CHECK_CUDA(cudaDeviceSynchronize());
@@ -131,6 +133,7 @@ class LinearPlateSolver {
                 new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
             auto prolongation = new Prolongation(assembler);
             T omegaLS_min = 0.01, omegaLS_max = 4.0;
+            // T omegaLS_min = 0.1, omegaLS_max = 2.0;
             auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle,
                              cusparseHandle, omegaLS_min, omegaLS_max);
 
@@ -146,8 +149,9 @@ class LinearPlateSolver {
 
         // int n_cycles = 200, pre_smooth = 1, post_smooth = 1, print_freq = 3;
         // bool print = true;
-        bool print = false;
+        // bool print = false;
         bool double_smooth = true;
+        // bool double_smooth = false;
         int nsmooth = 1, ninnercyc = 1, print_freq = 3;
         int n_krylov = 50;
         T atol = 1e-6;  //, rtol = 1e-6;
@@ -158,6 +162,8 @@ class LinearPlateSolver {
         mg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega,
                               atol, rtol, print_freq, print, double_smooth);
         solver = new StructSolver(*mg, print);
+
+        // mg->solve();
 
         // get struct loads on finest grid
         auto fine_grid = mg->grids[0];
