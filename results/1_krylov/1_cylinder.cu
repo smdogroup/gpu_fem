@@ -97,7 +97,7 @@ void chebyshev_polynomial_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5
     double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
     nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
     double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderloads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
+    T *my_loads = getCylinderLoads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
     printf("making grid with nxe %d\n", nxe);
 
     // perform multicolor reordering
@@ -227,7 +227,7 @@ void gsmc_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressure = 5
     double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
     nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
     double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderloads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
+    T *my_loads = getCylinderLoads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
     printf("making grid with nxe %d\n", nxe);
 
     // perform multicolor reordering
@@ -353,7 +353,7 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, T pressure = 5.0e7)
     double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
     nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
     double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderloads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
+    T *my_loads = getCylinderLoads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
     printf("making grid with nxe %d\n", nxe);
 
     // perform multicolor reordering
@@ -503,7 +503,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
     nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
     double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderloads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
+    T *my_loads = getCylinderLoads<T,  Basis, Physics, load_case>(nxe, nxe, L, R, nodal_loads);
     printf("making grid with nxe %d\n", nxe);
 
     // perform multicolor reordering
