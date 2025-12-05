@@ -28,8 +28,9 @@ if comm.rank == root:
         # load_mag=5e5,
         # load_mag=1e6,
         # load_mag=2e6,
-        load_mag=4e6, # V1 was this.. but that doesn't lead to significant NL plate deflection in optimal design
+        # load_mag=4e6, # V1 was this.. but that doesn't lead to significant NL plate deflection in optimal design
         # load_mag=8e6, # try double it.. so less slender? think about physics here..
+        load_mag=1.6e7,
         # omega=0.3, # much faster
         omega=0.85,
         # nxe=512,
@@ -40,7 +41,13 @@ if comm.rank == root:
         ny_comp=ndvs_per_side, # num dvs/comps in y-direction
         # SR=50.0, # slenderness
         ORDER=8,
-        in_plane_frac=0.35,
+        # in_plane_frac=0.05,
+        # in_plane_frac=0.1,
+        # in_plane_frac=0.15,
+        # in_plane_frac=0.3,
+        in_plane_frac=0.6,
+        # in_plane_frac=0.25,
+        # in_plane_frac=0.25,
         # ORDER=4,
         # rtol=1e-4,
         rtol=1e-6, # almost want to have high rtol like this only later in the optimization tbh..
@@ -61,18 +68,18 @@ x0 = np.array([3e-2]*ndvs)
 
 
 # # debug writing DVs to not same values..
-# solver.set_design_variables(x0)
-# solver.solve()
-# mass = solver.evalFunction("mass")
-# ksfail = solver.evalFunction("ksfailure")
-# print(f"{mass=:.4e} {ksfail=:.4e}")
-# solver.writeSolution("out/plate_init.vtk")
-# # try setting values again, check gradient
-# mass_grad = solver.evalFunctionSens("mass")
-# ksfail_grad = solver.evalFunctionSens("ksfailure")
-# print(f"{mass_grad=}")
-# print(f"{ksfail_grad=}")
-# exit()
+solver.set_design_variables(x0)
+solver.solve()
+mass = solver.evalFunction("mass")
+ksfail = solver.evalFunction("ksfailure")
+print(f"{mass=:.4e} {ksfail=:.4e}")
+solver.writeSolution("out/plate_init.vtk")
+# try setting values again, check gradient
+mass_grad = solver.evalFunctionSens("mass")
+ksfail_grad = solver.evalFunctionSens("ksfailure")
+print(f"{mass_grad=}")
+print(f"{ksfail_grad=}")
+exit()
 
 
 def get_functions(xdict):
@@ -141,7 +148,7 @@ opt_problem = Optimization("tuning-fork", get_functions)
 opt_problem.addVarGroup(
     "vars",
     ndvs,
-    lower=np.array([5e-3]*ndvs), # TODO : change min of non-struct-masses?
+    lower=np.array([1e-2]*ndvs), # TODO : change min of non-struct-masses?
     upper=np.array([1e2]*ndvs),
     value=x0,
     scale=np.array([1e2]*ndvs),
@@ -175,8 +182,8 @@ snoptimizer = SNOPT(
     options={
         "Print frequency": 1000,
         "Summary frequency": 10000000,
-        "Major feasibility tolerance": 1e-5,
-        "Major optimality tolerance": 1e-3,
+        "Major feasibility tolerance": 1e-6, # 1e-5
+        "Major optimality tolerance": 1e-4, # 1e-4
         "Verify level": verify_level, #-1,
         "Major iterations limit": int(1e4), #1000, # 1000,
         "Minor iterations limit": 150000000,

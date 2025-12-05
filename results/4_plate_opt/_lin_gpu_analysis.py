@@ -20,11 +20,18 @@ solver = platemultigrid.LinearPlateSolver(
     # load_mag=5e5,
     # load_mag=1e6,
     # load_mag=2e6,
-    load_mag=4e6,
+    # load_mag=4e6,
+    # load_mag=8e6,
+    load_mag=1.6e7,
     # omega=0.3, # much faster
     omega=0.85,
     nsmooth=1,
-    in_plane_frac=0.25,
+    # in_plane_frac=0.05,
+    # in_plane_frac=0.1,
+    in_plane_frac=0.6,
+    # in_plane_frac=0.15,
+    # in_plane_frac=0.25,
+    # in_plane_frac=0.25,
     # in_plane_frac=0.75,
     # nsmooth=4,
     # omega=0.85,
@@ -53,9 +60,14 @@ def load_design(filename):
         lines = f.readlines()[1:]  # skip first line (mass/ksfail)
     return np.array([float(line.split()[1]) for line in lines])
 
+# linear optimal
+filename = "out/lin_gpu_opt.txt"
+# nonlinear optimal
+# filename = "out/nl_gpu_opt.txt"
+
 # load linear optimal design..
-if os.path.exists("out/lin_gpu_opt.txt"):
-    lin_opt_design = load_design("out/lin_gpu_opt.txt")
+if os.path.exists(filename):
+    lin_opt_design = load_design(filename)
     x0 = lin_opt_design.copy()
 
 else:

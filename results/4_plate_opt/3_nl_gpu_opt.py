@@ -33,13 +33,24 @@ if comm.rank == root:
     solver = platemultigrid.NonlinearPlateSolver(
         rhoKS=100.0,
         safety_factor=1.5,
-        load_mag=4e6,
+        # load_mag=4e6,
+        # load_mag=8e6,
+        load_mag=1.6e7,
         # omega=0.3, # much faster
         # omega=0.85,
-        in_plane_frac=0.4,
+        # in_plane_frac=0.05,
+        # in_plane_frac=0.1,
+        # in_plane_frac=0.15,
+        # in_plane_frac=0.2,
+        # in_plane_frac=0.25,
+        # in_plane_frac=0.3,
+        in_plane_frac=0.6,
+        # in_plane_frac=0.35,
+        # omega=0.85,
         omega=0.8,
         # nxe=512,
         # nxe=256,
+        # nsmooth=1,
         nsmooth=2,
         Lx=1.0,
         nxe=128,
@@ -138,18 +149,37 @@ def get_function_grad(xdict, funcs):
     # print(f"{sens=}")
     return sens, False
 
+# lower bound linear constraints on lin to NL design (to help speedup optimization)
+# R1 = 0.9
+R1 = 0.95
+# R1 = 1.0
+
+# R2 = R1
 
 opt_problem = Optimization("tuning-fork", get_functions)
 opt_problem.addVarGroup(
     "vars",
     ndvs,
-    lower=x0.copy(), # TODO : change min of non-struct-masses?
+    # lower=np.array([5e-3]*ndvs),
+    lower=np.maximum(x0.copy()*R1**2, np.array([1e-2]*ndvs)), # opted for overall mass cannot decrease constraint instead (this is too restrictive)
     upper=np.array([1e2]*ndvs),
     value=x0,
     scale=np.array([1e2]*ndvs),
 )
 opt_problem.addObj('mass', scale=1e-1)
 opt_problem.addCon("ksfailure", scale=1.0, upper=1.0)
+
+# add linear constraint so that total thicknesses or mass cannot decrease (helps prevent huge mass drop in intermediate optimization)
+# this makes sense as we've only increased stresses everywhere, shouldn't be lighter
+opt_problem.addCon(
+    "linear-thick-sum",
+    lower=np.sum(lin_opt_design)*R1, # >= 95% or 100% prev mass (less restrictive)
+    scale=1e0,
+    linear=True,
+    wrt=["vars"],
+    jac={"vars": np.ones(x0.shape)},
+)
+
 
 # adjacency constraints (linear so reduces size of opt problem)
 # ---------------------
@@ -177,8 +207,8 @@ snoptimizer = SNOPT(
     options={
         "Print frequency": 1000,
         "Summary frequency": 10000000,
-        "Major feasibility tolerance": 1e-5,
-        "Major optimality tolerance": 1e-3,
+        "Major feasibility tolerance": 1e-6, # 1e-5
+        "Major optimality tolerance": 1e-4, # 1e-4
         "Verify level": verify_level, #-1,
         "Major iterations limit": int(1e4), #1000, # 1000,
         "Minor iterations limit": 150000000,

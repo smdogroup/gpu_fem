@@ -15,6 +15,7 @@ def load_design(filename):
 
 # load linear optimal design..
 lin_opt_design = load_design("out/lin_gpu_opt.txt")
+# lin_opt_design = load_design("out/nl_gpu_opt.txt")
 
 # ndvs_per_side = 4
 # ndvs_per_side = 16
@@ -29,8 +30,9 @@ solver = platemultigrid.NonlinearPlateSolver(
     # load_mag=5e5,
     # load_mag=1e6,
     # load_mag=2e6,
-    load_mag=4e6, # original loads from linear case.., gonna lead to NL deflection?
+    # load_mag=4e6, # original loads from linear case.., gonna lead to NL deflection?
     # load_mag=8e6,
+    load_mag=1.6e7,
     # load_mag=2e7,
     # load_mag=8e7,
     omega=0.85,
@@ -38,7 +40,12 @@ solver = platemultigrid.NonlinearPlateSolver(
     # nxe=512,
     # nxe=256,
     # nxe=128,
-    in_plane_frac=0.35,
+    # in_plane_frac=0.05,
+    # in_plane_frac=0.1,
+    in_plane_frac=0.6,
+    # in_plane_frac=0.15,
+    # in_plane_frac=0.25,
+    # in_plane_frac=0.35,
     # in_plane_frac=0.75,
     Lx=1.0,
     # Lx=2.0, # both dimensions

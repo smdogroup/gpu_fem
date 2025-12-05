@@ -546,7 +546,7 @@ T *getPlateNonlinearLoads(int nxe, int nye, double Lx, double Ly, double load_ma
                 my_loads[vpn * inode + offset + 2] += nodal_load;
 
                 // add an obliquue in-plane load.. like shear load with striations
-                T in_plane_load = -0.5 + 0.5 * sin(2.0 * PI * r / Lx);
+                T in_plane_load = -1.0 * sin(PI * r / Lx / 1.414); // should be compressive all along diagonal (shear, radial load)
                 in_plane_load *= weight * J * load_mag * in_plane_frac;
                 // radially aligned in-plane load (want to make sure it's compressive though..)
                 my_loads[vpn * inode + offset + 0] += in_plane_load * cos(th);

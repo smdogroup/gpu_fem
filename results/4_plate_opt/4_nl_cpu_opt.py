@@ -11,7 +11,7 @@ import os
 from tacs import pyTACS, elements, constitutive, functions
 
 
-class LinearPlateAnalysis:
+class NonlinearPlateAnalysis:
     """
     Mass minimization with a von Mises stress constraint
     """
@@ -41,7 +41,8 @@ class LinearPlateAnalysis:
 
             # This is an all-quad mesh, return a quad shell
             transform = None
-            elem = elements.Quad4Shell(transform, con)
+            # elem = elements.Quad4Shell(transform, con)
+            elem = elements.Quad4NonlinearShell(transform, con)
             return elem
 
         # Create pyTACS assembler object
@@ -52,7 +53,24 @@ class LinearPlateAnalysis:
         xpts = self.fea_assembler.Xpts0.getArray()
 
         # Create a static problem with a uniform z load applied to all nodes
-        self.static_problem = self.fea_assembler.createStaticProblem("LinPlate")
+        probOptions = {
+            "printTiming": True,
+            "printLevel": 1,
+        }
+        newtonOptions = {"useEW": True, "MaxLinIters": 10}
+        continuationOptions = {
+            "CoarseRelTol": 1e-3,
+            "InitialStep": 0.2,
+            "UsePredictor": True,
+            "NumPredictorStates": 7,
+        }
+        self.static_problem = FEAAssembler.createStaticProblem("NLPlate", options=probOptions)
+        try:
+            self.static_problem.nonlinearSolver.innerSolver.setOptions(newtonOptions)
+            self.static_problem.nonlinearSolver.setOptions(continuationOptions)
+        except AttributeError:
+            pass
+
 
         X = xpts[0::3]
         Y = xpts[1::3]
@@ -163,13 +181,13 @@ class LinearPlateAnalysis:
             print(func_dict)
 
         # Set the mass as the objective
-        fobj = self.mass_scale * func_dict["LinPlate_mass"]
+        fobj = self.mass_scale * func_dict["uniform_z_load_mass"]
 
         # Set the KS function (the approximate maximum ratio of the
         # von Mises stress to the design stress) so that
         # it is less than or equal to 1.0
         con[0] = (
-            func_dict["LinPlate_ks_failure"]
+            func_dict["uniform_z_load_ks_failure"]
         )  # changed to just return ksfailure
         # ~= 1.0 - max (sigma/design) >= 0
 
@@ -193,7 +211,7 @@ class LinearPlateAnalysis:
         if self.comm.rank == 0:
             g[:] = (
                 self.mass_scale
-                * sens_dict["LinPlate_mass"]["struct"]
+                * sens_dict["uniform_z_load_mass"]["struct"]
                 / self.thickness_scale
             )
         # In-place broadcast of g
@@ -205,7 +223,7 @@ class LinearPlateAnalysis:
         # Set the constraint gradient
         if self.comm.rank == 0:
             A[0][:] = (
-                sens_dict["LinPlate_ks_failure"]["struct"] / self.thickness_scale
+                sens_dict["uniform_z_load_ks_failure"]["struct"] / self.thickness_scale
             )
             
         # In-place broadcast of A[0]
@@ -254,11 +272,9 @@ nvars = plate_opt.comm.bcast(nvars)
 
 
 # DEBUG (linear solve)
-# plate_opt.solve()
-fail, obj, con = plate_opt.evalObjCon(x0)
-print(f"{obj=} {con=}")
-plate_opt.writeSolutionVTK()
-exit()
+# fail, obj, con = plate_opt.evalObjCon(x0)
+# print(f"{obj=} {con=}")
+# plate_opt.writeSolutionVTK()
 
 # OPTIMIZATION
 # ======================
@@ -279,7 +295,7 @@ def get_functions(xdict):
     # print(f"{funcs=}")
 
     comp_names = [f"comp{icomp}" for icomp in range(nvars)]
-    with open("out/lin_cpu_opt.txt", "w") as f:
+    with open("out/nl_cpu_opt.txt", "w") as f:
         f.write(f"{mass=:.4e} {ksfail[0]=:.4e}\n")
         for name, value in zip(comp_names, xarr):
             f.write(f"{name}\t{value:.16e}\n")
@@ -306,11 +322,31 @@ def get_function_grad(xdict, funcs):
     # print(f"{sens=}")
     return sens, False
 
+def load_design(filename):
+    with open(filename) as f:
+        lines = f.readlines()[1:]  # skip first line (mass/ksfail)
+    return np.array([float(line.split()[1]) for line in lines])
 
-opt_problem = Optimization("lin-cpu-opt", get_functions)
+
+# load linear optimal design..
+# ===================================
+lin_opt_design = load_design("out/lin_cpu_opt.txt")
+x0 = lin_opt_design.copy()
+
+# setup opt problem
+# ====================================
+
+# lower bound linear constraints on lin to NL design (to help speedup optimization)
+# R1 = 0.9
+R1 = 0.95
+# R1 = 1.0
+
+
+opt_problem = Optimization("nl-cpu-opt", get_functions)
 opt_problem.addVarGroup(
     "vars",
     nvars,
+    lower=np.maximum(x0.copy()*R1**2, np.array([1e-2]*nvars)), # opted for overall mass cannot decrease constraint instead (this is too restrictive)
     lower=lb, # TODO : change min of non-struct-masses?
     upper=ub,
     value=x0,
@@ -318,6 +354,18 @@ opt_problem.addVarGroup(
 )
 opt_problem.addObj('mass', scale=1.0e-1) # handled internally by TACS opt
 opt_problem.addCon("ksfailure", scale=1.0, upper=1.0)
+
+
+# add linear constraint so that total thicknesses or mass cannot decrease (helps prevent huge mass drop in intermediate optimization)
+# this makes sense as we've only increased stresses everywhere, shouldn't be lighter
+opt_problem.addCon(
+    "linear-thick-sum",
+    lower=np.sum(lin_opt_design)*R1, # >= 95% or 100% prev mass (less restrictive)
+    scale=1e0,
+    linear=True,
+    wrt=["vars"],
+    jac={"vars": np.ones(x0.shape)},
+)
 
 
 # adjacency constraints (linear so reduces size of opt problem)
@@ -346,8 +394,8 @@ snoptimizer = SNOPT(
     options={
         "Print frequency": 1000,
         "Summary frequency": 10000000,
-        "Major feasibility tolerance": 1e-6,
-        "Major optimality tolerance": 1e-4,
+        "Major feasibility tolerance": 1e-5,
+        "Major optimality tolerance": 1e-3,
         "Verify level": verify_level, #-1,
         "Major iterations limit": int(1e4), #1000, # 1000,
         "Minor iterations limit": 150000000,
