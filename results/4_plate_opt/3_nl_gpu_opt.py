@@ -50,8 +50,8 @@ if comm.rank == root:
         omega=0.8,
         # nxe=512,
         # nxe=256,
-        # nsmooth=1,
-        nsmooth=2,
+        nsmooth=1,
+        # nsmooth=2,
         Lx=1.0,
         nxe=128,
         nx_comp=ndvs_per_side, # num dvs in x-direction

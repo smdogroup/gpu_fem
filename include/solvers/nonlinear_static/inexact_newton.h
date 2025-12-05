@@ -16,7 +16,7 @@ class InexactNewtonSolver {
    public:
     InexactNewtonSolver(cublasHandle_t &cublasHandle_, Assembler &assembler_, Mat &kmat_,
                         Vec &loads_, Solver *linear_solver_, T initLinSolveRtol_ = 1e-1,
-                        T linSolveAtol_ = 1e-8, T minLinSolveTol_ = 1e-6, T maxLinSolveTol_ = 0.25)
+                        T linSolveAtol_ = 1e-8, T minLinSolveTol_ = 1e-6, T maxLinSolveTol_ = 0.25, T restart_dlam_ = 1e-2)
         : assembler(assembler_),
           kmat(kmat_),
           loads(loads_),
@@ -36,6 +36,7 @@ class InexactNewtonSolver {
         linSolveAtol = linSolveAtol_;
         minLinSolveTol = minLinSolveTol_;
         maxLinSolveTol = maxLinSolveTol_;
+        restart_dlam = restart_dlam_;
 
         // make res, soln, temp vecs
         res = assembler.createVarsVec();
@@ -302,7 +303,7 @@ class InexactNewtonSolver {
                     "disps\n",
                     ratio);
                 opt_load_scale = init_step;
-            } else if (abs(opt_load_scale - max_lambda) < 1e-2) {
+            } else if (abs(opt_load_scale - max_lambda) < restart_dlam) {
                 // opt load scale is so close to target load scale
                 //  that it's more efficient to just solve to target load scale
                 //  useful when optimization is near complete + design changes small
@@ -436,6 +437,7 @@ class InexactNewtonSolver {
     T initLinSolveRtol, linSolveAtol;
     T failedRtol;
     T minLinSolveTol, maxLinSolveTol;
+    T restart_dlam;
 
     // helper states
     T omega;

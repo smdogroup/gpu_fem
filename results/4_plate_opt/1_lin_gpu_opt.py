@@ -68,18 +68,18 @@ x0 = np.array([3e-2]*ndvs)
 
 
 # # debug writing DVs to not same values..
-solver.set_design_variables(x0)
-solver.solve()
-mass = solver.evalFunction("mass")
-ksfail = solver.evalFunction("ksfailure")
-print(f"{mass=:.4e} {ksfail=:.4e}")
-solver.writeSolution("out/plate_init.vtk")
-# try setting values again, check gradient
-mass_grad = solver.evalFunctionSens("mass")
-ksfail_grad = solver.evalFunctionSens("ksfailure")
-print(f"{mass_grad=}")
-print(f"{ksfail_grad=}")
-exit()
+# solver.set_design_variables(x0)
+# solver.solve()
+# mass = solver.evalFunction("mass")
+# ksfail = solver.evalFunction("ksfailure")
+# print(f"{mass=:.4e} {ksfail=:.4e}")
+# solver.writeSolution("out/plate_init.vtk")
+# # try setting values again, check gradient
+# # mass_grad = solver.evalFunctionSens("mass")
+# # ksfail_grad = solver.evalFunctionSens("ksfailure")
+# # print(f"{mass_grad=}")
+# # print(f"{ksfail_grad=}")
+# exit()
 
 
 def get_functions(xdict):

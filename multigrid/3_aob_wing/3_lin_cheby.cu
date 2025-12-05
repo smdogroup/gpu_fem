@@ -87,8 +87,8 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
     CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
 
     // order of chebyshev polynomial smoother (can do higher for greater smoothing effect)
-    int ORDER = 4;
-    // int ORDER = 8;
+    // int ORDER = 4;
+    int ORDER = 8;
 
     // hopefully this doesn't construct the object?
     MG *mg;

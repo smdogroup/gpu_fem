@@ -50,7 +50,12 @@ class NonlinearPlateAnalysis:
         # Setup elements
         self.fea_assembler.initialize(elemCallBack)
 
-        xpts = self.fea_assembler.Xpts0.getArray()
+        # # xpts = self.fea_assembler.Xpts0.getArray()
+        # bdfInfo = FEAAssembler.getBDFInfo()
+        # # cross-reference bdf object to use some of pynastrans advanced features
+        # bdfInfo.cross_reference()
+        # xpts = bdfInfo.get_xyz_in_coord()
+
 
         # Create a static problem with a uniform z load applied to all nodes
         probOptions = {
@@ -64,7 +69,7 @@ class NonlinearPlateAnalysis:
             "UsePredictor": True,
             "NumPredictorStates": 7,
         }
-        self.static_problem = FEAAssembler.createStaticProblem("NLPlate", options=probOptions)
+        self.static_problem = self.fea_assembler.createStaticProblem("NLPlate", options=probOptions)
         try:
             self.static_problem.nonlinearSolver.innerSolver.setOptions(newtonOptions)
             self.static_problem.nonlinearSolver.setOptions(continuationOptions)
@@ -72,54 +77,63 @@ class NonlinearPlateAnalysis:
             pass
 
 
-        X = xpts[0::3]
-        Y = xpts[1::3]
-        # dx, dy = np.diff(X)[0], np.diff(Y)[0]
-        Lx = np.max(X) - np.min(X)
-        nx = int(X.shape[0]**0.5)
-        dx = Lx / (nx - 1)
-        dy = dx
+        # X = xpts[0::3]
+        # Y = xpts[1::3]
+        # # dx, dy = np.diff(X)[0], np.diff(Y)[0]
+        # Lx = np.max(X) - np.min(X)
+        # nx = int(X.shape[0]**0.5)
+        # dx = Lx / (nx - 1)
+        # dy = dx
 
-        # ends = np.logical_or(X == 0.0, Y == 0.0)
-        # interior = 1.0 - ends
+        # # ends = np.logical_or(X == 0.0, Y == 0.0)
+        # # interior = 1.0 - ends
 
-        R = np.sqrt(X**2 + Y**2)
-        TH = np.arctan2(X, Y)
-        # P = 4e6
-        P = 1.6e7
-        load_mag = P * dx * dy # * interior
+        # R = np.sqrt(X**2 + Y**2)
+        # TH = np.arctan2(X, Y)
+        # # P = 4e6
+        # P = 1.6e7
+        # load_mag = P * dx * dy # * interior
 
-        load_corr = 2.14 / 3.56
-        load_mag *= load_corr # so matches linear GPU deflection on init
+        # # load_corr = 0.763
+        # load_corr = 1.1
+        # # load_corr = 2.14 / 3.56
+        # load_mag *= load_corr # so matches linear GPU deflection on init
 
-        # print(f"{R=} {TH=}")
+        # # print(f"{R=} {TH=}")
 
-        F = self.fea_assembler.createVec()
+        # F = self.fea_assembler.createVec()
         
-        eta = 0.6 # in plane load frac
-        N_diag = -eta * load_mag * np.sin(np.pi * R / Lx / 1.414)
+        # eta = 0.6 # in plane load frac
+        # N_diag = -eta * load_mag * np.sin(np.pi * R / Lx / 1.414)
         
-        # in-plane loads
-        F[0::6] += N_diag * np.cos(TH)
-        F[1::6] += N_diag * np.sin(TH)
+        # # in-plane loads
+        # F[0::6] += N_diag * np.cos(TH)
+        # F[1::6] += N_diag * np.sin(TH)
 
-        # transverse or bending loads
-        F[2::6] += load_mag * np.sin(5.0 * np.pi * R/Lx) * np.cos(4.0 * TH)
+        # # transverse or bending loads
+        # F[2::6] += load_mag * np.sin(5.0 * np.pi * R/Lx) * np.cos(4.0 * TH)
 
-        # in-plane loads also..
+        # # in-plane loads also..
         
 
-        self.fea_assembler.applyBCsToVec(F)
+        # self.fea_assembler.applyBCsToVec(F)
 
-        indicator = np.ones(F.shape)
-        self.fea_assembler.applyBCsToVec(indicator)
-        print(f"{indicator=}")
+        # indicator = np.ones(F.shape)
+        # self.fea_assembler.applyBCsToVec(indicator)
+        # print(f"{indicator=}")
         
-        # print(f"{load_mag=}")
-        # for i in range(10):
-        #     print(f"{Fadd[i]=}")
+        # # print(f"{load_mag=}")
+        # # for i in range(10):
+        # #     print(f"{Fadd[i]=}")
 
-        self.static_problem.addLoadToRHS(F)
+        # self.static_problem.addLoadToRHS(F)
+
+        # instead loads come from BDF
+        # ==========
+        self.static_problem.addLoadFromBDF(1)
+
+
+
         # Add failure function (con)
         self.static_problem.addFunction(
             "ks_failure", functions.KSFailure, ksWeight=100.0, safetyFactor=1.5,
@@ -181,13 +195,13 @@ class NonlinearPlateAnalysis:
             print(func_dict)
 
         # Set the mass as the objective
-        fobj = self.mass_scale * func_dict["uniform_z_load_mass"]
+        fobj = self.mass_scale * func_dict["NLPlate_mass"]
 
         # Set the KS function (the approximate maximum ratio of the
         # von Mises stress to the design stress) so that
         # it is less than or equal to 1.0
         con[0] = (
-            func_dict["uniform_z_load_ks_failure"]
+            func_dict["NLPlate_ks_failure"]
         )  # changed to just return ksfailure
         # ~= 1.0 - max (sigma/design) >= 0
 
@@ -211,7 +225,7 @@ class NonlinearPlateAnalysis:
         if self.comm.rank == 0:
             g[:] = (
                 self.mass_scale
-                * sens_dict["uniform_z_load_mass"]["struct"]
+                * sens_dict["NLPlate_mass"]["struct"]
                 / self.thickness_scale
             )
         # In-place broadcast of g
@@ -223,7 +237,7 @@ class NonlinearPlateAnalysis:
         # Set the constraint gradient
         if self.comm.rank == 0:
             A[0][:] = (
-                sens_dict["uniform_z_load_ks_failure"]["struct"] / self.thickness_scale
+                sens_dict["NLPlate_ks_failure"]["struct"] / self.thickness_scale
             )
             
         # In-place broadcast of A[0]
@@ -250,7 +264,7 @@ class NonlinearPlateAnalysis:
 tacs_comm = MPI.COMM_WORLD
 bdf_name = "plate.bdf"
 
-plate_opt = LinearPlateAnalysis(tacs_comm, bdf_name)
+plate_opt = NonlinearPlateAnalysis(tacs_comm, bdf_name)
 nvars = plate_opt.nvars
 
 g =  np.zeros(nvars)
@@ -347,7 +361,7 @@ opt_problem.addVarGroup(
     "vars",
     nvars,
     lower=np.maximum(x0.copy()*R1**2, np.array([1e-2]*nvars)), # opted for overall mass cannot decrease constraint instead (this is too restrictive)
-    lower=lb, # TODO : change min of non-struct-masses?
+    # lower=lb, # TODO : change min of non-struct-masses?
     upper=ub,
     value=x0,
     scale=np.array([1e2]*nvars), # handled internally by TACS

@@ -49,59 +49,71 @@ class LinearPlateAnalysis:
         # Setup elements
         self.fea_assembler.initialize(elemCallBack)
 
-        xpts = self.fea_assembler.Xpts0.getArray()
-
         # Create a static problem with a uniform z load applied to all nodes
         self.static_problem = self.fea_assembler.createStaticProblem("LinPlate")
 
-        X = xpts[0::3]
-        Y = xpts[1::3]
-        # dx, dy = np.diff(X)[0], np.diff(Y)[0]
-        Lx = np.max(X) - np.min(X)
-        nx = int(X.shape[0]**0.5)
-        dx = Lx / (nx - 1)
-        dy = dx
+        # loads added into BDF file now (otherwise proc issues will change it)
+        # ===========================
 
-        # ends = np.logical_or(X == 0.0, Y == 0.0)
-        # interior = 1.0 - ends
+        # xpts = self.fea_assembler.Xpts0.getArray()
 
-        R = np.sqrt(X**2 + Y**2)
-        TH = np.arctan2(X, Y)
-        # P = 4e6
-        P = 1.6e7
-        load_mag = P * dx * dy # * interior
+        # X = xpts[0::3]
+        # Y = xpts[1::3]
+        # # dx, dy = np.diff(X)[0], np.diff(Y)[0]
+        # Lx = np.max(X) - np.min(X)
+        # nx = int(X.shape[0]**0.5)
+        # dx = Lx / (nx - 1)
+        # dy = dx
 
-        load_corr = 2.14 / 3.56
-        load_mag *= load_corr # so matches linear GPU deflection on init
+        # # ends = np.logical_or(X == 0.0, Y == 0.0)
+        # # interior = 1.0 - ends
 
-        # print(f"{R=} {TH=}")
+        # R = np.sqrt(X**2 + Y**2)
+        # TH = np.arctan2(X, Y)
+        # # P = 4e6
+        # P = 1.6e7
+        # load_mag = P * dx * dy # * interior
 
-        F = self.fea_assembler.createVec()
+        # # load_corr = 0.75
+        # # load_corr = 0.763
+        # # load_corr = 1.0
+        # # load_corr = 1.08
+        # load_corr = 1.1
+        # # load_corr = 2.14 / 3.56
+        # load_mag *= load_corr # so matches linear GPU deflection on init
+
+        # # print(f"{R=} {TH=}")
+
+        # F = self.fea_assembler.createVec()
         
-        eta = 0.6 # in plane load frac
-        N_diag = -eta * load_mag * np.sin(np.pi * R / Lx / 1.414)
+        # eta = 0.6 # in plane load frac
+        # N_diag = -eta * load_mag * np.sin(np.pi * R / Lx / 1.414)
         
-        # in-plane loads
-        F[0::6] += N_diag * np.cos(TH)
-        F[1::6] += N_diag * np.sin(TH)
+        # # in-plane loads
+        # F[0::6] += N_diag * np.cos(TH)
+        # F[1::6] += N_diag * np.sin(TH)
 
-        # transverse or bending loads
-        F[2::6] += load_mag * np.sin(5.0 * np.pi * R/Lx) * np.cos(4.0 * TH)
+        # # transverse or bending loads
+        # F[2::6] += load_mag * np.sin(5.0 * np.pi * R/Lx) * np.cos(4.0 * TH)
+        # # in-plane loads also..
 
-        # in-plane loads also..
+        # # print(f"{F=}")
         
 
-        self.fea_assembler.applyBCsToVec(F)
+        # self.fea_assembler.applyBCsToVec(F)
 
-        indicator = np.ones(F.shape)
-        self.fea_assembler.applyBCsToVec(indicator)
-        print(f"{indicator=}")
+        # indicator = np.ones(F.shape)
+        # self.fea_assembler.applyBCsToVec(indicator)
+        # print(f"{indicator=}")
         
         # print(f"{load_mag=}")
         # for i in range(10):
         #     print(f"{Fadd[i]=}")
 
-        self.static_problem.addLoadToRHS(F)
+        # self.static_problem.addLoadToRHS(F)
+
+        self.static_problem.addLoadFromBDF(1)
+
         # Add failure function (con)
         self.static_problem.addFunction(
             "ks_failure", functions.KSFailure, ksWeight=100.0, safetyFactor=1.5,
@@ -255,10 +267,10 @@ nvars = plate_opt.comm.bcast(nvars)
 
 # DEBUG (linear solve)
 # plate_opt.solve()
-fail, obj, con = plate_opt.evalObjCon(x0)
-print(f"{obj=} {con=}")
-plate_opt.writeSolutionVTK()
-exit()
+# fail, obj, con = plate_opt.evalObjCon(x0)
+# print(f"{obj=} {con=}")
+# plate_opt.writeSolutionVTK()
+# exit()
 
 # OPTIMIZATION
 # ======================

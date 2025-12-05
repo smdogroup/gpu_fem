@@ -54,66 +54,71 @@ class LinearPlateAnalysis:
         # Create a static problem with a uniform z load applied to all nodes
         self.static_problem = self.fea_assembler.createStaticProblem("uniform_z_load")
 
-        # Assume xpts is your nodal coordinates array: [x0, y0, z0, x1, y1, z1, ...]
-        X = xpts[0::3]
-        Y = xpts[1::3]
-        Z = xpts[2::3]
+        # # Assume xpts is your nodal coordinates array: [x0, y0, z0, x1, y1, z1, ...]
+        # X = xpts[0::3]
+        # Y = xpts[1::3]
+        # Z = xpts[2::3]
 
-        # Cylinder dimensions
-        Lx = np.max(X) - np.min(X)
-        nx = int(np.sqrt(X.shape[0]))  # approximate nodes along axis
-        dx = Lx / (nx - 1)
-        # dy = dx  # assume uniform spacing in hoop
-        R = 0.5
-        dth = 2.0 * np.pi / nx
-        ds = R * dth
+        # # Cylinder dimensions
+        # Lx = np.max(X) - np.min(X)
+        # nx = int(np.sqrt(X.shape[0]))  # approximate nodes along axis
+        # dx = Lx / (nx - 1)
+        # # dy = dx  # assume uniform spacing in hoop
+        # R = 0.5
+        # dth = 2.0 * np.pi / nx
+        # ds = R * dth
 
-        # Identify boundary nodes (ends at X=0 or X=L)
-        # ends = np.logical_or(X == 0.0, X == Lx)
-        # interior = 1.0 - ends  # mask for interior nodes
+        # # Identify boundary nodes (ends at X=0 or X=L)
+        # # ends = np.logical_or(X == 0.0, X == Lx)
+        # # interior = 1.0 - ends  # mask for interior nodes
 
-        # Cylinder coordinates
-        # R = np.sqrt(Z**2 + Y**2)
-        # TH = np.arctan2(Y, Z)
-        TH = np.arctan2(Z, Y)
+        # # Cylinder coordinates
+        # # R = np.sqrt(Z**2 + Y**2)
+        # # TH = np.arctan2(Y, Z)
+        # TH = np.arctan2(Z, Y)
 
-        # Base load magnitude
-        load_mag = 5e7 * dx * ds #* interior
+        # # Base load magnitude
+        # load_mag = 5e7 * dx * ds #* interior
 
-        # Correction factor
-        load_corr = 2.14 / 3.56
-        load_mag *= load_corr
+        # # Correction factor
+        # load_corr = 2.14 / 3.56
+        # load_mag *= load_corr
 
-        # Quadrature-style "rose" load function
-        x_hat = X / Lx
-        th = TH
-        th_hat = th / (2.0 * np.pi)
+        # # Quadrature-style "rose" load function
+        # x_hat = X / Lx
+        # th = TH
+        # th_hat = th / (2.0 * np.pi)
 
-        mag = load_mag * (
-            0.3 * np.cos(5.0 * th + 2.0 * np.pi * x_hat) +
-            0.7 * np.cos(10.0 * th + np.pi/6.0 + 5.3 * np.pi * x_hat)
-        ) * np.sin(5.0 * np.pi * x_hat + 0.5 * 2.0 * x_hat**2)
+        # mag = load_mag * (
+        #     0.3 * np.cos(5.0 * th + 2.0 * np.pi * x_hat) +
+        #     0.7 * np.cos(10.0 * th + np.pi/6.0 + 5.3 * np.pi * x_hat)
+        # ) * np.sin(5.0 * np.pi * x_hat + 0.5 * 2.0 * x_hat**2)
 
-        # Create FEA load vector (6 DOF per node)
-        F = self.fea_assembler.createVec()
+        # # Create FEA load vector (6 DOF per node)
+        # F = self.fea_assembler.createVec()
 
-        # Map quadrature load to y and z components
-        # F[1::6] += np.sin(th) * mag  # y-component
-        # F[2::6] += np.cos(th) * mag  # z-component
-        F[1::6] += np.cos(th) * mag  # y-component
-        F[2::6] += np.sin(th) * mag  # z-component
+        # # Map quadrature load to y and z components
+        # # F[1::6] += np.sin(th) * mag  # y-component
+        # # F[2::6] += np.cos(th) * mag  # z-component
+        # F[1::6] += np.cos(th) * mag  # y-component
+        # F[2::6] += np.sin(th) * mag  # z-component
 
-        self.fea_assembler.applyBCsToVec(F)
+        # self.fea_assembler.applyBCsToVec(F)
 
-        indicator = np.ones(F.shape)
-        self.fea_assembler.applyBCsToVec(indicator)
-        print(f"{indicator=}")
+        # # indicator = np.ones(F.shape)
+        # # self.fea_assembler.applyBCsToVec(indicator)
+        # # print(f"{indicator=}")
         
-        # print(f"{load_mag=}")
-        # for i in range(10):
-        #     print(f"{Fadd[i]=}")
+        # # print(f"{load_mag=}")
+        # # for i in range(10):
+        # #     print(f"{Fadd[i]=}")
 
-        self.static_problem.addLoadToRHS(F)
+        # self.static_problem.addLoadToRHS(F)
+
+        # add loads from BDF instead
+        self.static_problem.addLoadFromBDF(1)
+
+
         # Add failure function (con)
         self.static_problem.addFunction(
             "ks_failure", functions.KSFailure, ksWeight=100.0, safetyFactor=1.5,
