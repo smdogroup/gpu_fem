@@ -84,8 +84,8 @@ class InexactNewtonSolver {
             // Eisenstat-Walker method to update linear solve atol (to prevent over-solving)
             // ------------------------------------------------------------
 
-            // except with predictor, doesn't always dec so keep inewton > 0 condition instead
-            if (inewton > 0) {
+            // except with predictor, doesn't always dec so keep inewton > 0 or inewton > 1 condition instead
+            if (inewton > 1) {
                 // don't check immediately, it almost always inc on first newton step so don't adapt
                 // if (inewton > 1) {
                 T zeta = std::pow(res_nrm / prev_res_nrm, omega);
@@ -151,7 +151,7 @@ class InexactNewtonSolver {
     T computeResidual(T &lambda) {
         /* compute r(u) = fint(u) - lambda * loads */
         assembler.add_residual_fast(res);
-        T a = -lambda;
+        T a = -lambda; // loads assumed to be in VIS order here
         CHECK_CUBLAS(cublasDaxpy(cublasHandle, nvars, &a, loads.getPtr(), 1, res.getPtr(), 1));
         assembler.apply_bcs(res);
 
@@ -286,6 +286,8 @@ class InexactNewtonSolver {
 
             /* now predict the optimal energy load scale */
             T opt_load_scale = (FeUi + FiUe) / (-2.0 * FeUe);
+            opt_load_scale *= -1.0; // opposite sign because Ali defines fext differently here
+
             // then determine if it is reasonable and if we should restart
             if (opt_load_scale > (2.0 * max_lambda) || (opt_load_scale < 0.0)) {
                 // if opt load scale more than double max load scale we're aiming for, or if
@@ -317,7 +319,7 @@ class InexactNewtonSolver {
                 opt_load_scale = max(opt_load_scale, init_step);
                 if (opt_load_scale0 < init_step) {
                     printf(
-                        "New Design - set LAM_INIT=%.4e, as energy-opt-lam=%.4e < init step size "
+                        "New Design - set LAM_INIT=%.4e, as |1-energy_opt_lam|=%.4e < init step size "
                         "%.4e\n",
                         opt_load_scale, opt_load_scale0, init_step);
                 } else {
@@ -332,7 +334,13 @@ class InexactNewtonSolver {
                 }
             }  // end of opt load scale sanity checks
 
+            // write to output the new load factor (even if it gets reset to init step)
+            lambda = opt_load_scale;
+
         }  // end of nonzero state check
+
+        
+
         return restart_design;
     }
 
@@ -354,17 +362,17 @@ class InexactNewtonSolver {
         res.permuteData(block_dim, d_iperm);  // res from VIS => SOLVE order
         linear_solver->solve(res, update, true);
         // update kept in solve order for inner product
+        res.zeroValues();
+        T a = 1.0; // don't think this should be lambda here (just want based on full external loads lam = 1 final)
+        CHECK_CUBLAS(cublasDaxpy(cublasHandle, nvars, &a, loads.getPtr(), 1, res.getPtr(), 1));
+        assembler.apply_bcs(res);  // res thus in VIS order here
+        // convert res from VIS to solve order
+        res.permuteData(block_dim, d_iperm);  // res from VIS => SOLVE order
         // compute Fe^T * dUi inner product; aka <res, update> inner product
         CHECK_CUBLAS(cublasDdot(cublasHandle, nvars, res.getPtr(), 1, update.getPtr(), 1, &FeUi));
 
         // 2) compute dUe = Kinv * Fe
-        // zero and then add Fe into res (temporary)
-        res.zeroValues();
-        T a = lambda;
-        CHECK_CUBLAS(cublasDaxpy(cublasHandle, nvars, &a, loads.getPtr(), 1, res.getPtr(), 1));
-        assembler.apply_bcs(res);  // res thus in VIS order here
-        // now do the linear solve
-        res.permuteData(block_dim, d_iperm);  // res from VIS => SOLVE order
+        // keep res = Fe in solve order from last block
         linear_solver->solve(res, update, true);
         // keep update (aka Ue) in SOLVE order
         // now do inner product <Fe, dUe>

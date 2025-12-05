@@ -75,7 +75,7 @@ class NonlinearContinuationSolver {
                     // no safe state to go back to, so restart to zero disps
                     printf("first restart step failed, going back to zero disps\n");
                     state.zeroValues();
-		    lambda = 0.0, dlambda = lambda0;
+		            lambda = 0.0, dlambda = lambda0;
                 } else if (icont < (N_STEPS - 1) and abs(dlambda) > MIN_STEP) {
 		    // then proceed with linear solve (not last step + dlambda not too small)
 		    // just shrink step size
@@ -109,7 +109,8 @@ class NonlinearContinuationSolver {
             restart_design = false;
 
             // clip load step size then update load factor
-            dlambda = std::clamp(dlambda, 1e-4, lambdaf - lambda);
+            T sign = dlambda > 0.0 ? 1.0 : -1.0;
+            dlambda = sign * std::clamp(abs(dlambda), 1e-4, abs(lambdaf - lambda));
             lambda += dlambda;
         }
 

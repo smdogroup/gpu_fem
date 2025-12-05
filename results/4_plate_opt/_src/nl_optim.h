@@ -72,7 +72,9 @@ class NonlinearPlateSolver {
 
     NonlinearPlateSolver(double rhoKS = 100.0, double safety_factor = 1.5, double load_mag = 100.0,
                          T omega = 1.0, int nxe = 100, int nx_comp = 5, int ny_comp = 5,
-                         double SR = 50.0, int ORDER = 8, double Lx = 1.0, bool print = false) {
+                         double SR = 50.0, int ORDER = 8, double Lx = 1.0, 
+                         int nsmooth = 1, int ninnercyc = 1, double in_plane_frac = 0.1,
+                         bool print = false) {
         // 1) Build mesh & assembler
         assert(nxe % nx_comp == 0);  // evenly divisible by number of elems_per_comp
         int nye = nxe;
@@ -102,7 +104,8 @@ class NonlinearPlateSolver {
             auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick,
                                                              rho, ys, nxe_per_comp, nye_per_comp);
             double Q = load_mag;  // load magnitude
-            T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+            // T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+            T *my_loads = getPlateNonlinearLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q, in_plane_frac);
             printf("making grid with nxe %d\n", c_nxe);
 
             auto &bsr_data = assembler.getBsrData();
@@ -159,10 +162,12 @@ class NonlinearPlateSolver {
         // bool print = true;
         // bool print = false;
         bool double_smooth = true;
-        int nsmooth = 1, ninnercyc = 1, print_freq = 3;
+        // int nsmooth = 1, ninnercyc = 1, 
+        int print_freq = 3;
         int n_krylov = 50;
         T atol = 1e-6, rtol = 1e-6;
         // bool double_smooth = false;  // actually faster sometimes
+        // bool inner_print = false;
 
         // mg->init_outer_solver(nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq,
         // print);
@@ -185,7 +190,10 @@ class NonlinearPlateSolver {
 
         // fine grid, create the nonlinear solvers and NL solver interface
         // -------------------------
-        inner_solver = new INK(cublasHandle, assembler, mg->grids[0].Kmat, d_loads, mg);
+        T initLinSolveRtol = 1e-2;
+        T linSolveAtol = 1e-4;
+
+        inner_solver = new INK(cublasHandle, assembler, mg->grids[0].Kmat, d_loads, mg, initLinSolveRtol, linSolveAtol, linSolveAtol);
         bool use_predictor = true, debug = false;
         // bool use_predictor = false, debug = false;
         nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
@@ -235,7 +243,6 @@ class NonlinearPlateSolver {
             printf("design changed, new solve\n");
 
             fail = solver->solve();
-            num_lin_solves++;
             solver->copy_solution_out(soln);
         } else {
             // reload old state
@@ -268,7 +275,7 @@ class NonlinearPlateSolver {
         }
         CHECK_CUDA(cudaMemcpy(out_h_sens, dptr, ndvs * sizeof(T), cudaMemcpyDeviceToHost));
     }
-    int get_num_lin_solves() { return num_lin_solves; }
+    int get_num_lin_solves() { return mg->get_num_lin_solves(); }
 
     void free() {
         solver->free();

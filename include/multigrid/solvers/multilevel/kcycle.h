@@ -38,8 +38,10 @@ class MultilevelKcycleSolver {
     }
 
     int get_num_iterations() { return outer_solver->get_num_iterations(); }
+    int get_num_lin_solves() { return num_lin_solves; }
 
     bool solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = true) {
+        num_lin_solves++;
         return outer_solver->solve(rhs, soln, check_conv);
     }
 
@@ -196,6 +198,7 @@ class MultilevelKcycleSolver {
 
    private:
     bool is_free = false;
+    int num_lin_solves = 0;
 
     // helper methods for updating after jacobian update
     void _update_coarse_grid_states() {

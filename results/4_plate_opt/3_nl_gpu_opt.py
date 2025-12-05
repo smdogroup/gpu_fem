@@ -34,13 +34,20 @@ if comm.rank == root:
         rhoKS=100.0,
         safety_factor=1.5,
         load_mag=4e6,
-        omega=0.3, # much faster
+        # omega=0.3, # much faster
+        # omega=0.85,
+        in_plane_frac=0.4,
+        omega=0.8,
         # nxe=512,
         # nxe=256,
+        nsmooth=2,
+        Lx=1.0,
         nxe=128,
         nx_comp=ndvs_per_side, # num dvs in x-direction
         ny_comp=ndvs_per_side, # num dvs/comps in y-direction
-        SR=50.0, # slenderness
+        # SR=50.0, # slenderness
+        print=False,
+        # print=True,
     )
 
 # init dvs
@@ -49,7 +56,8 @@ if comm.rank == root:
     ndvs = solver.get_num_dvs()
 ndvs = comm.bcast(ndvs, root=root)
 
-x0 = lin_opt_design.copy()
+# x0 = lin_opt_design.copy() * 2.0
+x0 = lin_opt_design.copy() #* 1.2
 
 # debug writing DVs to not same values..
 # solver.set_design_variables(x0)
@@ -89,13 +97,15 @@ def get_functions(xdict):
         'ksfailure' : ksfail,
     }
 
-    # print(f"{funcs=}")
+    num_lin_solves = solver.get_num_lin_solves()
+    print(f"{funcs=}, {num_lin_solves=}")
 
-    comp_names = [f"comp{icomp}" for icomp in range(ndvs)]
-    with open("out/lin_gpu_opt.txt", "w") as f:
-        f.write(f"{mass=:.4e} {ksfail=:.4e}\n")
-        for name, value in zip(comp_names, xarr):
-            f.write(f"{name}\t{value:.16e}\n")
+    if num_lin_solves % 5 == 0 and comm.rank == root: # so we don't affect runtimes for fast problems
+        comp_names = [f"comp{icomp}" for icomp in range(ndvs)]
+        with open("out/nl_gpu_opt.txt", "w") as f:
+            f.write(f"{mass=:.4e} {ksfail=:.4e}\n")
+            for name, value in zip(comp_names, xarr):
+                f.write(f"{name}\t{value:.16e}\n")
 
     return funcs, False
 
@@ -133,7 +143,7 @@ opt_problem = Optimization("tuning-fork", get_functions)
 opt_problem.addVarGroup(
     "vars",
     ndvs,
-    lower=np.array([5e-3]*ndvs), # TODO : change min of non-struct-masses?
+    lower=x0.copy(), # TODO : change min of non-struct-masses?
     upper=np.array([1e2]*ndvs),
     value=x0,
     scale=np.array([1e2]*ndvs),
@@ -199,7 +209,7 @@ print(f"{sol.xStar=}")
 
 if comm.rank == root:
     solver.solve()
-    solver.writeSolution("out/plate_opt.vtk")
+    solver.writeSolution("out/plate_opt_nl.vtk")
     solver.free()
 
 num_lin_solves = solver.get_num_lin_solves()

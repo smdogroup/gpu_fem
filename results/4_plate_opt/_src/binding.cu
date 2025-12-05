@@ -9,7 +9,7 @@ namespace py = pybind11;
 PYBIND11_MODULE(platemultigrid, m) {
     py::class_<LinearPlateSolver>(m, "LinearPlateSolver")
         // only expose (rhoKS, load_mag)
-        .def(py::init<double, double, double, double, int, int, int, double, double, int, double, bool>(),
+        .def(py::init<double, double, double, double, int, int, int, double, double, int, double, int, int, double, bool>(),
              py::arg("rhoKS")    = 100.0,
              py::arg("safety_factor") = 1.5,
              py::arg("load_mag") = 100.0,
@@ -21,6 +21,9 @@ PYBIND11_MODULE(platemultigrid, m) {
              py::arg("rtol") = 1e-6,
              py::arg("ORDER") = 8,
              py::arg("Lx") = 1.0,
+             py::arg("nsmooth") = 1,
+             py::arg("ninnercyc") = 1,
+             py::arg("in_plane_frac") = 0.1,
              py::arg("print") = false)
         .def("set_design_variables", &LinearPlateSolver::set_design_variables)
         .def("get_num_vars",         &LinearPlateSolver::get_num_vars)
@@ -39,7 +42,7 @@ PYBIND11_MODULE(platemultigrid, m) {
 
     py::class_<NonlinearPlateSolver>(m, "NonlinearPlateSolver")
         // only expose (rhoKS, load_mag)
-        .def(py::init<double, double, double, double, int, int, int, double, double, double, bool>(),
+        .def(py::init<double, double, double, double, int, int, int, double, double, double, int, int, double, bool>(),
              py::arg("rhoKS")    = 100.0,
              py::arg("safety_factor") = 1.5,
              py::arg("load_mag") = 100.0,
@@ -50,6 +53,9 @@ PYBIND11_MODULE(platemultigrid, m) {
              py::arg("SR") = 50.0,
              py::arg("ORDER") = 8,
              py::arg("Lx") = 1.0,
+             py::arg("nsmooth") = 1,
+             py::arg("ninnercyc") = 1,
+             py::arg("in_plane_frac") = 0.1,
              py::arg("print") = false)
         .def("set_design_variables", &NonlinearPlateSolver::set_design_variables)
         .def("get_num_vars",         &NonlinearPlateSolver::get_num_vars)

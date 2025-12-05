@@ -24,7 +24,7 @@ class LinearPlateAnalysis:
         E = 70e9  # elastic modulus, Pa
         nu = 0.3  # poisson's ratio
         ys = 350e6  # yield stress, Pa
-        min_thickness = 0.005
+        min_thickness = 0.01
         max_thickness = 2.0
         thickness = 0.02
 

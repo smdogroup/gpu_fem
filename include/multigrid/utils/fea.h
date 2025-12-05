@@ -292,50 +292,50 @@ T *getPlatePointLoad(int nxe, int nye, double Lx, double Ly, double load_mag) {
     return my_loads;
 }
 
-template <typename T, class Phys>
-T *getPlateNonlinearLoads(int nxe, int nye, double Lx, double Ly, double load_mag,
-                          double in_plane_frac = 0.0) {
-    /*
-    make a rectangular plate mesh of shell elements
-    simply supported with transverse constrant distributed load
+// template <typename T, class Phys>
+// T *getPlateNonlinearLoads(int nxe, int nye, double Lx, double Ly, double load_mag,
+//                           double in_plane_frac = 0.0) {
+//     /*
+//     make a rectangular plate mesh of shell elements
+//     simply supported with transverse constrant distributed load
 
-    make the load set for this mesh
-    q(x,y) = Q * sin(pi * x / a) * sin(pi * y / b)
-    */
+//     make the load set for this mesh
+//     q(x,y) = Q * sin(pi * x / a) * sin(pi * y / b)
+//     */
 
-    // number of nodes per direction
-    int nnx = nxe + 1;
-    int nny = nye + 1;
-    int num_nodes = nnx * nny;
+//     // number of nodes per direction
+//     int nnx = nxe + 1;
+//     int nny = nye + 1;
+//     int num_nodes = nnx * nny;
 
-    T dx = Lx / nxe;
-    T dy = Ly / nye;
+//     T dx = Lx / nxe;
+//     T dy = Ly / nye;
 
-    double PI = 3.1415926535897;
+//     double PI = 3.1415926535897;
 
-    int num_dof = Phys::vars_per_node * num_nodes;
-    T *my_loads = new T[num_dof];
-    memset(my_loads, 0.0, num_dof * sizeof(T));
+//     int num_dof = Phys::vars_per_node * num_nodes;
+//     T *my_loads = new T[num_dof];
+//     memset(my_loads, 0.0, num_dof * sizeof(T));
 
-    // technically we should be integrating this somehow or distributing this
-    // among the elements somehow..
-    // the actual rhs is integral q(x,y) * phi_i(x,y) dxdy, fix later if want
-    // better error conv.
-    for (int iy = 0; iy < nny; iy++) {
-        for (int ix = 0; ix < nnx; ix++) {
-            int inode = nnx * iy + ix;
-            T x = ix * dx, y = iy * dy;
-            T nodal_load = load_mag * sin(PI * x / Lx) * sin(PI * y / Ly);
-            my_loads[Phys::vars_per_node * inode + 2] = nodal_load * 10 / nxe / nye;
-        }
+//     // technically we should be integrating this somehow or distributing this
+//     // among the elements somehow..
+//     // the actual rhs is integral q(x,y) * phi_i(x,y) dxdy, fix later if want
+//     // better error conv.
+//     for (int iy = 0; iy < nny; iy++) {
+//         for (int ix = 0; ix < nnx; ix++) {
+//             int inode = nnx * iy + ix;
+//             T x = ix * dx, y = iy * dy;
+//             T nodal_load = load_mag * sin(PI * x / Lx) * sin(PI * y / Ly);
+//             my_loads[Phys::vars_per_node * inode + 2] = nodal_load * 10 / nxe / nye;
+//         }
 
-        int ix = nnx - 1;  // pos x1 edge for in-plane
-        int inode = nnx * iy + ix;
-        T x = ix * dx, y = iy * dy;
-        my_loads[Phys::vars_per_node * inode] = -load_mag * in_plane_frac / nye;
-    }
-    return my_loads;
-}
+//         int ix = nnx - 1;  // pos x1 edge for in-plane
+//         int inode = nnx * iy + ix;
+//         T x = ix * dx, y = iy * dy;
+//         my_loads[Phys::vars_per_node * inode] = -load_mag * in_plane_frac / nye;
+//     }
+//     return my_loads;
+// }
 
 template <typename T, class Basis, class Phys>
 T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
@@ -432,11 +432,126 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
 
                 T r = sqrt(x * x + y * y);
                 T th = atan2(y, x);
-                T nodal_load = load_mag * sin(5.0 * PI * r / Lx) * cos(4.0 * th);
+                T nodal_load = load_mag * sin(5.0 * PI * r / Lx) * cos(4.0 * th); // + 0.1 * load_mag;
                 // somehow need to scale by local dGP area though no?
                 nodal_load *= weight * J;
 
                 my_loads[vpn * inode + offset + 2] += nodal_load;
+            }
+        }
+    }
+
+    return my_loads;
+}
+
+template <typename T, class Basis, class Phys>
+T *getPlateNonlinearLoads(int nxe, int nye, double Lx, double Ly, double load_mag, double in_plane_frac = 0.1) {
+    /*
+    make a rectangular plate mesh of shell elements
+    simply supported with transverse constrant distributed load
+
+    make the load set for this mesh
+    q(x,y) = Q * sin(pi * x / a) * sin(pi * y / b)
+    */
+
+    // number of nodes per direction
+    int order = Basis::order;
+    int nnx = order * nxe + 1;
+    int nny = order * nye + 1;
+    int num_nodes = nnx * nny;
+
+    constexpr bool IS_HR_ELEM = Phys::hellingerReissner;
+    int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
+    int vpn = Phys::vars_per_node;
+
+    T dx = Lx / (nnx - 1);
+    T dy = Ly / (nny - 1);
+
+    double PI = 3.1415926535897;
+
+    int num_dof = Phys::vars_per_node * num_nodes;
+    T *my_loads = new T[num_dof];
+    memset(my_loads, 0.0, num_dof * sizeof(T));
+
+    // for (int iy = 0; iy < nny; iy++) {
+    //     for (int ix = 0; ix < nnx; ix++) {
+    //         int inode = nnx * iy + ix;
+    //         T x = ix * dx, y = iy * dy;
+    //         // T nodal_load = load_mag * sin(PI * x / Lx) * sin(PI * y / Ly);
+    //         T r = sqrt(x * x + y * y);
+    //         T th = atan2(y, x);
+    //         T nodal_load = load_mag * sin(5.0 * PI * r) * cos(4.0 * th);
+
+    //         if (ix % order == 0 && iy % order == 0) {
+    //             // no loads on mid-side nodes
+    //             // don't put loads on mid-side nodes etc of higher order (weird results)
+    //             my_loads[vpn * inode + offset + 2] = nodal_load;  // * dx * dy;
+    //         }
+    //     }
+    // }
+
+    using Quadrature = typename Basis::Quadrature;
+    const int n = Basis::nx;
+
+    // the actual rhs is integral q(x,y) * phi_i(x,y) dxdy, fix later if want
+    // better error conv. (loop over each element to add loads in)
+    for (int iye = 0; iye < nye; iye++) {
+        for (int ixe = 0; ixe < nxe; ixe++) {
+            int ielem = nxe * iye + ixe;
+
+            // no sorted order like in MITC?
+            for (int iloc = 0; iloc < n * n; iloc++) {
+                int ilx = iloc % n, ily = iloc / n;
+                int ix = order * ixe + ilx;
+                int iy = order * iye + ily;
+
+                // higher-order nodes
+                int ix_corner = (ix / order) * order;
+                int iy_corner = (iy / order) * order;
+
+                // local node index inside element
+                int ix_local = ix % order;
+                int iy_local = iy % order;
+
+                // get reference Gauss point [-1,1]
+                T xi = Basis::getGaussPoint(ix_local);
+                T eta = Basis::getGaussPoint(iy_local);
+
+                // physical element corners
+                T x0 = dx * ix_corner;
+                T x1 = dx * (ix_corner + (n - 1));  // last node in this element
+                T y0 = dy * iy_corner;
+                T y1 = dy * (iy_corner + (n - 1));
+
+                // map reference [-1,1] → [x0,x1] and [y0,y1]
+                T x = 0.5 * (1.0 - xi) * x0 + 0.5 * (1.0 + xi) * x1;
+                T y = 0.5 * (1.0 - eta) * y0 + 0.5 * (1.0 + eta) * y1;
+                T z = 0.0;
+
+                int inode = nnx * iy + ix;
+
+                // darea and quadrature points in the element
+                T J = dx * order * dy * order / 4;
+                T pt[2] = {0};
+                // pt[0] = xi, pt[1] = eta;
+                // this multiplies both weights internally
+                T weight = Quadrature::getQuadraturePoint(iloc, pt);
+
+                T r = sqrt(x * x + y * y);
+                T th = atan2(y, x);
+                T nodal_load = load_mag * sin(5.0 * PI * r / Lx) * cos(4.0 * th); // + 0.1 * load_mag;
+                // somehow need to scale by local dGP area though no?
+                nodal_load *= weight * J;
+
+                my_loads[vpn * inode + offset + 2] += nodal_load;
+
+                // add an obliquue in-plane load.. like shear load with striations
+                T in_plane_load = -0.5 + 0.5 * sin(2.0 * PI * r / Lx);
+                in_plane_load *= weight * J * load_mag * in_plane_frac;
+                // radially aligned in-plane load (want to make sure it's compressive though..)
+                my_loads[vpn * inode + offset + 0] += in_plane_load * cos(th);
+                my_loads[vpn * inode + offset + 1] += in_plane_load * sin(th);
+
             }
         }
     }

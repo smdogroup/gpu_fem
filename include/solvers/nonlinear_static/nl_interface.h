@@ -14,7 +14,7 @@ class TACSNLInterface {
     using MyFunction = typename Assembler::MyFunction;
 
     TACSNLInterface(cublasHandle_t &cublasHandle_, Continuation *nl_solver_, Assembler &assembler_, LinearSolver *mg_,
-                    bool print = true, bool include_adjoint_vars = true)
+                    bool print = true, bool include_adjoint_vars = true, T inner_frtol_ = 1e-6)
         : cublasHandle(cublasHandle_),
           nl_solver(nl_solver_),
           assembler(assembler_),
@@ -27,6 +27,8 @@ class TACSNLInterface {
         res = assembler.createVarsVec();
         soln = assembler.createVarsVec();
         rhs = assembler.createVarsVec();
+
+        inner_frtol = inner_frtol_;
 
         // copy loads here
         // struct_loads.copyValuesTo(loads);
@@ -67,7 +69,9 @@ class TACSNLInterface {
     bool solve() {
 
         // do nonlinear continuation solve
-        bool fail = this->nl_solver->solve(this->vars);  // inout updates the vars
+        T lambda0 = 0.2, inner_atol = 1e-8, lambdaf = 1.0, inner_crtol = 1e-3;
+        bool fail = this->nl_solver->solve(this->vars, lambda0, inner_atol, lambdaf, inner_crtol, 
+            inner_frtol);  // inout updates the vars
 
         // set new variables into assembler (for output function evals)
         this->assembler.set_variables(this->vars);
@@ -83,10 +87,10 @@ class TACSNLInterface {
     void copy_solution_out(Vec &soln_out) { this->vars.copyValuesTo(soln_out); }
 
     void set_design_variables(Vec &x) {
-        this->resetSoln();
+        // this->resetSoln();
         this->assembler.set_design_variables(x);
         this->mg->set_design_variables(x);
-        // this->_update_assembly();
+        // this->_update_assembly(); // this is called by inexact newton solver inside..
     }
 
     // void _update_assembly() {
@@ -155,4 +159,5 @@ class TACSNLInterface {
     bool include_adjoint_vars;
     cublasHandle_t &cublasHandle;
     bool print;
+    T inner_frtol;
 };

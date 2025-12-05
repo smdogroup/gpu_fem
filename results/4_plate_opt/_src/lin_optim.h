@@ -62,6 +62,7 @@ class LinearPlateSolver {
     LinearPlateSolver(double rhoKS = 100.0, double safety_factor = 1.5, double load_mag = 100.0,
                       T omega = 1.0, int nxe = 100, int nx_comp = 5, int ny_comp = 5,
                       double SR = 50.0, T rtol = 1e-6, int ORDER = 8, double Lx = 1.0,
+                      int nsmooth = 1, int ninnercyc = 1, double in_plane_frac = 0.1,
                       bool print = false) {
         // 1) Build mesh & assembler
         assert(nxe % nx_comp == 0);  // evenly divisible by number of elems_per_comp
@@ -92,7 +93,8 @@ class LinearPlateSolver {
             auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick,
                                                              rho, ys, nxe_per_comp, nye_per_comp);
             double Q = load_mag;  // load magnitude
-            T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+            // T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+            T *my_loads = getPlateNonlinearLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q, in_plane_frac);
             printf("making grid with nxe %d\n", c_nxe);
 
             auto &bsr_data = assembler.getBsrData();
@@ -132,8 +134,8 @@ class LinearPlateSolver {
             auto smoother =
                 new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
             auto prolongation = new Prolongation(assembler);
-            T omegaLS_min = 0.01, omegaLS_max = 4.0;
-            // T omegaLS_min = 0.1, omegaLS_max = 2.0;
+            // T omegaLS_min = 0.01, omegaLS_max = 4.0;
+            T omegaLS_min = 0.1, omegaLS_max = 2.0;
             auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle,
                              cusparseHandle, omegaLS_min, omegaLS_max);
 
@@ -152,7 +154,8 @@ class LinearPlateSolver {
         // bool print = false;
         bool double_smooth = true;
         // bool double_smooth = false;
-        int nsmooth = 1, ninnercyc = 1, print_freq = 3;
+        // int nsmooth = 1, ninnercyc = 1, print_freq = 3;
+        int print_freq = 3;
         int n_krylov = 50;
         T atol = 1e-6;  //, rtol = 1e-6;
         // bool double_smooth = false;  // actually faster sometimes

@@ -25,9 +25,13 @@ if comm.rank == root:
     solver = platemultigrid.LinearPlateSolver(
         rhoKS=100.0,
         safety_factor=1.5,
+        # load_mag=5e5,
+        # load_mag=1e6,
+        # load_mag=2e6,
         load_mag=4e6, # V1 was this.. but that doesn't lead to significant NL plate deflection in optimal design
         # load_mag=8e6, # try double it.. so less slender? think about physics here..
-        omega=0.3, # much faster
+        # omega=0.3, # much faster
+        omega=0.85,
         # nxe=512,
         # nxe=256,
         nxe=128,
@@ -36,11 +40,14 @@ if comm.rank == root:
         ny_comp=ndvs_per_side, # num dvs/comps in y-direction
         # SR=50.0, # slenderness
         ORDER=8,
+        in_plane_frac=0.35,
         # ORDER=4,
+        # rtol=1e-4,
         rtol=1e-6, # almost want to have high rtol like this only later in the optimization tbh..
-        # Lx=1.0,
+        Lx=1.0,
         # Lx=4.0, # both dimensions increased to give more deflection at NL case...
-        Lx=8.0,
+        # Lx=8.0,
+        # Lx=16.0,
         # rtol=1e-5,
         # rtol=1e-4, # faster optimization, but will it converge though?
     )
@@ -50,7 +57,7 @@ ndvs = None
 if comm.rank == root:
     ndvs = solver.get_num_dvs()
 ndvs = comm.bcast(ndvs, root=root)
-x0 = np.array([5e-2]*ndvs)
+x0 = np.array([3e-2]*ndvs)
 
 
 # # debug writing DVs to not same values..
@@ -92,11 +99,12 @@ def get_functions(xdict):
 
     # print(f"{funcs=}")
 
-    comp_names = [f"comp{icomp}" for icomp in range(ndvs)]
-    with open("out/lin_gpu_opt.txt", "w") as f:
-        f.write(f"{mass=:.4e} {ksfail=:.4e}\n")
-        for name, value in zip(comp_names, xarr):
-            f.write(f"{name}\t{value:.16e}\n")
+    if solver.get_num_lin_solves() % 20 == 0 and comm.rank == root: # so we don't affect runtimes for fast problems
+        comp_names = [f"comp{icomp}" for icomp in range(ndvs)]
+        with open("out/lin_gpu_opt.txt", "w") as f:
+            f.write(f"{mass=:.4e} {ksfail=:.4e}\n")
+            for name, value in zip(comp_names, xarr):
+                f.write(f"{name}\t{value:.16e}\n")
 
     return funcs, False
 
@@ -199,7 +207,7 @@ print(f"{sol.xStar=}")
 
 if comm.rank == root:
     solver.solve()
-    solver.writeSolution("out/plate_opt.vtk")
+    solver.writeSolution("out/plate_opt_lin.vtk")
     solver.free()
 
 num_lin_solves = solver.get_num_lin_solves()
