@@ -41,23 +41,37 @@ void addSkinLoadsToWing(Assembler &assembler, T *wing_loads, T force) {
 
     // get the number of elements in the lower skin (instead of num nodes, since don't want to worry about unique node)
     int num_lower_skin_elems = 0;
+    int *num_comp_elems = new int[num_components];
+    memset(num_comp_elems, 0, num_components * sizeof(int));
     for (int ielem = 0; ielem < num_elements; ielem++) {
         int icomp = h_elem_components[ielem];
         if (is_comp_lower_skin[icomp]) {
             num_lower_skin_elems++;
+            num_comp_elems[icomp]++;
         }
     }
     printf("add skin loads to wing with %d lower skin elems\n", num_lower_skin_elems);
+    for (int icomp = 0; icomp < num_components; icomp++) {
+        if (is_comp_lower_skin[icomp]) {
+            printf("comp %d in lower skin with %d elems\n", icomp, num_comp_elems[icomp]);
+        }
+    }
+
+    // compute the load scales based on # elems in each component (so rough even pressure distributions)
+    T *comp_load_scales = new T[num_components];
+    memset(comp_load_scales, 0.0, num_components * sizeof(T));
+    for (int icomp = 0; icomp < num_components; icomp++) {
+        comp_load_scales[icomp] = force / num_components / Basis::num_nodes / num_comp_elems[icomp];
+    }
 
     /* 2) apply uniform pressure load to all lower skin elems, evenly distributed among their nodes */
-    T nodal_load_scale = force / Basis::num_nodes / num_lower_skin_elems;
     for (int ielem = 0; ielem < num_elements; ielem++) {
         int icomp = h_elem_components[ielem];
         if (is_comp_lower_skin[icomp]) {
             int *elem_nodes = &h_elem_conn[Basis::num_nodes * ielem];
             for (int i = 0; i < Basis::num_nodes; i++) {
                 int inode = elem_nodes[i];
-                wing_loads[3 * inode + 2] += nodal_load_scale;
+                wing_loads[3 * inode + 2] += comp_load_scales[icomp];
             }
         }
     }
