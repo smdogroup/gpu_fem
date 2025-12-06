@@ -156,13 +156,42 @@ void printToVTK(Assembler assembler, Vec soln, std::string filename) {
     // write thicknesses
     double *h_dvs = d_dvs.createHostVec().getPtr();
     int *h_elem_comp = elem_components.createHostVec().getPtr();
+    int ndvs_per_comp = d_dvs.getSize() / assembler.get_num_components();
     myfile << "CELL_DATA " << num_elems << "\n";
     scalarName = "thickness";
     myfile << "SCALARS " << scalarName << " double64 1\n";
     myfile << "LOOKUP_TABLE default\n";
     for (int ielem = 0; ielem < num_elems; ielem++) {
         int comp_id = h_elem_comp[ielem];
-        myfile << h_dvs[comp_id] << "\n";
+        myfile << h_dvs[ndvs_per_comp * comp_id] << "\n";
+    }
+
+    if (ndvs_per_comp > 1) {
+        // like stiffened panel, writeout additional DVs also
+        scalarName = "stiffHeight";
+        myfile << "SCALARS " << scalarName << " double64 1\n";
+        myfile << "LOOKUP_TABLE default\n";
+        for (int ielem = 0; ielem < num_elems; ielem++) {
+            int comp_id = h_elem_comp[ielem];
+            myfile << h_dvs[ndvs_per_comp * comp_id + 1] << "\n";
+        }
+
+        scalarName = "stiffThick";
+        myfile << "SCALARS " << scalarName << " double64 1\n";
+        myfile << "LOOKUP_TABLE default\n";
+        for (int ielem = 0; ielem < num_elems; ielem++) {
+            int comp_id = h_elem_comp[ielem];
+            myfile << h_dvs[ndvs_per_comp * comp_id + 2] << "\n";
+        }
+
+        scalarName = "stiffPitch";
+        myfile << "SCALARS " << scalarName << " double64 1\n";
+        myfile << "LOOKUP_TABLE default\n";
+        for (int ielem = 0; ielem < num_elems; ielem++) {
+            int comp_id = h_elem_comp[ielem];
+            myfile << h_dvs[ndvs_per_comp * comp_id + 3] << "\n";
+        }
+
     }
 
     // write failure indexes

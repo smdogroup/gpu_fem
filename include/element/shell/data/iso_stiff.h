@@ -109,7 +109,7 @@ class StiffenedIsotropicShellData : public ShellIsotropicData<T, has_ref_axis_> 
             return zc_bar;
         }
     }
-    __HOST_DEVICE__ void addPanelIzzSens(const T &scale, T dv_sens[]) {
+    __HOST_DEVICE__ void addPanelIzzSens(const T &scale, T dv_sens[]) const {
         // add + backprop from panel izz output back to dvs
         dv_sens[0] += scale * getPanelIzzSens<0>();
         dv_sens[1] += scale * getPanelIzzSens<1>();
@@ -139,7 +139,7 @@ class StiffenedIsotropicShellData : public ShellIsotropicData<T, has_ref_axis_> 
             return (term1 + term2) * -1.0 / sp + zc_bar;
         }
     }
-    __HOST_DEVICE__ void addStiffenerI11Sens(const T &scale, T dv_sens[]) {
+    __HOST_DEVICE__ void addStiffenerI11Sens(const T &scale, T dv_sens[]) const {
         // add + backprop from panel izz output back to dvs
         dv_sens[0] += scale * getStiffenerI11Sens<0>();
         dv_sens[1] += scale * getStiffenerI11Sens<1>();
@@ -319,8 +319,8 @@ class StiffenedIsotropicShellData : public ShellIsotropicData<T, has_ref_axis_> 
         dfails[2] = scale * exp_fails[2] / exp_sum;
 
         /* 1) backprop through panel strength failure */
-        ShellIsotropicData<T, has_ref_axis>::evalFailureStrainSens(rhoKS, safetyFactor, e,
-                                                                   dfails[0], er);
+        ShellIsotropicData<T, has_ref_axis>::evalFailureStrainSens(dfails[0], rhoKS, safetyFactor, e,
+                                                                   er);
 
         /* 2) backprop through local panel buckling */
         // some needed coeffs,  e[0] = e11, e[3] = e22, e[1] = e12

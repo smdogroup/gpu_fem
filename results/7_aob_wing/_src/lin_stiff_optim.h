@@ -14,7 +14,8 @@
 #include "element/shell/basis/lagrange_basis.h"
 #include "element/shell/director/linear_rotation.h"
 #include "element/shell/mitc_shell.h"
-#include "element/shell/physics/isotropic_shell.h"
+// #include "element/shell/physics/isotropic_shell.h"
+#include "element/shell/physics/iso_stiff_shell.h"
 
 // multigrid imports
 #include "multigrid/grid.h"
@@ -26,12 +27,8 @@
 #include "multigrid/smoothers/cheb4_poly.h"
 // #include "multigrid/solvers/gmg.h"
 
-// chebyshev element
-#include "element/shell/basis/chebyshev_basis.h"
-#include "element/shell/fint_shell.h"
-
 // case imports
-// #include "comp_reader.h"
+#include "comp_reader.h"
 #include "loads_util.h"
 
 // new multigrid imports for K-cycles, etc.
@@ -44,31 +41,31 @@
 
 // copied and modified from ../uCRM/_src/optim.h (uCRM optimization example)
 
-class LinearWingSolver {
+class LinearStiffenedWingSolver {
    public:
     using T = double;
     // FEM typedefs
     using Quad = QuadLinearQuadrature<T>;
     using Director = LinearizedRotation<T>;
-    static constexpr bool has_ref_axis = false;
-    // static const bool has_ref_axis = true;  // only need ref axis for stiffened wing  with buckling loads
-    using Data = ShellIsotropicData<T, has_ref_axis>;
+    // static constexpr bool has_ref_axis = false;
+    static const bool has_ref_axis = true;  // only need ref axis for stiffened wing  with buckling loads
+    using Data = StiffenedIsotropicShellData<T, has_ref_axis>;
     static const bool is_nonlinear = false; // cause linear wing
-    using Physics = IsotropicShell<T, Data, is_nonlinear>;
-
+    using Physics = StiffenedIsotropicShell<T, Data, is_nonlinear>;
+    
+    // element type
     // MITC4 shell
     // using Basis = LagrangeQuadBasis<T, Quad, 1>;
     // using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
 
-    // CFI4 shell (be careful it is locked though)
+    // CFI4 shell (be careful it can lock though)
     using Basis = ChebyshevQuadBasis<T, Quad, 1>;
     using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
 
     // multigrid objects
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using Smoother = ChebyshevPolynomialSmoother<Assembler>;
-    static const bool is_bsr = true;
-    // static const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
+    static const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
     using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
     // using MG = GeometricMultigridSolver<GRID>; // old V-cycle solver
@@ -83,7 +80,7 @@ class LinearWingSolver {
     using DMass = Mass<T, DeviceVec>;
     using DKSFail = KSFailure<T, DeviceVec>;
 
-    LinearWingSolver(double rhoKS = 100.0, double safety_factor = 1.5, double force = 30e3,
+    LinearStiffenedWingSolver(double rhoKS = 100.0, double safety_factor = 1.5, double force = 684e3,
                       T omega = 1.0, int level = 2, T rtol = 1e-6, int ORDER = 8, 
                       int nsmooth = 1, int ninnercyc = 1, bool print = false) {
 
@@ -119,20 +116,20 @@ class LinearWingSolver {
             // IF STIFFENED WING with REF AXIS:
             // ===============================================
             
-            // HostVec<Data> comp_data(mesh_loader.getNumComponents());
-            // std::string design_filename = "design/AOB-design.txt";
-            // build_AOB_component_data<T, Data>(mesh_loader, comp_data, design_filename);
-            // printf("making assembler+GMG for mesh '%s'\n", fname.c_str());
-            // // create the TACS Assembler from the mesh loader
-            // auto assembler = Assembler::createFromBDFComponent(mesh_loader, comp_data);
-            // printf("\tdone making assembler\n");
+            HostVec<Data> comp_data(mesh_loader.getNumComponents());
+            std::string design_filename = "design/AOB-design.txt";
+            build_AOB_component_data<T, Data>(mesh_loader, comp_data, design_filename);
+            printf("making assembler+GMG for mesh '%s'\n", fname.c_str());
+            // create the TACS Assembler from the mesh loader
+            auto assembler = Assembler::createFromBDFComponent(mesh_loader, comp_data);
+            printf("\tdone making assembler\n");
 
             // IF UNSTIFFENED WING without ref axis, isotropic (no buckling)
             // =================================================
-            double E = 70e9, nu = 0.3, thick = 2.0 / SR; 
-            double rho = 2500, ys = 350e6;
-            printf("making assembler+GMG for mesh '%s'\n", fname.c_str());
-            auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick, rho, ys));
+            // double E = 70e9, nu = 0.3, thick = 2.0 / SR; 
+            // double rho = 2500, ys = 350e6;
+            // printf("making assembler+GMG for mesh '%s'\n", fname.c_str());
+            // auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick, rho, ys));
 
             // apply lower skin press loads
             int nvars = assembler.get_num_vars();

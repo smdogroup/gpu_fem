@@ -2,6 +2,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>  // for std::vector
 #include "lin_optim.h"         // your solver class header
+#include "lin_stiff_optim.h"
 // #include "nl_optim.h"        
 
 namespace py = pybind11;
@@ -12,7 +13,7 @@ PYBIND11_MODULE(wingmultigrid, m) {
         .def(py::init<double, double, double, double, int, double, int, int, int, bool>(),
              py::arg("rhoKS")    = 100.0,
              py::arg("safety_factor") = 1.5,
-             py::arg("pressure") = 100.0,
+             py::arg("force") = 684e3,
              py::arg("omega") = 0.8,
              py::arg("level") = 2,
              py::arg("rtol") = 1e-6,
@@ -34,6 +35,34 @@ PYBIND11_MODULE(wingmultigrid, m) {
                  return sens;
              })
         .def("free", &LinearWingSolver::free);
+
+    py::class_<LinearStiffenedWingSolver>(m, "LinearStiffenedWingSolver")
+        // only expose (rhoKS, load_mag)
+        .def(py::init<double, double, double, double, int, double, int, int, int, bool>(),
+             py::arg("rhoKS")    = 100.0,
+             py::arg("safety_factor") = 1.5,
+             py::arg("force") = 684e3,
+             py::arg("omega") = 0.8,
+             py::arg("level") = 2,
+             py::arg("rtol") = 1e-6,
+             py::arg("ORDER") = 8,
+             py::arg("nsmooth") = 1,
+             py::arg("ninnercyc") = 1,
+             py::arg("print") = false)
+        .def("set_design_variables", &LinearStiffenedWingSolver::set_design_variables)
+        .def("get_num_vars",         &LinearStiffenedWingSolver::get_num_vars)
+        .def("get_num_dvs",          &LinearStiffenedWingSolver::get_num_dvs)
+        .def("get_num_lin_solves",          &LinearStiffenedWingSolver::get_num_lin_solves)
+        .def("solve",                &LinearStiffenedWingSolver::solve)
+        .def("writeSolution",         &LinearStiffenedWingSolver::writeSolution)
+        .def("evalFunction",         &LinearStiffenedWingSolver::evalFunction)
+        .def("evalFunctionSens",
+             [](LinearStiffenedWingSolver &s, const std::string &name) {
+                 std::vector<double> sens(s.get_num_dvs());
+                 s.evalFunctionSens(name, sens.data());
+                 return sens;
+             })
+        .def("free", &LinearStiffenedWingSolver::free);
 
     // py::class_<NonlinearPlateSolver>(m, "NonlinearPlateSolver")
     //     // only expose (rhoKS, load_mag)

@@ -8,11 +8,10 @@ import os
 import argparse
 
 # setup GPU solver
-solver = wingmultigrid.LinearWingSolver(
+solver = wingmultigrid.LinearStiffenedWingSolver(
     rhoKS=100.0,
     safety_factor=1.5,
-    # force=684e3, # 30 KPa on lower skin from the structural benchmark
-    force=684e3*5, # boost load from static benchmark (to get more deflection?)
+    force=684e3, # 30 KPa on lower skin from the structural benchmark
     omega=0.85,
     nsmooth=1,
     ORDER=8,
@@ -30,7 +29,7 @@ def load_design(filename):
 
 # linear optimal
 # filename = None
-filename = "out/lin_gpu_opt.txt"
+filename = "out/lin_stiff_gpu_opt.txt"
 # nonlinear optimal
 # filename = "out/nl_gpu_opt.txt"
 
@@ -42,9 +41,10 @@ if os.path.exists(filename):
 else:
     # init dvs
     ndvs = solver.get_num_dvs()
+    print(f"{ndvs=}")
     # x0 = np.array([3e-2]*ndvs)
     # x0 = np.array([2e-2]*ndvs) # very slender
-    x0 = np.array([1e-2]*ndvs)
+    x0 = np.array([0.0065,0.05,0.006,0.15]*111)
     # x0 = np.array([5e-3]*ndvs)
     # x0 = np.array([2e-3] * ndvs)
     # x0 = np.array([1e-3]*ndvs) # very slender

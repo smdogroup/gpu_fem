@@ -1,7 +1,7 @@
 #pragma once
 
 template <typename T, class Basis, class Assembler>
-void addSkinLoadsToWing(Assembler &assembler, T *wing_loads, T pressure) {
+void addSkinLoadsToWing(Assembler &assembler, T *wing_loads, T force) {
     // just apply pressure load evenly on the lower skin compoenents
     // assume wing loads pointer is already defined / initialized (on host) and in VIS order not SOLVE order
 
@@ -27,10 +27,17 @@ void addSkinLoadsToWing(Assembler &assembler, T *wing_loads, T pressure) {
         // get nodes for it (only need one node, not all four or something)
         int inode = h_elem_conn[Basis::num_nodes * ielem];
         T *xpt = &h_xpts[3 * inode];
-        if (xpt[1] > 0.0) {
+        if (xpt[2] > 0.0) {
             is_comp_lower_skin[icomp] = false; // it's not a lower skin panel anymore
         }
     }
+
+    // then check how many components and how many of them are lower skin
+    int num_lower_skin_comp = 0;
+    for (int icomp = 0; icomp < num_components; icomp++) {
+        num_lower_skin_comp += is_comp_lower_skin[icomp];
+    }
+    printf("%d # components and %d # comps in lower skin\n", num_components, num_lower_skin_comp);
 
     // get the number of elements in the lower skin (instead of num nodes, since don't want to worry about unique node)
     int num_lower_skin_elems = 0;
@@ -40,9 +47,10 @@ void addSkinLoadsToWing(Assembler &assembler, T *wing_loads, T pressure) {
             num_lower_skin_elems++;
         }
     }
+    printf("add skin loads to wing with %d lower skin elems\n", num_lower_skin_elems);
 
     /* 2) apply uniform pressure load to all lower skin elems, evenly distributed among their nodes */
-    T nodal_load_scale = 1.0 / Basis::num_nodes / num_lower_skin_elems;
+    T nodal_load_scale = force / Basis::num_nodes / num_lower_skin_elems;
     for (int ielem = 0; ielem < num_elements; ielem++) {
         int icomp = h_elem_components[ielem];
         if (is_comp_lower_skin[icomp]) {
