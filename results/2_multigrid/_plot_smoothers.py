@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import niceplots
 
 for case in ["cylinder-A100"]:
 # for case in ["cylinder", "wingbox"]:
@@ -25,35 +26,41 @@ for case in ["cylinder-A100"]:
 
     toverR = 1.0 / SR
 
-    # show_time = True
-    show_time = False # then show rat eof resid/sec
+    show_time = True
+    # show_time = False # then show rat eof resid/sec
 
-    plt.rcParams.update({
-        # 'font.family': 'Courier New',  # monospace font
-        'font.family' : 'monospace', # since Courier new not showing up?
-        'font.size': 20,
-        'axes.titlesize': 20,
-        'axes.labelsize': 20,
-        'xtick.labelsize': 20,
-        'ytick.labelsize': 20,
-        'legend.fontsize': 18,
-        'figure.titlesize': 20
-    })
+    # plt.rcParams.update({
+    #     # 'font.family': 'Courier New',  # monospace font
+    #     'font.family' : 'monospace', # since Courier new not showing up?
+    #     'font.size': 20,
+    #     'axes.titlesize': 20,
+    #     'axes.labelsize': 20,
+    #     'xtick.labelsize': 20,
+    #     'ytick.labelsize': 20,
+    #     'legend.fontsize': 18,
+    #     'figure.titlesize': 20
+    # })
 
-    four_colors6 = ["#231f20", "#bb4430", "#7ebdc2", "#f3dfa2"]
-    colors = four_colors6
+    plt.style.use(niceplots.get_style())
+
+
+    # four_colors6 = ["#231f20", "#bb4430", "#7ebdc2", "#f3dfa2"]
+    # colors = four_colors6
 
     fig, ax = plt.subplots(figsize=(9, 7.5))
     # plt.plot(toverR, 6.0 / LU, "o-", linewidth=3, color="tab:gray", label="Full-LU")
 
 
-    six_colors1 = ["#ef476f", "#f78c6b", "#ffd166", "#06d6a0", "#118ab2", "#073b4c"]
-    six_colors2 = ["#264653", "#2a9d8f", "#8ab17d", "#e9c46a", "#f4a261", "#e76f51"]
-    six_colors3 = ["#e03c31", "#ff7f41", "#f7ea48", "#2dc84d", "#147bd1", "#753bbd"]
-    six_colors4 = ["#003049", "#6b2c39", "#d62828", "#f77f00", "#fcbf49", "#eae2b7"]
+    # six_colors1 = ["#ef476f", "#f78c6b", "#ffd166", "#06d6a0", "#118ab2", "#073b4c"]
+    # six_colors2 = ["#264653", "#2a9d8f", "#8ab17d", "#e9c46a", "#f4a261", "#e76f51"]
+    # six_colors3 = ["#e03c31", "#ff7f41", "#f7ea48", "#2dc84d", "#147bd1", "#753bbd"]
+    # six_colors4 = ["#003049", "#6b2c39", "#d62828", "#f77f00", "#fcbf49", "#eae2b7"]
 
-    # colors = six_colors3
-    colors = six_colors2
+    # # colors = six_colors3
+    # colors = six_colors2
+
+    four_colors6 = ["#231f20", "#bb4430", "#7ebdc2", "#f3dfa2"]
+    colors = four_colors6
 
     # names = ['CP8-noMG', 'Jacobi', 'GSMC', 'CP8', 'Full-LU']
     names = ['CP8', 'CP8-noMG', 'GSMC', 'Jacobi', 'Full-LU']

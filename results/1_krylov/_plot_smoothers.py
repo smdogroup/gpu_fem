@@ -101,10 +101,17 @@ for case in ["cylinder-A100"]:
     )
 
 
-    six_colors1 = ["#ef476f", "#f78c6b", "#ffd166", "#06d6a0", "#118ab2", "#073b4c"]
-    six_colors2 = ["#264653", "#2a9d8f", "#8ab17d", "#e9c46a", "#f4a261", "#e76f51"]
-    six_colors3 = ["#e03c31", "#ff7f41", "#f7ea48", "#2dc84d", "#147bd1", "#753bbd"]
-    six_colors4 = ["#003049", "#6b2c39", "#d62828", "#f77f00", "#fcbf49", "#eae2b7"]
+    # six_colors1 = ["#ef476f", "#f78c6b", "#ffd166", "#06d6a0", "#118ab2", "#073b4c"]
+    # six_colors2 = ["#264653", "#2a9d8f", "#8ab17d", "#e9c46a", "#f4a261", "#e76f51"]
+    # six_colors3 = ["#e03c31", "#ff7f41", "#f7ea48", "#2dc84d", "#147bd1", "#753bbd"]
+    # six_colors4 = ["#003049", "#6b2c39", "#d62828", "#f77f00", "#fcbf49", "#eae2b7"]
+
+    # more muted version
+    # six_colors1 = ["#c85c6d", "#d78f71", "#e3c877", "#65b39a", "#4d86a3", "#305161"]
+    
+    six_colors1 = ["#d95a72", "#eb9a79", "#f3d27d", "#3cc7a1", "#3b90b3", "#1a4c60"]
+
+
 
     # colors = six_colors3
     # colors = six_colors2
@@ -236,14 +243,25 @@ arr2 = df2.to_numpy()
 DOF = arr2[:,1]
 
 
-six_colors1 = ["#ef476f", "#f78c6b", "#ffd166", "#06d6a0", "#118ab2", "#073b4c"]
-six_colors2 = ["#264653", "#2a9d8f", "#8ab17d", "#e9c46a", "#f4a261", "#e76f51"]
-six_colors3 = ["#e03c31", "#ff7f41", "#f7ea48", "#2dc84d", "#147bd1", "#753bbd"]
-six_colors4 = ["#003049", "#6b2c39", "#d62828", "#f77f00", "#fcbf49", "#eae2b7"]
+# six_colors1 = ["#ef476f", "#f78c6b", "#ffd166", "#06d6a0", "#118ab2", "#073b4c"]
+# six_colors2 = ["#264653", "#2a9d8f", "#8ab17d", "#e9c46a", "#f4a261", "#e76f51"]
+# six_colors3 = ["#e03c31", "#ff7f41", "#f7ea48", "#2dc84d", "#147bd1", "#753bbd"]
+# six_colors4 = ["#003049", "#6b2c39", "#d62828", "#f77f00", "#fcbf49", "#eae2b7"]
+
+# more muted version
+# six_colors1 = ["#c85c6d", "#d78f71", "#e3c877", "#65b39a", "#4d86a3", "#305161"]
 
 # colors = six_colors3
 # colors = six_colors2
-colors = six_colors1[2:]
+# colors = six_colors1[2:]
+
+# experimenting with muting
+# colors = ["#bd6a78", "#ddcb8f", "#7bb6a6", "#6d8fa3"]
+# colors = ["#c85c6d", "#e3c877", "#65b39a", "#4d86a3"]
+# six_colors1 = ["#d95a72", "#eb9a79", "#f3d27d", "#3cc7a1", "#3b90b3", "#1a4c60"]
+colors = [six_colors1[0], six_colors1[2], six_colors1[3], six_colors1[-2]]
+
+# colors = six_colors1[2:]
 
 plt.plot(DOF, 20e3 * np.ones(DOF.shape[0]), "--", linewidth=2, markersize=8, color="tab:gray", label="A100-mem")
 
