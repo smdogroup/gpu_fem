@@ -30,11 +30,12 @@ solver = None
 
 root = 0
 if comm.rank == root:
-    solver = cylindermultigrid.NonlinearPlateSolver(
+    solver = cylindermultigrid.NonlinearCylinderSolver(
         rhoKS=100.0,
         safety_factor=1.5,
-        load_mag=4e6,
-        omega=0.3,
+        pressure=4e6,
+        # omega=0.3,
+        omega=0.8,
         # nxe=512,
         # nxe=256,
         nxe=128,
@@ -90,11 +91,12 @@ def get_functions(xdict):
 
     # print(f"{funcs=}")
 
-    comp_names = [f"comp{icomp}" for icomp in range(ndvs)]
-    with open("out/lin_gpu_opt.txt", "w") as f:
-        f.write(f"{mass=:.4e} {ksfail=:.4e}\n")
-        for name, value in zip(comp_names, xarr):
-            f.write(f"{name}\t{value:.16e}\n")
+    if num_lin_solves % 5 == 0 and comm.rank == root: # so we don't affect runtimes for fast problems
+        comp_names = [f"comp{icomp}" for icomp in range(ndvs)]
+        with open("out/nl_gpu_opt.txt", "w") as f:
+            f.write(f"{mass=:.4e} {ksfail=:.4e}\n")
+            for name, value in zip(comp_names, xarr):
+                f.write(f"{name}\t{value:.16e}\n")
 
     return funcs, False
 
@@ -132,7 +134,7 @@ opt_problem = Optimization("tuning-fork", get_functions)
 opt_problem.addVarGroup(
     "vars",
     ndvs,
-    lower=np.array([5e-3]*ndvs), # TODO : change min of non-struct-masses?
+    lower=np.array([1e-2]*ndvs), # TODO : change min of non-struct-masses?
     upper=np.array([1e2]*ndvs),
     value=x0,
     scale=np.array([1e2]*ndvs),
@@ -166,8 +168,8 @@ snoptimizer = SNOPT(
     options={
         "Print frequency": 1000,
         "Summary frequency": 10000000,
-        "Major feasibility tolerance": 1e-5,
-        "Major optimality tolerance": 1e-3,
+        "Major feasibility tolerance": 1e-6,
+        "Major optimality tolerance": 1e-4,
         "Verify level": verify_level, #-1,
         "Major iterations limit": int(1e4), #1000, # 1000,
         "Minor iterations limit": 150000000,
@@ -198,7 +200,7 @@ print(f"{sol.xStar=}")
 
 if comm.rank == root:
     solver.solve()
-    solver.writeSolution("out/plate_opt.vtk")
+    solver.writeSolution("out/cylinder_opt_nl.vtk")
     solver.free()
 
 num_lin_solves = solver.get_num_lin_solves()

@@ -24,7 +24,8 @@ class LinearPlateAnalysis:
         E = 70e9  # elastic modulus, Pa
         nu = 0.3  # poisson's ratio
         ys = 350e6  # yield stress, Pa
-        min_thickness = 0.005
+        # min_thickness = 0.005
+        min_thickness = 0.01
         max_thickness = 2.0
         thickness = 0.02
 
@@ -362,8 +363,8 @@ snoptimizer = SNOPT(
     options={
         "Print frequency": 1000,
         "Summary frequency": 10000000,
-        "Major feasibility tolerance": 1e-5,
-        "Major optimality tolerance": 1e-3,
+        "Major feasibility tolerance": 1e-6,
+        "Major optimality tolerance": 1e-4,
         "Verify level": verify_level, #-1,
         "Major iterations limit": int(1e4), #1000, # 1000,
         "Minor iterations limit": 150000000,

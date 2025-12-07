@@ -58,7 +58,7 @@ class NonlinearCylinderSolver {
     using KrylovSolve = PCGSolver<T, GRID>;
     using TwoLevelSolve = MultigridTwoLevelSolver<GRID>;
     using KMG = MultilevelKcycleSolver<GRID, CoarseSolver, TwoLevelSolve, KrylovSolve>;
-    using StructSolver = TacsMGInterface<T, Assembler, KMG>;
+    // using StructSolver = TacsMGInterface<T, Assembler, KMG>;
 
     // build the inexact newton + outer continuation solver
     using Mat = BsrMat<DeviceVec<T>>;
@@ -74,7 +74,9 @@ class NonlinearCylinderSolver {
 
     NonlinearCylinderSolver(double rhoKS = 100.0, double safety_factor = 1.5,
                             double load_mag = 100.0, T omega = 1.0, int nxe = 100, int nx_comp = 5,
-                            int ny_comp = 5, double SR = 50.0, int ORDER = 8) {
+                            int ny_comp = 5, double SR = 50.0, int ORDER = 8, 
+                            int nsmooth = 1, int ninnercyc = 1, double in_plane_frac = 0.1,
+                            bool print = false) {
         // 1) Build mesh & assembler
         assert(nxe % nx_comp == 0);  // evenly divisible by number of elems_per_comp
         int nye = nxe;
@@ -113,7 +115,7 @@ class NonlinearCylinderSolver {
             // (nxe - 1) / (nxe - 1); T *my_loads = getCylinderLoads<T,  Basis, Physics,
             // load_case>(c_nxe, c_nhe, L, R, pressure);
             T *my_loads =
-                getCylinderLoadsRobust<T, Assembler>(assembler, c_nxe, c_nhe, L, R, pressure);
+                getCylinderLoadsRobust<T, Assembler>(assembler, c_nxe, c_nhe, L, R, load_mag, in_plane_frac);
             printf("making grid with nxe %d\n", c_nxe);
 
             auto &bsr_data = assembler.getBsrData();
@@ -168,9 +170,10 @@ class NonlinearCylinderSolver {
 
         // int n_cycles = 200, pre_smooth = 1, post_smooth = 1, print_freq = 3;
         // bool print = true;
-        bool print = false;
+        // bool print = false;
         bool double_smooth = true;
-        int nsmooth = 1, ninnercyc = 1, print_freq = 3;
+        // int nsmooth = 1, ninnercyc = 1, 
+        int print_freq = 3;
         int n_krylov = 50;
         T atol = 1e-6, rtol = 1e-6;
         // bool double_smooth = false;  // actually faster sometimes
@@ -193,20 +196,26 @@ class NonlinearCylinderSolver {
         ndvs = assembler.get_num_dvs();
         d_dvs = DeviceVec<T>(ndvs, /*initial=*/0.02);
 
+        // fine grid, create the nonlinear solvers and NL solver interface
+        // -------------------------
+        T initLinSolveRtol = 1e-2;
+        // T initLinSolveRtol = 1e-1; // which makes it run faster?
+        T linSolveAtol = 1e-4;
+        // T restart_dlam = 1e-2; // default
+        T restart_dlam = 0.05; // tolerance for just trying to newton solve immediately to lam = 1.0
+
+        inner_solver = new INK(cublasHandle, assembler, mg->grids[0].Kmat, d_loads, mg, initLinSolveRtol, linSolveAtol, 1e-4, 0.25, restart_dlam);
+        bool use_predictor = true, debug = false;
+        // bool use_predictor = false, debug = false;
+        nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
+        solver = new StructSolver(cublasHandle, nl_solver, assembler, mg, print);
+
         // 5) Functions
         mass = std::make_unique<DMass>();
         ksfail = std::make_unique<DKSFail>(rhoKS, safety_factor);
 
         dvs_changed = true;
         first_solve = true;
-
-        // create nonlinear solver
-        // -------------------------
-        inner_solver = new INK(cublasHandle, assembler, mg->grids[0].kmat, fine_loads, kmg);
-        bool use_predictor = true, debug = false;
-        // bool use_predictor = false, debug = false;
-        nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
-        solver = new StructSolver(*nl_solver, assembler, *mg, mg->grids[0].d_defect, print);
     }
 
     void set_design_variables(const std::vector<T> &dvs) {
@@ -243,8 +252,7 @@ class NonlinearCylinderSolver {
         if (dvs_changed) {
             printf("design changed, new solve\n");
 
-            solver->solve(d_loads);
-            num_lin_solves++;
+            solver->solve();
             solver->copy_solution_out(soln);
         } else {
             // reload old state
@@ -276,7 +284,7 @@ class NonlinearCylinderSolver {
         }
         CHECK_CUDA(cudaMemcpy(out_h_sens, dptr, ndvs * sizeof(T), cudaMemcpyDeviceToHost));
     }
-    int get_num_lin_solves() { return num_lin_solves; }
+    int get_num_lin_solves() { return mg->get_num_lin_solves(); }
 
     void free() {
         solver->free();

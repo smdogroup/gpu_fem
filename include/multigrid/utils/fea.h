@@ -1235,7 +1235,7 @@ T *getCylinderLoads(int nxe, int nhe, double L, double R, double load_mag) {
 
 template <typename T, class Assembler>
 T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, double R,
-                          double load_mag) {
+                          double load_mag, double in_plane_frac = 0.0) {
     /* more robust version of cylinder loads */
 
     using Phys = typename Assembler::Phys;
@@ -1313,6 +1313,9 @@ T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, doub
                     int inode = elem_nodes[lnode];
                     T nodal_mag = mag * N[lnode] * weight * J;
 
+                    // in plane load fraction
+                    my_loads[vpn * inode + offset] += nodal_mag * -1.0 * in_plane_frac;
+
                     // add to each node now using element shape functions
                     // y and z components of the load
                     my_loads[vpn * inode + offset + 1] += sin(th) * nodal_mag;
@@ -1325,6 +1328,8 @@ T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, doub
 
     return my_loads;
 }
+
+
 
 template <class Assembler>
 Assembler createHemisphereAssembler(int nxe, int nhe, double phi, double R, double E, double nu,

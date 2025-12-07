@@ -17,7 +17,7 @@ ndvs_per_side = 32
 solver = cylindermultigrid.LinearCylinderSolver(
     rhoKS=100.0,
     safety_factor=1.5,
-    load_mag=3000.0,
+    pressure=3000.0,
     omega=0.85,
     # nxe=512,
     # nxe=256,
@@ -25,7 +25,7 @@ solver = cylindermultigrid.LinearCylinderSolver(
     nx_comp=ndvs_per_side, # num dvs in x-direction
     ny_comp=ndvs_per_side, # num dvs/comps in y-direction
     # SR=50.0, # slenderness
-    ORDER=4,
+    ORDER=8,
 )
 
 # init dvs

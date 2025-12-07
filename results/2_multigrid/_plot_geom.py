@@ -191,7 +191,7 @@ fig, ax = plt.subplots(figsize=(8, 6.5))
 
 names = ['plate', 'cylinder', 'hemisphere', 'aob-wing']
 
-xmin, xmax = 0.9 * np.min(NDOF), 1.2 * np.max(NDOF)
+xmin, xmax = 2e4, 1e7
 # xmin = np.min([0.9 * 1e3, xmin])
 plt.hlines(y=1.0, xmin=1.05 *xmin, xmax=0.95 * xmax, colors="tab:gray", linewidth=2, linestyle="--")
 
@@ -275,7 +275,11 @@ ax.set_yticks([1e0, 1e1, 1e2])
 # ax.set_yticklabels([r"$4 \cdot 10^{-2}$", r"$10^{-1}$", r"$10^{0}$"]) #, rotation=45, ha='right')
 ax.set_yticklabels([r"$10^{0}$", r"$10^{1}$", r"$10^{2}$"])
 
+ax.set_xticks([2e4, 1e5, 1e6, 1e7])
+# ax.set_yticklabels([r"$4 \cdot 10^{-2}$", r"$10^{-1}$", r"$10^{0}$"]) #, rotation=45, ha='right')
+ax.set_xticklabels([r"$2 \times 10^{4}$", r"$10^{5}$", r"$10^{6}$", r"$10^{7}$"])
+
 plt.tight_layout()
-plt.margins(x=0.04, y=0.07)
+plt.margins(x=0.02, y=0.07)
 plt.savefig("out/2_geoms_dof.png", dpi=400)
 plt.close('all')
