@@ -134,8 +134,7 @@ class LinearStiffenedWingSolver {
             // apply lower skin press loads
             int nvars = assembler.get_num_vars();
             int nnodes = assembler.get_num_nodes();
-            T *wing_loads = new T[nvars];
-            memset(wing_loads, 0.0, nvars * sizeof(T));
+            T *wing_loads;
             addSkinLoadsToWing<double, Basis, Assembler>(assembler, wing_loads, force);
 
             // do multicolor junction reordering

@@ -27,6 +27,8 @@ PYBIND11_MODULE(wingmultigrid, m) {
         .def("get_num_lin_solves",          &LinearWingSolver::get_num_lin_solves)
         .def("solve",                &LinearWingSolver::solve)
         .def("writeSolution",         &LinearWingSolver::writeSolution)
+        .def("writeLoadsToVTK",         &LinearWingSolver::writeLoadsToVTK)
+        .def("writeExplodedVTKs",         &LinearWingSolver::writeExplodedVTKs)
         .def("evalFunction",         &LinearWingSolver::evalFunction)
         .def("evalFunctionSens",
              [](LinearWingSolver &s, const std::string &name) {

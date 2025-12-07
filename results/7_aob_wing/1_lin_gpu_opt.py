@@ -19,8 +19,8 @@ if comm.rank == root:
     solver = wingmultigrid.LinearWingSolver(
         rhoKS=100.0,
         safety_factor=1.5,
-        # force=684e3, # 30 KPa on lower skin from the structural benchmark
-        force=684e3*5, # boost load from static benchmark (to get more deflection?)
+        force=684e3, # 30 KPa on lower skin from the structural benchmark
+        # force=684e3*3, # boost load from static benchmark (to get more deflection?)
         omega=0.85,
         nsmooth=1,
         ORDER=8,
@@ -36,7 +36,7 @@ if comm.rank == root:
 # init dvs
 ndvs = solver.get_num_dvs()
 # x0 = np.array([5e-3]*ndvs)
-x0 = np.array([1e-2]*ndvs)
+x0 = np.array([3e-2]*ndvs)
 
 
 def get_functions(xdict):
@@ -110,7 +110,7 @@ opt_problem.addVarGroup(
     value=x0,
     scale=np.array([1e2]*ndvs),
 )
-opt_problem.addObj('mass', scale=1e-2)
+opt_problem.addObj('mass', scale=1e-3)
 opt_problem.addCon("ksfailure", scale=1.0, upper=1.0)
 
 # adjacency constraints (linear so reduces size of opt problem)
@@ -139,8 +139,8 @@ snoptimizer = SNOPT(
     options={
         "Print frequency": 1000,
         "Summary frequency": 10000000,
-        "Major feasibility tolerance": 1e-6, # 1e-5
-        "Major optimality tolerance": 1e-4, # 1e-4
+        "Major feasibility tolerance": 1e-5, # 1e-6
+        "Major optimality tolerance": 1e-3, # 1e-4
         "Verify level": verify_level, #-1,
         "Major iterations limit": int(1e4), #1000, # 1000,
         "Minor iterations limit": 150000000,

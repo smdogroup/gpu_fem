@@ -8,6 +8,7 @@
 #include "mesh/TACSMeshLoader.h"
 // #include "coupled/_coupled.h"
 #include "solvers/_solvers.h"
+#include "mesh/exploded_vtk_writer.h"
 
 // shell imports
 #include "assembler.h"
@@ -137,8 +138,7 @@ class LinearWingSolver {
             // apply lower skin press loads
             int nvars = assembler.get_num_vars();
             int nnodes = assembler.get_num_nodes();
-            T *wing_loads = new T[nvars];
-            memset(wing_loads, 0.0, nvars * sizeof(T));
+            T *wing_loads;
             addSkinLoadsToWing<double, Basis, Assembler>(assembler, wing_loads, force);
 
             // do multicolor junction reordering
@@ -147,10 +147,12 @@ class LinearWingSolver {
             int num_colors, *_color_rowp;
 
             bool coarsest_grid = i == 0;
-            if (!coarsest_grid) {
-                WingboxMultiColoring<Assembler>::apply_coloring(assembler, bsr_data, num_colors, _color_rowp);
-                bsr_data.compute_nofill_pattern();
-            } else {
+            // if (!coarsest_grid) {
+                // WingboxMultiColoring<Assembler>::apply_coloring(assembler, bsr_data, num_colors, _color_rowp);
+                // bsr_data.compute_nofill_pattern();
+            // } else {
+            // try no reordering
+            if (coarsest_grid) {
                 // full LU pattern for coarsest grid
                 bsr_data.AMD_reordering();
                 bsr_data.compute_full_LU_pattern(10.0, false);
@@ -266,6 +268,27 @@ class LinearWingSolver {
     int get_num_vars() const { return nvars; }
     int get_num_dvs() const { return ndvs; }
     void writeSolution(const std::string &filename) const { solver->writeSoln(filename); }
+
+    void writeLoadsToVTK(const std::string &filename) {
+        // permute defect loads to VIS order
+        auto bsr_data = mg->grids[0].assembler.getBsrData();
+        d_loads.permuteData(bsr_data.block_dim, bsr_data.perm);
+        solver->copy_solution_in(d_loads);
+        writeSolution(filename);
+        d_loads.permuteData(bsr_data.block_dim, bsr_data.iperm); // un-permute
+    }
+
+    void writeExplodedVTKs(const std::string int_struct_filename, const std::string &upper_skin_filename, 
+        const std::string lower_skin_filename) {
+
+        auto bsr_data = mg->grids[0].assembler.getBsrData();
+        soln.permuteData(bsr_data.block_dim, bsr_data.perm);
+        auto h_soln = soln.createHostVec();
+        
+        explodedPrintToVTK<Assembler, HostVec<T>, INT_STRUCT>(mg->grids[0].assembler, h_soln, int_struct_filename);
+        explodedPrintToVTK<Assembler, HostVec<T>, UPPER_SKIN>(mg->grids[0].assembler, h_soln, upper_skin_filename);
+        explodedPrintToVTK<Assembler, HostVec<T>, LOWER_SKIN>(mg->grids[0].assembler, h_soln, lower_skin_filename);
+    }
 
     void solve() {
         if (dvs_changed) {
