@@ -26,6 +26,23 @@ plt.style.use(niceplots.get_style())
 ms = 7 # marker size
 # ms = 8
 
+# fs = 24
+fs = 20
+# fs = 22
+
+# text_fs = 12
+text_fs = 14
+
+plt.rcParams.update({
+    'font.size': fs,
+    'axes.titlesize': fs,
+    'axes.labelsize': fs,
+    'xtick.labelsize': fs,
+    'ytick.labelsize': fs,
+    'legend.fontsize': fs,
+    'figure.titlesize': fs,
+})
+
 # four_colors6 = ["#231f20", "#bb4430", "#7ebdc2", "#f3dfa2"]
 # colors = four_colors6
 
