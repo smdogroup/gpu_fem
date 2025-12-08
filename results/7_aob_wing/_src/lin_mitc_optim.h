@@ -45,7 +45,7 @@
 
 // copied and modified from ../uCRM/_src/optim.h (uCRM optimization example)
 
-class LinearWingSolver {
+class LinearMITCWingSolver {
    public:
     using T = double;
     // FEM typedefs
@@ -58,12 +58,12 @@ class LinearWingSolver {
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
     // MITC4 shell
-    // using Basis = LagrangeQuadBasis<T, Quad, 1>;
-    // using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
+    using Basis = LagrangeQuadBasis<T, Quad, 1>;
+    using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
 
     // CFI4 shell (be careful it is locked though)
-    using Basis = ChebyshevQuadBasis<T, Quad, 1>;
-    using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
+    // using Basis = ChebyshevQuadBasis<T, Quad, 1>;
+    // using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
 
     // multigrid objects
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
@@ -72,6 +72,7 @@ class LinearWingSolver {
     // static const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
     using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
     // using MG = GeometricMultigridSolver<GRID>; // old V-cycle solver
 
     // for K-cycles
@@ -84,9 +85,9 @@ class LinearWingSolver {
     using DMass = Mass<T, DeviceVec>;
     using DKSFail = KSFailure<T, DeviceVec>;
 
-    LinearWingSolver(double rhoKS = 100.0, double safety_factor = 1.5, double force = 30e3,
+    LinearMITCWingSolver(double rhoKS = 100.0, double safety_factor = 1.5, double force = 30e3,
                       T omega = 1.0, int level = 2, T rtol = 1e-6, int ORDER = 8, 
-                      int nsmooth = 1, int ninnercyc = 1, bool print = false) {
+                      int nsmooth = 1, int ninnercyc = 1, bool print = false, int n_krylov = 50) {
 
         // --- SAFE MPI INIT ---
         int already_init = 0;
@@ -202,11 +203,11 @@ class LinearWingSolver {
         // int n_cycles = 200, pre_smooth = 1, post_smooth = 1, print_freq = 3;
         // bool print = true;
         // bool print = false;
-        bool double_smooth = true;
-        // bool double_smooth = false;
+        // bool double_smooth = true;
+        bool double_smooth = false;
         // int nsmooth = 1, ninnercyc = 1, print_freq = 3;
         int print_freq = 3;
-        int n_krylov = 50;
+        // int n_krylov = 50;
         T atol = 1e-4;  //, rtol = 1e-6;
         // bool double_smooth = false;  // actually faster sometimes
 

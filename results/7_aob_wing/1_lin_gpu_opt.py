@@ -12,23 +12,45 @@ from mpi4py import MPI
 comm = MPI.COMM_WORLD
 root = 0
 
+# ARGPARSE
+parser = argparse.ArgumentParser(description="Choose the wing element type for the solver.")
+parser.add_argument(
+    "--element",
+    type=str,
+    choices=["CFI4", "MITC4"],
+    default="MITC4",
+    help="Finite element type to use (default: MITC4)."
+)
+args = parser.parse_args()
+element = args.element
+
+SOLVER_CLASS = None
+if element == "CFI4":
+    SOLVER_CLASS = wingmultigrid.LinearCFIWingSolver
+elif element == "MITC4":
+    SOLVER_CLASS = wingmultigrid.LinearMITCWingSolver
+
+
 # setup GPU solver on root
-solver = None
 root = 0
 if comm.rank == root:
-    solver = wingmultigrid.LinearWingSolver(
+    solver = SOLVER_CLASS(
         rhoKS=100.0,
         safety_factor=1.5,
-        force=684e3, # 30 KPa on lower skin from the structural benchmark
-        # force=684e3*3, # boost load from static benchmark (to get more deflection?)
+        # force=684e3, # 30 KPa on lower skin from the structural benchmark
+        force=684e3*3, # boost load from static benchmark (to get more deflection?)
         omega=0.85,
         nsmooth=1,
-        ORDER=8,
+        # ORDER=8,
+        ORDER=16, # went with this as fast for thin shell and not too much extra smoothing for thick shell
+        # ORDER=32, # fastest for very thin shell case (but only a bit faster than ORDER=16)
         # ORDER=4,
-        rtol=1e-6, # almost want to have high rtol like this only later in the optimization tbh..
-        # rtol=1e-5,
+        n_krylov=200,
+        # rtol=1e-6, # almost want to have high rtol like this only later in the optimization tbh..
+        rtol=1e-5,
         # rtol=1e-4, # faster optimization, but will it converge though?
-        print=True, # always on for these kinds of tests..
+        # print=True, # always on for these kinds of tests..
+        print=False,
     )
 
 
