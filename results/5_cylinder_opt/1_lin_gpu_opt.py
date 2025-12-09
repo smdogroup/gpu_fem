@@ -31,6 +31,7 @@ if comm.rank == root:
         omega=0.8,
         # nxe=512,
         # nxe=256,
+        in_plane_frac=2.0,
         nxe=128,
         nx_comp=ndvs_per_side, # num dvs in x-direction
         ny_comp=ndvs_per_side, # num dvs/comps in y-direction

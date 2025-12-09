@@ -121,7 +121,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // T omegaMC = 0.75;
     // T omegaMC = 0.7;
 
-    T omegaLS_min = 0.1, omegaLS_max = 2.0;
+    T omegaLS_min = 1e-2, omegaLS_max = 4.0;
+
+    // T omegaLS_min = 0.1, omegaLS_max = 2.0;
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     // T omegaLS_min = 0.5, omegaLS_max = 2.0;
 
@@ -156,7 +158,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         constexpr int load_case = 3; // petal and chirp load
         // double nodal_loads = uniform_force; // (don't normalize anymore, integrated out) / (nxe - 1) / (nxe - 1);
         // T *my_loads = getCylinderLoads<T,  Basis, Physics, load_case>(c_nxe, c_nhe, L, R, pressure);
-        T *my_loads = getCylinderLoadsRobust<T,  Assembler>(assembler, c_nxe, c_nhe, L, R, pressure);
+        // T *my_loads = getCylinderLoadsRobust<T,  Assembler>(assembler, c_nxe, c_nhe, L, R, pressure);
+        T *my_loads = getCylinderLoadsSimple<T,  Assembler>(assembler, c_nxe, c_nhe, L, R, pressure);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -223,7 +226,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     T init_resid_nrm = is_kcycle ? kmg->grids[0].getResidNorm() : mg->grids[0].getResidNorm();
 
     CHECK_CUDA(cudaDeviceSynchronize());
-    auto start1 = std::chrono::high_resolution_clock::now();
 
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
     // bool print = true;
@@ -263,15 +265,25 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // -------------------------------------------------------
 
     kmg->set_print(true);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start_lin = std::chrono::high_resolution_clock::now();
+
     kmg->solve();
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end_lin = std::chrono::high_resolution_clock::now();
+
     kmg->set_print(false);
 
     T lin_max_disp = get_max_disp(kmg->grids[0].d_soln);
     printf("lin max disp = %.4e\n", lin_max_disp);
 
+    std::chrono::duration<double> lin_time = end_lin - start_lin;
+
     int *d_perm = kmg->grids[0].d_perm;
     auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/cylinder_mg_lin.vtk");
+    // printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/cylinder_mg_lin.vtk");
     
 
 
@@ -300,22 +312,31 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     // T inner_atol = 1e-4;
     // T inner_atol = 1e-4;
     T inner_atol = 1e-6;
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start_nl = std::chrono::high_resolution_clock::now();
+
     nl_solver->solve(fine_vars, lambda0, inner_atol);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end_nl = std::chrono::high_resolution_clock::now();
+
+    
     T nl_max_disp = get_max_disp(fine_vars);
 
     // print some of the data of host residual
     auto h_vars = fine_vars.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(fine_assembler, h_vars, "out/cylinder_mg_nl.vtk");
+    // printToVTK<Assembler,HostVec<T>>(fine_assembler, h_vars, "out/cylinder_mg_nl.vtk");
 
     // important to know reduction for how NL regime we are
     T ratio = nl_max_disp / lin_max_disp;
     printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
 
-    auto end1 = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> solve_time = end1 - start1;
+    std::chrono::duration<double> nl_time = end_nl - start_nl;
     int ndof = fine_assembler.get_num_vars();
-    double total = startup_time.count() + solve_time.count();
-    printf("nonlinear Newton-Raphson KMG solve of cylinder geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), solve_time.count(), total);
+    // double total = startup_time.count() + solve_time.count();
+    printf("lin solve time %.4e, nl solve time %.4e for ndof %d\n", lin_time.count(), nl_time.count(), ndof);
+    // printf("nonlinear Newton-Raphson KMG solve of cylinder geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), solve_time.count(), total);
 
     // free and cleanup
     // --------------------
@@ -345,7 +366,8 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     constexpr int load_case = 3; // petal and chirp load
     // double nodal_loads = uniform_force; // (don't normalize anymore, integrated out) / (nxe - 1) / (nxe - 1);
     // T *my_loads = getCylinderLoads<T,  Basis, Physics, load_case>(nxe, nxe, L, R, pressure);
-    T *my_loads = getCylinderLoadsRobust<T,  Assembler>(assembler, nxe, nxe, L, R, pressure);
+    // T *my_loads = getCylinderLoadsRobust<T,  Assembler>(assembler, nxe, nxe, L, R, pressure);
+    T *my_loads = getCylinderLoadsSimple<T,  Assembler>(assembler, nxe, nxe, L, R, pressure);
     printf("making grid with nxe %d\n", nxe);
 
     // BSR factorization
@@ -492,11 +514,14 @@ int main(int argc, char **argv) {
     int nxe = 128;
     double SR = 100.0; // default, the less slender it is, solves much faster
     int n_vcycles = 50;
-    double pressure = 8.0e6;
+    // double pressure = 8.0e6;
+    // double pressure = 8e7;
+    double pressure = 32e7;
     double omega = 0.8; // works better with omega near 1
 
     // old GSMC settings
-    int nsmooth = 1; // use nsmooth = 2 for 3rd order elements (needed)
+    int nsmooth = 2;
+    // int nsmooth = 1; // use nsmooth = 2 for 3rd order elements (needed)
     int ninnercyc = 1;
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9', 'HR4'

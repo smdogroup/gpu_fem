@@ -1331,6 +1331,101 @@ T *getCylinderLoadsRobust(Assembler &assembler, int nxe, int nhe, double L, doub
 
 
 
+template <typename T, class Assembler>
+T *getCylinderLoadsSimple(Assembler &assembler, int nxe, int nhe, double L, double R,
+                          double load_mag) {
+    /* more robust version of cylinder loads */
+
+    using Phys = typename Assembler::Phys;
+    using Basis = typename Assembler::Basis;
+
+    const int order = Basis::order;
+    const int n = order + 1;
+    using Quadrature = typename Basis::Quadrature;
+
+    // number of nodes per direction
+    int nnx = order * nxe + 1;
+    int nnh = order * nhe;
+    int num_nodes = nnx * nnh;
+
+    constexpr bool IS_HR_ELEM = Phys::hellingerReissner;
+    int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
+    int vpn = Phys::vars_per_node;
+
+    int num_dof = Phys::vars_per_node * num_nodes;
+    T *my_loads = new T[num_dof];
+    memset(my_loads, 0.0, num_dof * sizeof(T));
+
+    // get importnat data out of assembler and move to host
+    T *h_xpts = assembler.getXpts().createHostVec().getPtr();
+    int *h_conn = assembler.getConn().createHostVec().getPtr();
+
+    // loop over each element to compute load shape-function integrals
+    for (int ihe = 0; ihe < nhe; ihe++) {
+        // bool last_hoop = ihe == nhe - 1;
+        for (int ixe = 0; ixe < nxe; ixe++) {
+            int ielem = nxe * ihe + ixe;
+
+            // build element nodes and xpts from assembler
+            int *elem_nodes = &h_conn[Basis::num_nodes * ielem];
+            // get nodal coords of the element
+            T elem_xpts[3 * Basis::num_nodes] = {0};
+            for (int lnode = 0; lnode < Basis::num_nodes; lnode++) {
+                int inode = elem_nodes[lnode];
+                for (int dir = 0; dir < 3; dir++) {
+                    elem_xpts[3 * lnode + dir] = h_xpts[3 * inode + dir];
+                }
+            }
+
+            // compute shell normals
+            T fn[3 * Basis::num_nodes] = {0.0};
+            ShellComputeNodeNormals<T, Basis>(elem_xpts, fn);
+
+            // now do gauss quadrature integral
+            for (int iquad = 0; iquad < Quadrature::num_quad_pts; iquad++) {
+                T pt[2];
+                T weight = Quadrature::getQuadraturePoint(iquad, pt);
+
+                // interp x,y,z to the quadrature point (using element basis functions)
+                T xpt[3] = {0};
+                Basis::template interpFields<3, 3>(pt, elem_xpts, xpt);
+
+                // compute J = d(x,y,z)/dxi,deta
+                T J = getDetXd<T, Basis>(pt, elem_xpts, fn);
+
+                // compute load magnitudes at the quadrature point
+                T x_hat = xpt[0] / L;
+                T th = atan2(xpt[1], xpt[2]);
+                T th_hat = th / 2 / M_PI;
+                T mag = load_mag;
+
+                // compute element basis functions at the quadpt (for nodal load distribution)
+                T N[Basis::num_nodes] = {0.0};
+                Basis::getBasis(pt, N);
+
+                // now loop over each node to distribute load integral among nodes
+                for (int lnode = 0; lnode < Basis::num_nodes; lnode++) {
+                    int inode = elem_nodes[lnode];
+                    T nodal_mag = mag * N[lnode] * weight * J;
+
+                    // in plane load fraction
+                    // my_loads[vpn * inode + offset] += nodal_mag * -1.0 * in_plane_frac;
+
+                    // add to each node now using element shape functions
+                    // y and z components of the load
+                    my_loads[vpn * inode + offset + 1] += sin(th) * nodal_mag;
+                    my_loads[vpn * inode + offset + 2] += cos(th) * nodal_mag;
+                }  // end of nodal distribution loop
+            }      // end of quadpt loop
+
+        }  // end of x element loop
+    }      // end of hoop element loop
+
+    return my_loads;
+}
+
+
+
 template <class Assembler>
 Assembler createHemisphereAssembler(int nxe, int nhe, double phi, double R, double E, double nu,
                                     double thick, double rho = 2500, double ys = 350e6,

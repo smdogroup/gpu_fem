@@ -38,7 +38,7 @@ PYBIND11_MODULE(cylindermultigrid, m) {
 
     py::class_<NonlinearCylinderSolver>(m, "NonlinearCylinderSolver")
         // only expose (rhoKS, load_mag)
-        .def(py::init<double, double, double, double, int, int, int, double, double, double, bool>(),
+        .def(py::init<double, double, double, double, int, int, int, double, double, int, int, double, bool>(),
              py::arg("rhoKS")    = 100.0,
              py::arg("safety_factor") = 1.5,
              py::arg("pressure") = 100.0,
@@ -48,6 +48,8 @@ PYBIND11_MODULE(cylindermultigrid, m) {
              py::arg("ny_comp") = 5,
              py::arg("SR") = 50.0,
              py::arg("ORDER") = 8,
+             py::arg("nsmooth") = 1,
+             py::arg("ninnercyc") = 1,
              py::arg("in_plane_frac") = 0.2,
              py::arg("print") = false)
         .def("set_design_variables", &NonlinearCylinderSolver::set_design_variables)

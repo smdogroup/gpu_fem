@@ -137,6 +137,7 @@ with open(output_file, "w") as fout:
     Y = nmat[:,1]
     Z = nmat[:,2]
 
+    import numpy as np
     N = X.shape[0]
     node_ids = np.arange(1, N+1)
 

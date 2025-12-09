@@ -33,11 +33,16 @@ if comm.rank == root:
     solver = cylindermultigrid.NonlinearCylinderSolver(
         rhoKS=100.0,
         safety_factor=1.5,
-        pressure=4e6,
+        # pressure=4e6,
+        pressure=1.6e7,
         # omega=0.3,
         omega=0.8,
         # nxe=512,
         # nxe=256,
+        # in_plane_frac=0.1,
+        # in_plane_frac=0.5,
+        # in_plane_frac=1.0,
+        in_plane_frac=2.0,
         nxe=128,
         nx_comp=ndvs_per_side, # num dvs in x-direction
         ny_comp=ndvs_per_side, # num dvs/comps in y-direction
@@ -91,6 +96,8 @@ def get_functions(xdict):
 
     # print(f"{funcs=}")
 
+    num_lin_solves = solver.get_num_lin_solves()
+    print(f"{funcs=}, {num_lin_solves=}")
     if num_lin_solves % 5 == 0 and comm.rank == root: # so we don't affect runtimes for fast problems
         comp_names = [f"comp{icomp}" for icomp in range(ndvs)]
         with open("out/nl_gpu_opt.txt", "w") as f:

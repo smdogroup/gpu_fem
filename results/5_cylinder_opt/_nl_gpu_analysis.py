@@ -23,12 +23,15 @@ ndvs_per_side = 32
 # ndvs_per_side = 128
 
 # setup GPU solver
-solver = cylindermultigrid.NonlinearPlateSolver(
+solver = cylindermultigrid.NonlinearCylinderSolver(
     rhoKS=100.0,
     safety_factor=1.5,
     pressure=3000.0,
-    omega=0.85,
-    nxe=512,
+    # omega=0.85,
+    omega=0.3,
+    # nxe=512,
+    nxe=128,
+    nsmooth=2,
     # nxe=256,
     # nxe=128,
     nx_comp=ndvs_per_side, # num dvs in x-direction

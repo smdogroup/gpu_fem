@@ -126,7 +126,13 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
     // T omegaMC = 0.75;
     // T omegaMC = 0.7;
 
-    T omegaLS_min = 0.1, omegaLS_max = 2.0;
+    // T omegaLS_min = 0.01, omegaLS_max = 4.0;
+    T omegaLS_min, omegaLS_max;
+    if (Basis::order > 1 || SR >= 1000.0) {
+        omegaLS_min = 0.01, omegaLS_max = 4.0;
+    } else {
+        omegaLS_min = 0.1, omegaLS_max = 2.0;
+    }
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     // T omegaLS_min = 0.5, omegaLS_max = 2.0;
 
@@ -198,7 +204,8 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
 
         // build smoother and prolongations..
         // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC);
-        int ORDER = 4;
+        int ORDER = Basis::order > 1 ? 4 : 8;
+        // int ORDER = 8; // order 8 doesn't work with CFI9 and CFI16 for some reason..
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
         auto prolongation = new Prolongation(assembler);
         auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, omegaLS_min, omegaLS_max);
@@ -229,8 +236,13 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
     // bool print = true;
     bool print = false;
-    T atol = 1e-6, rtol = 1e-6;
-    bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
+    // T atol = 1e-6, rtol = 1e-6;
+    // T rtol = 1e-9;
+    // T rtol = 1e-11;
+    // T atol = 1e-7;
+    T rtol = 1e-13, atol = 1e-13;
+    // bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
+    bool double_smooth = false;
 
     // int n_cycles = 500; // max # cycles
     int print_freq = 3;
@@ -274,6 +286,8 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
     auto end_lin = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> lin_solve_time = end_lin - start_lin;
 
+    printf("lin solve time in %.4e sec\n", lin_solve_time);
+
     T lin_max_disp = get_max_disp<T, Physics>(kmg->grids[0].d_soln);
     printf("lin max disp = %.4e\n", lin_max_disp);
 
@@ -289,51 +303,60 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
     // new nonlinear solver
     // ======================
 
-    // build the inexact newton + outer continuation solver
-    using Mat = BsrMat<DeviceVec<T>>;
-    using Vec = DeviceVec<T>;
-    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG>;
-    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
+    std::chrono::duration<double> solve_time;
+    T nl_max_disp = 0.0;
 
-    INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg);
-    // bool use_predictor = true, debug = false;
-    bool use_predictor = false, debug = false;
-    NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver, use_predictor, debug);
+    if (false) { // temp
+    // if (Basis::order == 1) {
+        // build the inexact newton + outer continuation solver
+        using Mat = BsrMat<DeviceVec<T>>;
+        using Vec = DeviceVec<T>;
+        using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG>;
+        using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
-    // now try calling it
-    T lambda0 = 0.2;
-    // T lambda0 = 0.05;
-    // T inner_atol = 1e-2;
-    // T inner_atol = 1e-4;
-    // T inner_atol = 1e-4;
-    T inner_atol = 1e-6;
+        INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg);
+        // bool use_predictor = true, debug = false;
+        bool use_predictor = false, debug = false;
+        NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver, use_predictor, debug);
 
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto start1 = std::chrono::high_resolution_clock::now();
+        // now try calling it
+        T lambda0 = 0.2;
+        // T lambda0 = 0.05;
+        // T inner_atol = 1e-2;
+        // T inner_atol = 1e-4;
+        // T inner_atol = 1e-4;
+        T inner_atol = 1e-6;
 
-    if constexpr (!Physics::hellingerReissner) {
-        nl_solver->solve(fine_vars, lambda0, inner_atol);
+        CHECK_CUDA(cudaDeviceSynchronize());
+        auto start1 = std::chrono::high_resolution_clock::now();
+
+        if constexpr (!Physics::hellingerReissner) {
+            nl_solver->solve(fine_vars, lambda0, inner_atol);
+        }
+
+        CHECK_CUDA(cudaDeviceSynchronize());
+        auto end1 = std::chrono::high_resolution_clock::now();
+        solve_time = end1 - start1;
+
+        nl_max_disp = get_max_disp<T, Physics>(fine_vars);
+
+        // print some of the data of host residual
+        auto h_vars = fine_vars.createHostVec();
+        printToVTK<Assembler,HostVec<T>>(fine_assembler, h_vars, "out/plate_mg_nl.vtk");
+
+        // important to know reduction for how NL regime we are
+        T ratio = nl_max_disp / lin_max_disp;
+        printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
+
+        int ndof1 = fine_assembler.get_num_vars();
+        double total = startup_time.count() + solve_time.count();
     }
 
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto end1 = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> solve_time = end1 - start1;
+    int ndof = fine_assembler.get_num_vars();
+    printf("nonlinear Newton-Raphson KMG solve of plate geom, ndof %d : startup time %.2e, solve time %.2e\n", ndof, startup_time.count(), solve_time.count());
 
-    T nl_max_disp = get_max_disp<T, Physics>(fine_vars);
-
-    // print some of the data of host residual
-    auto h_vars = fine_vars.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(fine_assembler, h_vars, "out/plate_mg_nl.vtk");
-
-    // important to know reduction for how NL regime we are
-    T ratio = nl_max_disp / lin_max_disp;
-    printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
 
     
-    int ndof = fine_assembler.get_num_vars();
-    double total = startup_time.count() + solve_time.count();
-    printf("nonlinear Newton-Raphson KMG solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), solve_time.count(), total);
-
     // write to csv (this particular run)
     // ---------------------------------------
     std::ofstream csv("out/_plate.csv", std::ios::app);
@@ -483,42 +506,47 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
     // new nonlinear solver
     // ======================
 
-    // build the inexact newton + outer continuation solver
-    using Mat = BsrMat<DeviceVec<T>>;
-    using Vec = DeviceVec<T>;
-    using LinearSolver = CusparseMGDirectLU<T, Assembler>;
-    // const bool DO_LINE_SEARCH = !Physics::hellingerReissner;
-    const bool DO_LINE_SEARCH = true;
-    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, LinearSolver, DO_LINE_SEARCH>;
-    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
+    std::chrono::duration<double> solve_time;
+    T nl_max_disp = 0.0;
 
-    LinearSolver *solver = new LinearSolver(cublasHandle, cusparseHandle, assembler, kmat);
-    INK *inner_solver = new INK(cublasHandle, assembler, kmat, loads, solver);
-    NL *nl_solver = new NL(cublasHandle, assembler, inner_solver);
+    if (Basis::order == 1) {
+        // build the inexact newton + outer continuation solver
+        using Mat = BsrMat<DeviceVec<T>>;
+        using Vec = DeviceVec<T>;
+        using LinearSolver = CusparseMGDirectLU<T, Assembler>;
+        // const bool DO_LINE_SEARCH = !Physics::hellingerReissner;
+        const bool DO_LINE_SEARCH = true;
+        using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, LinearSolver, DO_LINE_SEARCH>;
+        using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
-    // now try calling it
-    T lambda0 = 0.2;
-    // T lambda0 = 0.05;
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto start11 = std::chrono::high_resolution_clock::now();
-    
-    // skip hellinger-reissner NL solve for now
-    if constexpr (!Physics::hellingerReissner) {
-        nl_solver->solve(vars, lambda0);
+        LinearSolver *solver = new LinearSolver(cublasHandle, cusparseHandle, assembler, kmat);
+        INK *inner_solver = new INK(cublasHandle, assembler, kmat, loads, solver);
+        NL *nl_solver = new NL(cublasHandle, assembler, inner_solver);
+
+        // now try calling it
+        T lambda0 = 0.2;
+        // T lambda0 = 0.05;
+        CHECK_CUDA(cudaDeviceSynchronize());
+        auto start11 = std::chrono::high_resolution_clock::now();
+        
+        // skip hellinger-reissner NL solve for now
+        if constexpr (!Physics::hellingerReissner) {
+            nl_solver->solve(vars, lambda0);
+        }
+        CHECK_CUDA(cudaDeviceSynchronize());
+        auto end1 = std::chrono::high_resolution_clock::now();
+        solve_time = end1 - start11;
+
+        nl_max_disp = get_max_disp<T, Physics>(vars);
+
+        // print some of the data of host residual
+        auto h_vars = vars.createHostVec();
+        printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/plate_nl.vtk");
+
+        // important to know reduction for how NL regime we are
+        T ratio = nl_max_disp / lin_max_disp;
+        printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
     }
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto end1 = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> solve_time = end1 - start11;
-
-    T nl_max_disp = get_max_disp<T, Physics>(vars);
-
-    // print some of the data of host residual
-    auto h_vars = vars.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/plate_nl.vtk");
-
-    // important to know reduction for how NL regime we are
-    T ratio = nl_max_disp / lin_max_disp;
-    printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
 
     
     int ndof = assembler.get_num_vars();
@@ -659,18 +687,18 @@ int main(int argc, char **argv) {
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     // MITC higher order don't really work? but LFI16 would..
-    } else if (elem_type == "MITC9") {
-        using Physics = IsotropicShell<T, Data, is_nonlinear>;
-        using Quad = QuadQuadraticQuadrature<T>;
-        using Basis = LagrangeQuadBasis<T, Quad, 2>;
-        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    } else if (elem_type == "MITC16") {
-        using Physics = IsotropicShell<T, Data, is_nonlinear>;
-        using Quad = QuadCubicQuadrature<T>;
-        using Basis = LagrangeQuadBasis<T, Quad, 3>;
-        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    // } else if (elem_type == "MITC9") {
+    //     using Physics = IsotropicShell<T, Data, is_nonlinear>;
+    //     using Quad = QuadQuadraticQuadrature<T>;
+    //     using Basis = LagrangeQuadBasis<T, Quad, 2>;
+    //     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+    //     gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    // } else if (elem_type == "MITC16") {
+    //     using Physics = IsotropicShell<T, Data, is_nonlinear>;
+    //     using Quad = QuadCubicQuadrature<T>;
+    //     using Basis = LagrangeQuadBasis<T, Quad, 3>;
+    //     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+    //     gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI4") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadLinearQuadrature<T>;
