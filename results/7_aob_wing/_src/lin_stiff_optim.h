@@ -110,7 +110,7 @@ class LinearStiffenedWingSolver {
 
             // read the ESP/CAPS => nastran mesh for TACS
             TACSMeshLoader mesh_loader{comm};
-            std::string fname = "../../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(i) + ".bdf";
+            std::string fname = "../../examples/multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(i) + ".bdf";
             mesh_loader.scanBDFFile(fname.c_str());
 
             // IF STIFFENED WING with REF AXIS:

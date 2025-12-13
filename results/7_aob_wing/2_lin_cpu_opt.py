@@ -202,7 +202,7 @@ class LinearWingAnalysis:
 
 # Load structural mesh from BDF file
 tacs_comm = MPI.COMM_WORLD
-bdf_name = "../../multigrid/3_aob_wing/meshes/aob_wing_L2.bdf"
+bdf_name = "../../examples/multigrid/3_aob_wing/meshes/aob_wing_L2.bdf"
 
 wing_opt = LinearWingAnalysis(tacs_comm, bdf_name)
 nvars = wing_opt.nvars
