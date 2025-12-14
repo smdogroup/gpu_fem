@@ -158,6 +158,7 @@ def assemble_FSDT_patch(patch: Patch, q_load=1.0, quad_order=None):
     for a in range(len(U)-1):
         if U[a+1] - U[a] > 1e-12:
             spans_x.append((a, U[a], U[a+1]))
+    print(f"{spans_x=}")
     spans_y = []
     for b in range(len(V)-1):
         if V[b+1] - V[b] > 1e-12:
@@ -196,6 +197,7 @@ def assemble_FSDT_patch(patch: Patch, q_load=1.0, quad_order=None):
                 u = u0 + xi*(u1-u0)
                 wu = xi_w[i_g]*(u1-u0)
                 span_u = find_span(patch.n_ctrl_x, p, u, U)
+                # print(f"{span_u=} {u=} {p=}")
                 Nu, dNu = basis_functions_and_derivatives(span_u, u, p, U, n_deriv=1)
                 for j_g, eta in enumerate(eta_pts):
                     v = v0 + eta*(v1-v0)
@@ -380,9 +382,9 @@ def compute_stresses_at_quadrature(patch: Patch, u_global, quad_order=None):
 
 # ------------------ Example run ------------------
 
-# nxe = 4
+nxe = 4
 # nxe = 16
-nxe = 32
+# nxe = 32
 
 # User-configurable parameters
 patch = Patch(Lx=1.0, Ly=1.0, nxe=nxe, nye=nxe, p=2, q=2, thickness=0.02,
