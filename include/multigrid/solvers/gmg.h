@@ -22,6 +22,13 @@ class GeometricMultigridSolver {
             grids[ilevel + 1].restriction =
                 grids[ilevel].prolongation;  // copy prolong to restriction on coarser grid
         }
+        // do matrix smoothing (if not possible depending upon prolong type, it will be skipped inside)
+        if (grids[0].smooth_matrix_iters > 0) {
+            printf("attempting to smooth matrices\n");
+        }
+        for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
+            grids[ilevel].smoothMatrix(grids[ilevel].smooth_matrix_iters);
+        }
     }
 
     int getNumLevels() { return grids.size(); }
@@ -51,6 +58,9 @@ class GeometricMultigridSolver {
         /* update matrices after new assembly */
         for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
             grids[ilevel].update_after_assembly();
+        }
+        for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
+            grids[ilevel].smoothMatrix(grids[ilevel].smooth_matrix_iters);
         }
         if (coarse_solver) coarse_solver->update_after_assembly(vars);
     }

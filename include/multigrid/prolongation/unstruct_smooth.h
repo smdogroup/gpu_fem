@@ -39,7 +39,10 @@ class UnstructuredSmoothProlongation {
     }
 
     // nothing (though smoother needs to do matrix-smoothing in some cases)
-    void update_after_assembly() {}
+    void update_after_assembly() {
+        // TODO : need to fix this for nonlinear smooth matrix
+        // assemble_matrices(); // reassemble matrices?
+    }
 
     void init_coarse_data(Assembler &coarse_assembler_) {
         coarse_assembler = coarse_assembler_;
@@ -95,6 +98,8 @@ class UnstructuredSmoothProlongation {
         nnodes_coarse = coarse_assembler.get_num_nodes();
         N_coarse = nnodes_coarse * block_dim;
         d_coarse_weights = DeviceVec<T>(N_coarse).getPtr();
+        d_fine_ones = DeviceVec<T>(N_fine).getPtr();
+        k_vec_set<T><<<(N_fine+31)/32, 32>>>(N_fine, 1.0, d_fine_ones);
     }
 
     void compute_matmat_prod_nz_pattern() {
@@ -255,32 +260,22 @@ class UnstructuredSmoothProlongation {
         /* assemble the P matrix values from baseline interp */
 
         // assemble P mat
+        cudaMemset(d_P_vals, 0.0, P_nnzb * block_dim2 * sizeof(T));
         dim3 block(32);
         dim3 grid((nnodes_fine + 31) / 32);
         k_prolong_mat_assembly<T, Basis, is_bsr>
             <<<grid, block>>>(d_coarse_iperm, d_coarse_conn, d_n2e_ptr, d_n2e_elems, d_n2e_xis,
                               nnodes_fine, d_fine_iperm, d_P_rowp, d_P_cols, block_dim, d_P_vals);
+    }
 
-        // debug check the rowp, cols, etc.
-        // int *h_P_rowp0 = DeviceVec<int>(nnodes_fine + 1, d_P_rowp).createHostVec().getPtr();
-        // int *h_P_cols0 = DeviceVec<int>(P_bsr_data.nnzb, d_P_cols).createHostVec().getPtr();
-        // int nblocks = 500;
-        // T *h_P_vals = DeviceVec<T>(36*nblocks, d_P_vals).createHostVec().getPtr();
-        // printf("h_P_rowp0: ");
-        // printVec<int>(30, h_P_rowp0);
-        // printf("h_P_cols0: ");
-        // printVec<int>(30, h_P_cols0);
-        // for (int iblock = 0; iblock < nblocks; iblock++) {
-        //     T *vals = &h_P_vals[36 * iblock];
-        //     printf("h_P_vals block %d:\n", iblock);
-        //     for (int j = 0; j < 6; j++) {
-        //         T *loc_vals = &vals[6 * j];
-        //         printVec<T>(6, loc_vals);
-        //     }
-        //     printf("\n");
-        // }
-        // printf("h_P_vals: ");
-        // printVec<T>(30, h_P_vals);
+    void update_after_smooth() {
+        // compute coarse weights for nonlinear problems as P^T * ones => weights (row-sums of P^T coarse nodes)
+        cudaMemset(d_coarse_weights, 0.0, N_coarse * sizeof(T));
+        int nprods = P_nnzb * block_dim2;
+        dim3 block0(32), grid0((nprods + 31) / 32);
+        // computes row-sums
+        k_bsrmv_transpose<T><<<grid0, block0>>>(P_nnzb, block_dim, d_P_rows, d_P_cols, d_P_vals,
+                                                d_fine_ones, d_coarse_weights);
     }
 
     void prolongate(DeviceVec<T> perm_coarse_soln_in, DeviceVec<T> perm_dx_fine) {
@@ -338,6 +333,7 @@ class UnstructuredSmoothProlongation {
     int *d_P_rowp, *d_P_rows, *d_P_cols;
     int P_nnzb;
     T *d_coarse_weights;
+    T *d_fine_ones;
 
     int *d_coarse_conn, *d_n2e_ptr, *d_n2e_elems;
     T *d_n2e_xis;

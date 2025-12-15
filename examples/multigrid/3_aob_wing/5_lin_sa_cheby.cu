@@ -22,7 +22,8 @@
 #include "multigrid/utils/fea.h"
 #include "multigrid/smoothers/_wingbox_coloring.h"
 #include "multigrid/smoothers/cheb4_poly.h"
-#include "multigrid/prolongation/unstructured.h"
+// #include "multigrid/prolongation/unstructured.h"
+#include "multigrid/prolongation/unstruct_smooth.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>
 #include <chrono>
@@ -56,7 +57,7 @@ std::string time_string(int itime) {
 }
 
 template <typename T, class Assembler>
-void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, int ninnercyc, T omega, std::string cycle_type) {
+void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, int nsmooth_mat, int ninnercyc, T omega, std::string cycle_type) {
     // geometric multigrid method here..
     // need to make a number of grids..
     // level gives the finest level here..
@@ -66,8 +67,10 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
     using Data = typename Physics::Data;
     using Smoother = ChebyshevPolynomialSmoother<Assembler>;
     // const bool is_bsr = true; // need this one if want to smooth prolongation
-    const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
-    using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
+    // const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
+    // using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
+    const bool KMAT_FILLIN = true;
+    using Prolongation = UnstructuredSmoothProlongation<Assembler, Basis, KMAT_FILLIN>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
@@ -178,13 +181,18 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
         // return;
 
         // build smoother and prolongations
+        // int nsmooth_mat = 1; // often times just one step is best (may be introducing some rigid body modes locally with more steps or fillin issues)
+        // still 1 matrix smooth iteration can significanly improve to baseline
+        // T omegaLS_min = 0.1, omegaLS_max = 2.0;
+        T omegaLS_min = 1e-2, omegaLS_max = 4.0;
+
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
         int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
         // int ELEM_MAX = 4;
         auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
-        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
+        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, omegaLS_min, omegaLS_max, nsmooth_mat);
 
-	    // testing this new feature out
+	// testing this new feature out
         smoother->setup_cg_lanczos(grid.d_defect);
 
         if (is_kcycle) {
@@ -221,7 +229,7 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
     bool time = true;
     int print_freq = 5;
 
-    // bool double_smooth = false;
+    // bool double_smooth = false; // but sometimes this is faster lately..
     bool double_smooth = true; // true tends to be slightly faster sometimes
 
     if (is_kcycle) {
@@ -370,9 +378,9 @@ void solve_linear_direct(MPI_Comm &comm, int level, double SR) {
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(bool is_multigrid, MPI_Comm &comm, int level, double SR, int nsmooth, int ninnercyc, T omega, std::string cycle_type) {
+void gatekeeper_method(bool is_multigrid, MPI_Comm &comm, int level, double SR, int nsmooth, int nsmooth_mat, int ninnercyc, T omega, std::string cycle_type) {
     if (is_multigrid) {
-        solve_linear_multigrid<T, Assembler>(comm, level, SR, nsmooth, ninnercyc, omega, cycle_type);
+        solve_linear_multigrid<T, Assembler>(comm, level, SR, nsmooth, nsmooth_mat, ninnercyc, omega, cycle_type);
     } else {
         solve_linear_direct<T, Assembler>(comm, level, SR);
     }
@@ -392,9 +400,11 @@ int main(int argc, char **argv) {
     // low SR can use less smoothing and inner cyc
     int nsmooth = 1; // may need more here (esp for MITC elements, but CFI can use less)
     int ninnercyc = 1; // inner V-cycles to precond K-cycle
+    int nsmooth_mat = 1; // default
     // omega = 0.1 or 0.15 before spectral radius
     // but omega < 1, particularly omega = 0.3 tends to conv fastest for me
-    double omega = 0.3; // starting omega for AOB wing
+    // double omega = 0.3; // starting omega for AOB wing
+    double omega = 0.8; // need higher omega to get benefit of smoothed matrix..
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     
     // MITC4 loses some performance, CFI4 faster for linear (but can't use for NL cause locking needs line searches)
@@ -452,6 +462,13 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --nsmooth\n";
                 return 1;
             }
+        } else if (strcmp(arg, "--nsmooth_mat") == 0) {
+            if (i + 1 < argc) {
+                nsmooth_mat = std::atoi(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --nsmooth_mat\n";
+                return 1;
+            }
         } else if (strcmp(arg, "--ninnercyc") == 0) {
             if (i + 1 < argc) {
                 ninnercyc = std::atoi(argv[++i]);
@@ -480,15 +497,15 @@ int main(int argc, char **argv) {
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, omega, cycle_type);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, nsmooth_mat, ninnercyc, omega, cycle_type);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, omega, cycle_type);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, nsmooth_mat, ninnercyc, omega, cycle_type);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, omega, cycle_type);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, nsmooth_mat, ninnercyc, omega, cycle_type);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }

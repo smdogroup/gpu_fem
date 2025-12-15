@@ -59,9 +59,10 @@ class SingleGrid {
         // update dependent ILU and other matrices from new assembly
         if (prolongation) prolongation->update_after_assembly();
         if (restriction) restriction->update_after_assembly();
-        if (smoother) smoother->update_after_assembly(d_vars);
-        if (smoother && smooth_matrix_iters > 0) {
-            smoothMatrix(smooth_matrix_iters);
+        if (smoother) {
+            smoother->update_after_assembly(d_vars);
+            // moved this call to multilevel solvers update after assembly
+            // smoothMatrix(smooth_matrix_iters); // default is zero and does nothing, also if Prolongation::smoothed = false it skips
         }
     }
 
@@ -178,6 +179,7 @@ class SingleGrid {
                                    prolongation->Zprev_mat, prolongation->nnzb_prod,
                                    prolongation->d_K_prodBlocks, prolongation->d_P_prodBlocks,
                                    prolongation->d_Z_prodBlocks);
+            prolongation->update_after_smooth(); // update coarse weights for nonlinear problems by row-sums of P^T
         }
     }
 

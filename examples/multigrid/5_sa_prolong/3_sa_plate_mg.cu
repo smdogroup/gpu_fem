@@ -177,12 +177,13 @@ void multigrid_plate_solve(int nxe, double SR, T omega, int ORDER, int nsmooth, 
     }
 
     // now call smooth matrix on first startup
-    if constexpr (Prolongation::smoothed) {
-        printf("calling smooth matrices\n");
-        for (int ilevel = 0; ilevel < kmg->grids.size() - 1; ilevel++) {
-            kmg->grids[ilevel].smoothMatrix(kmg->grids[ilevel].smooth_matrix_iters);
-        }
-    }
+    // if constexpr (Prolongation::smoothed) {
+    //     printf("calling smooth matrices\n");
+    //     for (int ilevel = 0; ilevel < kmg->grids.size() - 1; ilevel++) {
+    //         kmg->grids[ilevel].smoothMatrix(kmg->grids[ilevel].smooth_matrix_iters);
+    //     }
+    // }
+    // NOTE : this is called inside init_prolongations now..
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end0 = std::chrono::high_resolution_clock::now();
