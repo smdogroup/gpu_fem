@@ -481,8 +481,8 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
     /* prolong matrix-smoothing area (AMG) */
 
     void smoothMatrix(int n_iters, BsrMat<DeviceVec<T>> *prolong_mat, BsrMat<DeviceVec<T>> *Z_mat,
-                      BsrMat<DeviceVec<T>> *Zprev_mat, int nnzb_prod, int *d_P_prodblocks,
-                      int *d_K_prodblocks, int *d_Z_prodblocks) {
+                      BsrMat<DeviceVec<T>> *Zprev_mat, int nnzb_prod, int *d_K_prodblocks,
+                      int *d_P_prodblocks, int *d_Z_prodblocks) {
         // smooth the prolongation matrix using Kmat and Dinv mat, Z_mat is temp matrix for
         // smoothing process
         // TODO : add option if we want to do fewer smoothing steps (if using higher-order)?
@@ -503,6 +503,9 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
             return;
         }
 
+        // int SMOOTH_ORDER = ORDER; // chebyshev smoothing
+        int SMOOTH_ORDER = 1; // jacobi-like smoothing (probably better cause less fillin?)
+
         for (int iter = 0; iter < n_iters; iter++) {
             // number of smoothing steps
 
@@ -511,13 +514,16 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
             Zprev_mat->zeroValues();
 
             // iteration starts by first computing z_1 so k=1 (as z_0 = 0)
-            for (int k = 1; k < ORDER + 1; k++) {
+            for (int k = 1; k < SMOOTH_ORDER + 1; k++) {
+            // int k = 1; // just do jacobi smoothing here for matrix
+
                 // compute -omega/rho(Dinv*A) * beta_k * A*P into Z first (scaled prolong defect
                 // matrix)
                 Z_mat->zeroValues();
                 dim3 PKP_block(216), PKP_grid(nnzb_prod);
                 T beta_k = (8.0 * k - 4.0) / (2.0 * k + 1.0);
                 T a = -omega / spectral_radius * beta_k;
+                // T a = -omega / spectral_radius; // if just jacobi
                 k_compute_mat_mat_prod<T><<<PKP_grid, PKP_block>>>(
                     nnzb_prod, block_dim, a, d_K_prodblocks, d_P_prodblocks, d_Z_prodblocks,
                     d_kmat_vals, d_P_vals, d_Z_vals);
@@ -525,13 +531,16 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
                 // compute Dinv*Z into Z in-place (equiv to Dinv*scale*A*P => Z)
                 dim3 DP_block(216), DP_grid(P_nnzb);
                 k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(
-                    P_nnzb, block_dim, d_dinv_vals.getPtr(), d_P_rows, d_P_vals);
+                    P_nnzb, block_dim, d_dinv_vals.getPtr(), d_P_rows, d_Z_vals);
+                
+                dim3 add_block(64);
 
                 // add alpha_k * Zprev into Z
-                dim3 add_block(64);
-                T alpha_k = (2.0 * k - 3.0) / (2.0 * k + 1.0);
-                k_add_colored_submat_PFP<T>
-                    <<<DP_grid, add_block>>>(P_nnzb, block_dim, alpha_k, 0, d_Zprev_vals, d_Z_vals);
+                if (SMOOTH_ORDER > 1) {
+                    T alpha_k = (2.0 * k - 3.0) / (2.0 * k + 1.0);
+                    k_add_colored_submat_PFP<T>
+                        <<<DP_grid, add_block>>>(P_nnzb, block_dim, alpha_k, 0, d_Zprev_vals, d_Z_vals);
+                }
 
                 // do orthogonal projector on Z (only really needed for coarse-grid galerkin AMG,
                 // not smooth GMG) if constexpr (do_orthog_projector) {
@@ -557,7 +566,7 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
                 Z_mat->copyValuesTo(*Zprev_mat);
 
             }  // end of chebyshev recursion
-        }
+        } // end of smoothing loop
 
     }  // end of smoothMatrix function
 

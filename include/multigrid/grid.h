@@ -176,7 +176,7 @@ class SingleGrid {
         if constexpr (Prolongation::smoothed) {
             smoother->smoothMatrix(n_iters, prolongation->prolong_mat, prolongation->Z_mat,
                                    prolongation->Zprev_mat, prolongation->nnzb_prod,
-                                   prolongation->d_P_prodBlocks, prolongation->d_K_prodBlocks,
+                                   prolongation->d_K_prodBlocks, prolongation->d_P_prodBlocks,
                                    prolongation->d_Z_prodBlocks);
         }
     }
