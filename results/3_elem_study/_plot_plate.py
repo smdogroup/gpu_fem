@@ -5,7 +5,8 @@ import niceplots
 
 # --- Load CSV data ---
 # csv_file = 'out/_plate.csv'  # change to your CSV filename
-csv_file = 'out/_plate100.csv'
+# csv_file = 'out/_plate100.csv'
+csv_file = 'out/_plate300.csv'
 # csv_file = 'out/_plate1000.csv'
 
 df = pd.read_csv(csv_file)
@@ -23,6 +24,7 @@ df = pd.read_csv(csv_file)
 # plt.grid(True)
 # plt.tight_layout()
 # plt.show()
+
 
 
 plt.style.use(niceplots.get_style())
@@ -58,7 +60,7 @@ fig, ax = plt.subplots(figsize=(8, 6.5))
 #     colors = prop_cycle.by_key()['color']
 # else:
 # six_colors1 = ["#d95a72", "#eb9a79", "#f3d27d", "#3cc7a1", "#3b90b3", "#1a4c60", "tab:gray"]
-six_colors1 = ["#c85c6d", "#d78f71", "#e3c877", "#65b39a", "#4d86a3", "#305161", "tab:gray"]
+six_colors1 = ["#c85c6d", "#d78f71", "#e3c877", "#65b39a", "#4d86a3", "#305161", "tab:gray", "c"]
 colors = six_colors1
 
 # elem_order = [
@@ -79,6 +81,8 @@ if '1000' in csv_file:
         "CFI4",
         "CFI9", "CFI16"
     ]
+elif '300' in csv_file:
+    elem_order = ['MITC4', 'MITC9', 'MITC16', 'CFI4', 'CFI9', 'CFI16', 'HRA4', 'LFI16']
 else:
     elem_order = [
         "MITC4", 
@@ -111,7 +115,7 @@ plt.ylabel('Linear runtime (s)')
 # plt.title('Linear runtime vs NDOF by element type')
 plt.xscale('log')  # log scale can help visualize wide range of NDOF
 plt.yscale('log')  # optional: runtime varies widely
-# plt.legend()
+plt.legend()
 plt.grid(True, which='major', ls='--')
 plt.tight_layout()
 # plt.show()
@@ -152,12 +156,13 @@ fig, ax = plt.subplots(figsize=(8, 6.5))
 #     "LFI16", "HR4"
 # ]
 
-elem_order = [
-    "MITC4", 
-    "CFI4", "CFI9", "CFI16",
-    "LFI16",
-    "HR4"
-]
+# elem_order = [
+#     "MITC4", 
+#     "CFI4", "CFI9", "CFI16",
+#     "LFI16",
+#     "HR4"
+# ]
+elem_order = ['MITC4', 'MITC9', 'MITC16', 'CFI4', 'CFI9', 'CFI16', 'HRA4', 'LFI16']
 
 i = 0
 for elem_type in elem_order:

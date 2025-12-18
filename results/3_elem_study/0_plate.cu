@@ -43,6 +43,13 @@
 #include "multigrid/solvers/multilevel/kcycle.h"
 #include "multigrid/solvers/multilevel/twolevel.h"
 
+/*
+to converge higher order shells, need more smoothing steps, like this
+./0_plate.out --SR 300.0 --elem CFI9 --nxe 256 --nsmooth 8 --omega 0.7
+
+lower order shells can use nsmooth = 1 and omega default
+*/
+
 /* command line args:
     [direct/mg] [--nxe int] [--SR float] [--nvcyc int]
     * nxe must be power of 2
@@ -138,11 +145,18 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
 
     // get nxe_min for not exactly power of 2 case
     // int nxe_start = 16 / Basis::order;
-    int nxe_start = 32 / Basis::order;
-    // int nxe_start = 64 / Basis::order; // higher load frequency here needs a bit finer mesh for coarsest grid
-    // int pre_nxe_min = nxe > 16 ? 16 : 4; // 2x slower with this setting (takes more V-cycles)
-    int pre_nxe_min = nxe > nxe_start ? nxe_start : 4; // but on higher nxe, this one is more robust somehow
-    // int pre_nxe_min = nxe > 64 ? 64 : 4; // solved about 33% faster with this as coarsest grid (for nxe = 256, but prob need faster direct solver on GPU)
+    int pre_nxe_min;
+
+    if (Basis::order == 1) {
+        int nxe_start = 32;
+        pre_nxe_min = nxe > nxe_start ? nxe_start : 8;
+    } else if (Basis::order == 2) {
+        int nxe_start = 16;
+        pre_nxe_min = nxe > nxe_start ? nxe_start : 4;
+    } else if (Basis::order == 3) {
+        int nxe_start = 8;
+        pre_nxe_min = nxe > nxe_start ? nxe_start : 2;
+    }
 
     int nxe_min = pre_nxe_min;
     for (int c_nxe = nxe; c_nxe >= pre_nxe_min; c_nxe /= 2) {
@@ -166,7 +180,9 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
         nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
         // T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
         int m = 3, n = 1;
-        T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, c_nxe, c_nye, Lx, Ly, m, n, nodal_loads);
+        // bool uniform_load = false;
+        bool uniform_load = true; // makes it const load not sine load anymore
+        T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, c_nxe, c_nye, Lx, Ly,nodal_loads, uniform_load, m, n);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -414,8 +430,12 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
     nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
     // T *my_loads = getPlatePointLoad<T, Physics>(c_nxe, c_nye, Lx, Ly, Q);
     // T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nye, Lx, Ly, nodal_loads);
+    // int m = 3, n = 1;
+    // T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, nxe, nxe, Lx, Ly, m, n, nodal_loads);
     int m = 3, n = 1;
-    T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, nxe, nxe, Lx, Ly, m, n, nodal_loads);
+    // bool uniform_load = false;
+    bool uniform_load = true; // makes it const load not sine load anymore
+    T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, nxe, nxe, Lx, Ly,nodal_loads, uniform_load, m, n);
 
     // print loads
     printf("loads: ");
@@ -687,18 +707,18 @@ int main(int argc, char **argv) {
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     // MITC higher order don't really work? but LFI16 would..
-    // } else if (elem_type == "MITC9") {
-    //     using Physics = IsotropicShell<T, Data, is_nonlinear>;
-    //     using Quad = QuadQuadraticQuadrature<T>;
-    //     using Basis = LagrangeQuadBasis<T, Quad, 2>;
-    //     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-    //     gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    // } else if (elem_type == "MITC16") {
-    //     using Physics = IsotropicShell<T, Data, is_nonlinear>;
-    //     using Quad = QuadCubicQuadrature<T>;
-    //     using Basis = LagrangeQuadBasis<T, Quad, 3>;
-    //     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-    //     gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    } else if (elem_type == "MITC9") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        using Quad = QuadQuadraticQuadrature<T>;
+        using Basis = LagrangeQuadBasis<T, Quad, 2>;
+        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    } else if (elem_type == "MITC16") {
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        using Quad = QuadCubicQuadrature<T>;
+        using Basis = LagrangeQuadBasis<T, Quad, 3>;
+        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI4") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadLinearQuadrature<T>;
@@ -726,7 +746,7 @@ int main(int argc, char **argv) {
         using Basis = LagrangeQuadBasis<T, Quad, 3>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    } else if (elem_type == "HR4") {
+    } else if (elem_type == "HRA4") {
         // hellinger-reissner element
         const bool HR = true; // whether is HR element (then physics has 5 extra DOF at start for strain-gap)
         using Physics = IsotropicShell<T, Data, is_nonlinear, HR>;
