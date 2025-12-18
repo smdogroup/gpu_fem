@@ -5,10 +5,7 @@ import niceplots
 from matplotlib.lines import Line2D
 
 # --- Load CSV data ---
-csv_file = 'csv/_plate.csv'
-# csv_file = 'csv/_plate10.csv'
-# csv_file = 'csv/_plate100.csv'
-
+csv_file = 'csv/_plate10.csv'
 df = pd.read_csv(csv_file)
 
 # --- Plot styling ---
@@ -32,40 +29,31 @@ elem_order = ['MITC4', 'MITC9', 'MITC16', 'CFI4', 'CFI9', 'CFI16', 'HRA4', 'LFI1
 # =====================================================
 df = df.copy()
 df['mesh_error'] = np.nan
-TOL = 1e-14
+TOL = 1e-12
 for elem, sub in df.groupby('elem_type'):
     sub = sub.sort_values('NDOF')
-    ref_disp = sub['lin_disp'].iloc[-1] + 1e-18 * np.sign(sub['lin_disp'].iloc[-1])
+    ref_disp = sub['lin_disp'].iloc[-1] + 1e-14 * np.sign(sub['lin_disp'].iloc[-1])
     err = np.abs(sub['lin_disp'] - ref_disp) / np.abs(ref_disp)
     err[err < TOL] = np.nan
     df.loc[sub.index, 'mesh_error'] = err
 
 # =====================================================
-# Explicit color scheme with distinct but related families
+# Explicit color scheme: distinct but related families
 # =====================================================
-
-# Using a palette derived from six_colors1
 elem_colors = {
-    # MITC family: blue shades
-    'MITC4':  "#3b90b3",  # medium blue
-    'MITC9':  "#1a4c60",  # deep blue
-    'MITC16': "#3cc7a1",  # teal-ish blue
+    'MITC4': '#4a90e2',   # light blue
+    'MITC9': '#0077cc',   # medium blue
+    'MITC16':'#003f7f',   # dark blue
 
-    # CFI family: red shades
-    'CFI4':  "#d95a72",   # muted red
-    'CFI9':  "#eb9a79",   # soft red
-    'CFI16': "#f3d27d",   # warm light red/orange
+    'CFI4':  '#ff7f7f',   # light red
+    'CFI9':  '#ff3333',   # medium red
+    'CFI16': '#990000',   # dark red
 
-    # HRA family: neutral gray
-    'HRA4':  '#808080',   # medium gray
-
-    # LFI family: purple (distinct from CFI16)
-    'LFI16': "#8e6cb3",   # dusty purple
+    'HRA4':  '#66c2a5',   # teal/light green
+    'LFI16': '#f2c14e',   # yellow/orange
 }
 
-
-
-node_markers = {4: 'o', 9: 's', 16: '^'}  # marker per node count
+node_markers = {4: 'o', 9: 's', 16: '^'}  # optional: different marker per node
 line_alpha = 0.8
 
 # =====================================================
@@ -82,8 +70,7 @@ def plot_variable(xvar, yvar, fname, xlabel, ylabel):
         group = df[df['elem_type'] == elem_type]
         ax.plot(group[xvar], group[yvar],
                 marker=marker,
-                # linestyle='-' if not(elem_type == 'LFI16') else '--',
-                linestyle='--' if str(group['solver'].to_numpy()[-1]) == 'direct' else '-',
+                linestyle='-',
                 color=color,
                 linewidth=2.5,
                 markersize=8,
@@ -120,15 +107,13 @@ legend_order = ['CFI4', 'MITC4', 'CFI9', 'MITC9', 'CFI16', 'MITC16', 'HRA4','LFI
 
 legend_handles = []
 for elem_type in legend_order:
-    group = df[df['elem_type'] == elem_type]
     nodes = int(''.join(filter(str.isdigit, elem_type)))
     color = elem_colors[elem_type]
     marker = node_markers.get(nodes, 'o')
     line = Line2D([0], [0],
                   color=color,
                   marker=marker,
-                #   linestyle='-' if not(elem_type == 'LFI16') else '--',
-                    linestyle='--' if str(group['solver'].to_numpy()[-1]) == 'direct' else '-',
+                  linestyle='-',
                   linewidth=2.5,
                   markersize=8)
     legend_handles.append(line)

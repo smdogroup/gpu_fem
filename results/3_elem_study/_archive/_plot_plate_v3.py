@@ -5,10 +5,7 @@ import niceplots
 from matplotlib.lines import Line2D
 
 # --- Load CSV data ---
-csv_file = 'csv/_plate.csv'
-# csv_file = 'csv/_plate10.csv'
-# csv_file = 'csv/_plate100.csv'
-
+csv_file = 'csv/_plate10.csv'
 df = pd.read_csv(csv_file)
 
 # --- Plot styling ---
@@ -24,7 +21,7 @@ plt.rcParams.update({
     'figure.titlesize': fs,
 })
 
-size = (8, 6.5)
+size = (8,6.5)
 elem_order = ['MITC4', 'MITC9', 'MITC16', 'CFI4', 'CFI9', 'CFI16', 'HRA4', 'LFI16']
 
 # =====================================================
@@ -32,62 +29,42 @@ elem_order = ['MITC4', 'MITC9', 'MITC16', 'CFI4', 'CFI9', 'CFI16', 'HRA4', 'LFI1
 # =====================================================
 df = df.copy()
 df['mesh_error'] = np.nan
-TOL = 1e-14
+TOL = 1e-12
 for elem, sub in df.groupby('elem_type'):
     sub = sub.sort_values('NDOF')
-    ref_disp = sub['lin_disp'].iloc[-1] + 1e-18 * np.sign(sub['lin_disp'].iloc[-1])
+    ref_disp = sub['lin_disp'].iloc[-1] + 1e-14 * np.sign(sub['lin_disp'].iloc[-1])
     err = np.abs(sub['lin_disp'] - ref_disp) / np.abs(ref_disp)
     err[err < TOL] = np.nan
     df.loc[sub.index, 'mesh_error'] = err
 
 # =====================================================
-# Explicit color scheme with distinct but related families
+# Define colors by element prefix, linestyles by nodes, markers by element type
 # =====================================================
-
-# Using a palette derived from six_colors1
-elem_colors = {
-    # MITC family: blue shades
-    'MITC4':  "#3b90b3",  # medium blue
-    'MITC9':  "#1a4c60",  # deep blue
-    'MITC16': "#3cc7a1",  # teal-ish blue
-
-    # CFI family: red shades
-    'CFI4':  "#d95a72",   # muted red
-    'CFI9':  "#eb9a79",   # soft red
-    'CFI16': "#f3d27d",   # warm light red/orange
-
-    # HRA family: neutral gray
-    'HRA4':  '#808080',   # medium gray
-
-    # LFI family: purple (distinct from CFI16)
-    'LFI16': "#8e6cb3",   # dusty purple
-}
-
-
-
-node_markers = {4: 'o', 9: 's', 16: '^'}  # marker per node count
-line_alpha = 0.8
+prefix_colors = { "MITC": "#c85c6d", "CFI": "#65b39a", "HRA": "#4d86a3", "LFI": "#e3c877" }
+node_linestyles = {4: '-', 9: '--', 16: ':'}
+elem_markers = {'MITC': 'o', 'CFI': 's', 'HRA': 'D', 'LFI': '^'}  # different shapes per element
 
 # =====================================================
-# Plotting function
+# Function to plot a variable vs variable
 # =====================================================
 def plot_variable(xvar, yvar, fname, xlabel, ylabel):
     fig, ax = plt.subplots(figsize=size)
     for elem_type in elem_order:
-        if elem_type not in df['elem_type'].unique():
+        if elem_type not in df['elem_type'].unique(): 
             continue
+        prefix = ''.join(filter(str.isalpha, elem_type))
         nodes = int(''.join(filter(str.isdigit, elem_type)))
-        color = elem_colors[elem_type]
-        marker = node_markers.get(nodes, 'o')
+        color = prefix_colors.get(prefix, "gray")
+        ls = node_linestyles.get(nodes, '-')
+        marker = elem_markers.get(prefix, 'o')
         group = df[df['elem_type'] == elem_type]
         ax.plot(group[xvar], group[yvar],
                 marker=marker,
-                # linestyle='-' if not(elem_type == 'LFI16') else '--',
-                linestyle='--' if str(group['solver'].to_numpy()[-1]) == 'direct' else '-',
+                linestyle=ls,
                 color=color,
                 linewidth=2.5,
                 markersize=8,
-                alpha=line_alpha)
+                alpha=0.8)  # transparency for overlapping lines
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -114,21 +91,23 @@ plot_variable('NDOF', 'mesh_error', "out/plate_lin_error_dof.png", 'Number of DO
 plot_variable('lin_runtime(s)', 'mesh_error', "out/plate_lin_error_runtime.png", 'Linear runtime (s)', 'L2 displacement error')
 
 # =====================================================
-# Legend figure
+# --- Legend figure only (custom order) ---
 # =====================================================
-legend_order = ['CFI4', 'MITC4', 'CFI9', 'MITC9', 'CFI16', 'MITC16', 'HRA4','LFI16']
+legend_order = ['CFI4', 'MITC4', 'CFI9', 'MITC9', 
+                'CFI16', 'MITC16', 'HRA4','LFI16']  # two rows (read down, right)
 
 legend_handles = []
 for elem_type in legend_order:
-    group = df[df['elem_type'] == elem_type]
+    prefix = ''.join(filter(str.isalpha, elem_type))
     nodes = int(''.join(filter(str.isdigit, elem_type)))
-    color = elem_colors[elem_type]
-    marker = node_markers.get(nodes, 'o')
+    color = prefix_colors.get(prefix, "gray")
+    ls = node_linestyles.get(nodes, '-')
+    marker = elem_markers.get(prefix, 'o')
+
     line = Line2D([0], [0],
                   color=color,
                   marker=marker,
-                #   linestyle='-' if not(elem_type == 'LFI16') else '--',
-                    linestyle='--' if str(group['solver'].to_numpy()[-1]) == 'direct' else '-',
+                  linestyle=ls,
                   linewidth=2.5,
                   markersize=8)
     legend_handles.append(line)

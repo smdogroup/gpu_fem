@@ -84,7 +84,7 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 }
 
 template <typename T, class Assembler>
-void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int ninnercyc, std::string cycle_type, T omega, T pressure = 5.0e7) {
+void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int nsmooth, int ninnercyc, std::string cycle_type, T omega, T pressure = 5.0e7) {
     // geometric multigrid method here..
     // need to make a number of grids..
     using Basis = typename Assembler::Basis;
@@ -155,7 +155,7 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
         pre_nxe_min = nxe > nxe_start ? nxe_start : 4;
     } else if (Basis::order == 3) {
         int nxe_start = 8;
-        pre_nxe_min = nxe > nxe_start ? nxe_start : 2;
+        pre_nxe_min = nxe > nxe_start ? nxe_start : 4;
     }
 
     int nxe_min = pre_nxe_min;
@@ -180,8 +180,8 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
         nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
         // T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, nodal_loads);
         int m = 3, n = 1;
-        // bool uniform_load = false;
-        bool uniform_load = true; // makes it const load not sine load anymore
+        bool uniform_load = false;
+        // bool uniform_load = true; // makes it const load not sine load anymore
         T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, c_nxe, c_nye, Lx, Ly,nodal_loads, uniform_load, m, n);
         printf("making grid with nxe %d\n", c_nxe);
 
@@ -220,7 +220,7 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
 
         // build smoother and prolongations..
         // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC);
-        int ORDER = Basis::order > 1 ? 4 : 8;
+        // int ORDER = Basis::order > 1 ? 4 : 8;
         // int ORDER = 8; // order 8 doesn't work with CFI9 and CFI16 for some reason..
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
         auto prolongation = new Prolongation(assembler);
@@ -256,7 +256,21 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
     // T rtol = 1e-9;
     // T rtol = 1e-11;
     // T atol = 1e-7;
-    T rtol = 1e-13, atol = 1e-13;
+
+    // T rtol = 1e-10, atol = 1e-5;
+    // T rtol = 1e-13, atol = 1e-13;
+
+    // don't need full converge for lower order elements (they won't get that far prob..)
+    T atol = 1e-13;
+    T rtol;
+    if (Basis::order == 1) {
+        rtol = 1e-6;
+    } else if (Basis::order == 2) {
+        rtol = 1e-9;
+    } else if (Basis::order == 3) {
+        rtol = 1e-13;
+    }
+
     // bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
     bool double_smooth = false;
 
@@ -295,8 +309,13 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
     auto start_lin = std::chrono::high_resolution_clock::now();
 
     kmg->set_print(true);
-    kmg->solve();
+    bool fail = kmg->solve();
     kmg->set_print(false);
+
+    if (fail) {
+        printf("failed lin solve\n");
+        return;
+    }
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end_lin = std::chrono::high_resolution_clock::now();
@@ -375,7 +394,7 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int nsmooth, int
     
     // write to csv (this particular run)
     // ---------------------------------------
-    std::ofstream csv("out/_plate.csv", std::ios::app);
+    std::ofstream csv("csv/_plate.csv", std::ios::app);
     if (csv.tellp() == 0)
         csv << "t/R,nxe,NDOF,elem_type,lin_disp,nl_disp,lin_runtime(s),nl_runtime(s),solver\n";
 
@@ -433,13 +452,13 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
     // int m = 3, n = 1;
     // T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, nxe, nxe, Lx, Ly, m, n, nodal_loads);
     int m = 3, n = 1;
-    // bool uniform_load = false;
-    bool uniform_load = true; // makes it const load not sine load anymore
+    bool uniform_load = false;
+    // bool uniform_load = true; // makes it const load not sine load anymore
     T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, nxe, nxe, Lx, Ly,nodal_loads, uniform_load, m, n);
 
     // print loads
-    printf("loads: ");
-    printVec<T>(11 * 3, my_loads);
+    // printf("loads: ");
+    // printVec<T>(11 * 3, my_loads);
 
 
     // double Q = 1.0e5;
@@ -529,7 +548,8 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
     std::chrono::duration<double> solve_time;
     T nl_max_disp = 0.0;
 
-    if (Basis::order == 1) {
+    if (false) {
+    // if (Basis::order == 1) {
         // build the inexact newton + outer continuation solver
         using Mat = BsrMat<DeviceVec<T>>;
         using Vec = DeviceVec<T>;
@@ -575,7 +595,7 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
 
     // write to csv (this particular run)
     // ---------------------------------------
-    std::ofstream csv("out/_plate.csv", std::ios::app);
+    std::ofstream csv("csv/_plate.csv", std::ios::app);
     if (csv.tellp() == 0)
         csv << "t/R,nxe,NDOF,elem_type,lin_disp,nl_disp,lin_runtime(s),nl_runtime(s)\n";
 
@@ -595,9 +615,9 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(std::string elem_type, bool is_multigrid, int nxe, double SR, int nsmooth, int ninnercyc, std::string cycle_type, T omega, T load_mag = 5.0e7) {
+void gatekeeper_method(std::string elem_type, bool is_multigrid, int nxe, double SR, int ORDER, int nsmooth, int ninnercyc, std::string cycle_type, T omega, T load_mag = 5.0e7) {
     if (is_multigrid) {
-        multigrid_solve<T, Assembler>(elem_type, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, load_mag);
+        multigrid_solve<T, Assembler>(elem_type, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, load_mag);
     } else {
         solve_direct<T, Assembler>(elem_type, nxe, SR, load_mag);
     }
@@ -615,6 +635,7 @@ int main(int argc, char **argv) {
     // old GSMC settings
     int nsmooth = 1; // use nsmooth = 2 for 3rd order elements (needed)
     int ninnercyc = 1;
+    int ORDER = 4;
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9', 'HR4'
     // std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
@@ -678,6 +699,13 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --nsmooth\n";
                 return 1;
             }
+        } else if (strcmp(arg, "--order") == 0) {
+            if (i + 1 < argc) {
+                ORDER = std::atoi(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --ORDER\n";
+                return 1;
+            }
         } else if (strcmp(arg, "--ninnercyc") == 0) {
             if (i + 1 < argc) {
                 ninnercyc = std::atoi(argv[++i]);
@@ -705,47 +733,47 @@ int main(int argc, char **argv) {
         using Quad = QuadLinearQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     // MITC higher order don't really work? but LFI16 would..
     } else if (elem_type == "MITC9") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadQuadraticQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 2>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "MITC16") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadCubicQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 3>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI4") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadLinearQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI9") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         // probably do need quadratic, but need to fix assembly issues with 9 quadpts
         using Quad = QuadQuadraticQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI16") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         // probably do need quadratic, but need to fix assembly issues with 9 quadpts
         using Quad = QuadCubicQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 3>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "LFI16") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         // probably do need quadratic, but need to fix assembly issues with 9 quadpts
         using Quad = QuadCubicQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 3>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "HRA4") {
         // hellinger-reissner element
         const bool HR = true; // whether is HR element (then physics has 5 extra DOF at start for strain-gap)
@@ -753,7 +781,7 @@ int main(int argc, char **argv) {
         using Quad = QuadLinearQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = HellingerReissnerShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }

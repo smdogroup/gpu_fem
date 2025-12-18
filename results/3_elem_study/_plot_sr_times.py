@@ -7,9 +7,9 @@ import niceplots
 # case = 'plate'
 # case = 'cylinder'
 
-# csv_file = 'out/_plate.csv'  # change to your CSV filename
-# csv_file = 'out/cyl_cfi4_vs_mitc4.csv'
-csv_file = 'out/plate_cfi4_vs_mitc4.csv'
+# csv_file = 'csv/_plate.csv'  # change to your CSV filename
+# csv_file = 'csv/cyl_cfi4_vs_mitc4.csv'
+csv_file = 'csv/plate_cfi4_vs_mitc4.csv'
 
 df = pd.read_csv(csv_file)
 

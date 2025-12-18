@@ -5,10 +5,8 @@ import niceplots
 from matplotlib.lines import Line2D
 
 # --- Load CSV data ---
-csv_file = 'csv/_plate.csv'
-# csv_file = 'csv/_plate10.csv'
-# csv_file = 'csv/_plate100.csv'
-
+csv_file = 'csv/_plate10.csv'
+# csv_file = 'csv/_plate.csv'
 df = pd.read_csv(csv_file)
 
 # --- Plot styling ---
@@ -32,10 +30,10 @@ elem_order = ['MITC4', 'MITC9', 'MITC16', 'CFI4', 'CFI9', 'CFI16', 'HRA4', 'LFI1
 # =====================================================
 df = df.copy()
 df['mesh_error'] = np.nan
-TOL = 1e-14
+TOL = 1e-12
 for elem, sub in df.groupby('elem_type'):
     sub = sub.sort_values('NDOF')
-    ref_disp = sub['lin_disp'].iloc[-1] + 1e-18 * np.sign(sub['lin_disp'].iloc[-1])
+    ref_disp = sub['lin_disp'].iloc[-1] + 1e-14 * np.sign(sub['lin_disp'].iloc[-1])
     err = np.abs(sub['lin_disp'] - ref_disp) / np.abs(ref_disp)
     err[err < TOL] = np.nan
     df.loc[sub.index, 'mesh_error'] = err
@@ -82,8 +80,7 @@ def plot_variable(xvar, yvar, fname, xlabel, ylabel):
         group = df[df['elem_type'] == elem_type]
         ax.plot(group[xvar], group[yvar],
                 marker=marker,
-                # linestyle='-' if not(elem_type == 'LFI16') else '--',
-                linestyle='--' if str(group['solver'].to_numpy()[-1]) == 'direct' else '-',
+                linestyle='-' if not(elem_type == 'LFI16') else '--',
                 color=color,
                 linewidth=2.5,
                 markersize=8,
@@ -120,15 +117,13 @@ legend_order = ['CFI4', 'MITC4', 'CFI9', 'MITC9', 'CFI16', 'MITC16', 'HRA4','LFI
 
 legend_handles = []
 for elem_type in legend_order:
-    group = df[df['elem_type'] == elem_type]
     nodes = int(''.join(filter(str.isdigit, elem_type)))
     color = elem_colors[elem_type]
     marker = node_markers.get(nodes, 'o')
     line = Line2D([0], [0],
                   color=color,
                   marker=marker,
-                #   linestyle='-' if not(elem_type == 'LFI16') else '--',
-                    linestyle='--' if str(group['solver'].to_numpy()[-1]) == 'direct' else '-',
+                  linestyle='-' if not(elem_type == 'LFI16') else '--',
                   linewidth=2.5,
                   markersize=8)
     legend_handles.append(line)

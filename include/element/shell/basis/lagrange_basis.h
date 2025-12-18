@@ -52,7 +52,7 @@ class LagrangeQuadBasis {
 
     __HOST_DEVICE__ static T getGaussPoint(int i) {
         // evenly spaced gauss-points
-        return -1.0 + 2.0 * i / (nx-1);
+        return -1.0 + 2.0 * i / (nx - 1);
     }
 
     // generic evalBasis call for interps in multigrid and FEA
@@ -76,28 +76,6 @@ class LagrangeQuadBasis {
         }
 
         else if constexpr (nx == 4) {
-            // Cubic Lobatto: nodes = [-1, -1/3, 1/3, 1]
-            const T a = u;
-            N[0] = -(9.0 / 16.0) * (a + 1.0) * (a + 1.0 / 3.0) * (a - 1.0 / 3.0);
-            N[1] = (27.0 / 16.0) * (a + 1.0) * (a + 1.0 / 3.0) * (a - 1.0);
-            N[2] = -(27.0 / 16.0) * (a + 1.0) * (a - 1.0 / 3.0) * (a - 1.0);
-            N[3] = (9.0 / 16.0) * (a - 1.0 / 3.0) * (a + 1.0 / 3.0) * (a - 1.0);
-        }
-    }
-
-    template <int tying_nx>
-    __HOST_DEVICE__ static void lagrangeLobatto1D_tying(const T u, T *N) {
-        if constexpr (tying_nx == 1) {
-            N[0] = 1.0;
-        } else if constexpr (tying_nx == 2) {
-            N[0] = 0.5 * (1.0 - u);
-            N[1] = 0.5 * (1.0 + u);
-        } else if constexpr (tying_nx == 3) {
-            // Quadratic Lobatto: nodes = [-1, 0, 1]
-            N[0] = 0.5 * u * (u - 1.0);
-            N[1] = 1.0 - u * u;
-            N[2] = 0.5 * u * (u + 1.0);
-        } else if constexpr (tying_nx == 4) {
             // Cubic Lobatto: nodes = [-1, -1/3, 1/3, 1]
             const T a = u;
             N[0] = -(9.0 / 16.0) * (a + 1.0) * (a + 1.0 / 3.0) * (a - 1.0 / 3.0);
@@ -362,25 +340,64 @@ class LagrangeQuadBasis {
         }
     }
 
+    // replaces TacsLagrangeShapeFunction from TACS CPU
+    template <int tying_nx>
+    __HOST_DEVICE__ static void lagrange1D_tying(const T u, const T knots[], T *N) {
+        // does lagrange interpolation from tying points to quadrature
+        // so needs general lagrange polynomial rule (not interp from nodes but from tying points)
+        if constexpr (tying_nx == 1) {
+            N[0] = 1.0;
+        } else if constexpr (tying_nx == 2) {
+            N[0] = (u - knots[1]) / (knots[0] - knots[1]);
+            N[1] = (u - knots[0]) / (knots[1] - knots[0]);
+        } else if constexpr (tying_nx == 3) {
+            N[0] =
+                (u - knots[1]) * (u - knots[2]) / ((knots[0] - knots[1]) * (knots[0] - knots[2]));
+            N[1] =
+                (u - knots[0]) * (u - knots[2]) / ((knots[1] - knots[0]) * (knots[1] - knots[2]));
+            N[2] =
+                (u - knots[0]) * (u - knots[1]) / ((knots[2] - knots[0]) * (knots[2] - knots[1]));
+        } else if constexpr (tying_nx == 4) {
+            N[0] = (u - knots[1]) * (u - knots[2]) * (u - knots[3]) /
+                   ((knots[0] - knots[1]) * (knots[0] - knots[2]) * (knots[0] - knots[3]));
+            N[1] = (u - knots[0]) * (u - knots[2]) * (u - knots[3]) /
+                   ((knots[1] - knots[0]) * (knots[1] - knots[2]) * (knots[1] - knots[3]));
+            N[2] = (u - knots[0]) * (u - knots[1]) * (u - knots[3]) /
+                   ((knots[2] - knots[0]) * (knots[2] - knots[1]) * (knots[2] - knots[3]));
+            N[3] = (u - knots[0]) * (u - knots[1]) * (u - knots[2]) /
+                   ((knots[3] - knots[0]) * (knots[3] - knots[1]) * (knots[3] - knots[2]));
+        }
+    }
+
     template <int icomp>
     __HOST_DEVICE__ static void getTyingInterp(const T pt[], T N[]) {
         // get 1d knot vectors
-        // T red_knots[(nx-1)], full_knots[nx];
-        // getTyingKnots(red_knots, full_knots);
+        T red_knots[(nx - 1)], full_knots[nx];
+        getTyingKnots(red_knots, full_knots);
+
+        // compute reduced space interp for MITC9 (see paper
+        // https://onlinelibrary.wiley.com/doi/epdf/10.1002/nme.4399)
 
         T na[nx], nb[nx];
-        lagrangeLobatto1D_tying<nx>(pt[0], na);
-        lagrangeLobatto1D_tying<nx>(pt[1], nb);
+        lagrange1D_tying<nx>(pt[0], full_knots, na);
+        lagrange1D_tying<nx>(pt[1], full_knots, nb);
 
         T nar[nx], nbr[nx];
-        lagrangeLobatto1D_tying<nx - 1>(pt[0], nar);
-        lagrangeLobatto1D_tying<nx - 1>(pt[1], nbr);
+        lagrange1D_tying<nx - 1>(pt[0], red_knots, nar);
+        lagrange1D_tying<nx - 1>(pt[1], red_knots, nbr);
 
-        if constexpr (icomp == 0) {
-            // g11
+        if constexpr (icomp == 0 || icomp == 4) {
+            // g11 or g13
             for (int j = 0; j < nx; j++) {
                 for (int i = 0; i < nx - 1; i++, N++) {
                     N[0] = nar[i] * nb[j];
+                }
+            }
+        } else if constexpr (icomp == 1 || icomp == 3) {
+            // g22 or g23
+            for (int j = 0; j < nx - 1; j++) {
+                for (int i = 0; i < nx; i++, N++) {
+                    N[0] = na[i] * nbr[j];
                 }
             }
         } else if constexpr (icomp == 2) {
@@ -390,28 +407,8 @@ class LagrangeQuadBasis {
                     N[0] = nar[i] * nbr[j];
                 }
             }
-        } else if constexpr (icomp == 4) {
-            // g13
-            for (int j = 0; j < nx; j++) {
-                for (int i = 0; i < nx - 1; i++, N++) {
-                    N[0] = nar[i] * nb[j];
-                }
-            }
-        } else if constexpr (icomp == 1) {
-            // g22
-            for (int j = 0; j < nx - 1; j++) {
-                for (int i = 0; i < nx; i++, N++) {
-                    N[0] = na[i] * nbr[j];
-                }
-            }
-        } else if constexpr (icomp == 3) {
-            // g23
-            for (int j = 0; j < nx - 1; j++) {
-                for (int i = 0; i < nx; i++, N++) {
-                    N[0] = na[i] * nbr[j];
-                }
-            }
         }
+
     }  // end of getTyingInterp
 
 };  // end of class ShellQuadBasis
