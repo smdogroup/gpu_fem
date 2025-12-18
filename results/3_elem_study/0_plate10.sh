@@ -29,6 +29,13 @@
 ./0_plate.out --SR 10.0 --elem MITC9 --nxe 128 --nsmooth 2 #--omega 0.95
 ./0_plate.out --SR 10.0 --elem MITC9 --nxe 256 --nsmooth 2 #--omega 0.95
 
+./0_plate.out direct --SR 10.0 --elem AIG9 --nxe 8 
+./0_plate.out --SR 10.0 --elem AIG9 --nxe 16 --nsmooth 2
+./0_plate.out --SR 10.0 --elem AIG9 --nxe 32 --nsmooth 2
+./0_plate.out --SR 10.0 --elem AIG9 --nxe 64 --nsmooth 2
+./0_plate.out --SR 10.0 --elem AIG9 --nxe 128 --nsmooth 2
+./0_plate.out --SR 10.0 --elem AIG9 --nxe 256 --nsmooth 2
+
 ./0_plate.out direct --SR 10.0 --elem CFI16 --nxe 4
 ./0_plate.out direct --SR 10.0 --elem CFI16 --nxe 8 
 ./0_plate.out --SR 10.0 --elem CFI16 --nxe 16 --nsmooth 2

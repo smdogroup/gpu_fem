@@ -786,6 +786,14 @@ int main(int argc, char **argv) {
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = HellingerReissnerShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
+    } else if (elem_type == "AIG9") {
+        // runs like AIG9 when I finish implementing
+        using Physics = IsotropicShell<T, Data, is_nonlinear>;
+        using Quad = QuadQuadraticQuadrature<T>;
+        using Basis = ChebyshevQuadBasis<T, Quad, 2>;
+        using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+        SR = 5.0;
+        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }
