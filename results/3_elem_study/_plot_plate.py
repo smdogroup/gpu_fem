@@ -8,7 +8,11 @@ from matplotlib.lines import Line2D
 # csv_file = 'csv/_plate.csv'
 # csv_file = 'csv/_plate10.csv'
 # csv_file = 'csv/_plate100.csv'
-csv_file = 'csv/_plate500.csv'
+# csv_file = 'csv/_plate500.csv'
+
+# csv_file = 'csv/_plate10_A100.csv'
+# csv_file = 'csv/_plate100_A100.csv'
+csv_file = 'csv/_plate500_A100.csv'
 
 df = pd.read_csv(csv_file)
 
@@ -119,7 +123,8 @@ plot_variable('lin_runtime(s)', 'mesh_error', "out/plate_lin_error_runtime.png",
 # =====================================================
 # Legend figure
 # =====================================================
-legend_order = ['CFI4', 'MITC4', 'CFI9', 'MITC9', 'CFI16', 'MITC16', 'HRA4','LFI16', 'AIG9']
+# legend_order = ['CFI4', 'MITC4', 'CFI9', 'MITC9', 'CFI16', 'MITC16', 'HRA4','LFI16', 'AIG9']
+legend_order = ['CFI4', 'CFI9', 'CFI16', 'MITC4', 'MITC9', 'MITC16', 'HRA4', 'LFI16', 'AIG9']
 
 legend_handles = []
 for elem_type in legend_order:
@@ -136,9 +141,12 @@ for elem_type in legend_order:
                   markersize=8)
     legend_handles.append(line)
 
-fig, ax = plt.subplots(figsize=(10, 3))
+# ncol = 5
+ncol = 9
+
+fig, ax = plt.subplots(figsize=(17, 3))
 ax.axis('off')
-ax.legend(handles=legend_handles, labels=legend_order, loc='center', ncol=5, frameon=False)
+ax.legend(handles=legend_handles, labels=legend_order, loc='center', ncol=ncol, frameon=False)
 plt.tight_layout()
 plt.savefig("out/plate_legend.png", dpi=400)
 plt.close()

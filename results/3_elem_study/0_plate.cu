@@ -332,7 +332,7 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int n
 
     int *d_perm = kmg->grids[0].d_perm;
     auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_mg_lin.vtk");
+    // printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_mg_lin.vtk");
 
 
     // -----------------------------------------------------------
