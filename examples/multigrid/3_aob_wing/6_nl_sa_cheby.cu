@@ -26,7 +26,8 @@
 #include "multigrid/utils/fea.h"
 #include "multigrid/smoothers/_wingbox_coloring.h"
 #include "multigrid/smoothers/cheb4_poly.h"
-#include "multigrid/prolongation/unstructured.h"
+// #include "multigrid/prolongation/unstructured.h"
+#include "multigrid/prolongation/unstruct_smooth.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>
 #include <chrono>
@@ -74,7 +75,7 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 
 template <typename T, class Assembler>
 void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR, 
-    int nsmooth, int ninnercyc, std::string cycle_type, T omega, int ORDER, T omega_min = 0.25, T omega_max = 1.0, int n_krylov = 50, double total_force = 1.0) {
+    int nsmooth, int nsmooth_mat, int ninnercyc, std::string cycle_type, T omega, int ORDER, T omega_min = 0.25, T omega_max = 1.0, int n_krylov = 50, double total_force = 1.0) {
     // geometric multigrid method here..
     // need to make a number of grids..
     // level gives the finest level here..
@@ -85,7 +86,9 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
     using Smoother = ChebyshevPolynomialSmoother<Assembler>;
     const bool is_bsr = true; // need this one if want to smooth prolongation
     // const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
-    using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
+    // using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
+    const bool KMAT_FILLIN = true;
+    using Prolongation = UnstructuredSmoothProlongation<Assembler, Basis, KMAT_FILLIN>;
     
     // in linear case (CFI4 + line search gets around locking issue, cause needs to be CFI9 order or greater to avoid locking, thus improving high slender perf)
     // in nonlinear case though (Vcycle line search breaks down at high NL and CFI4 can't be used, so need MITC4 and no line search for now more robust)
@@ -220,8 +223,8 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
         int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
         // int ELEM_MAX = 4;
         auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
-        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, 
-            cublasHandle, cusparseHandle, omega_min, omega_max);
+        auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, 
+            omega_min, omega_max, nsmooth_mat);
 
         smoother->setup_cg_lanczos(grid.d_defect);
 
@@ -597,10 +600,10 @@ void solve_nonlinear_direct(MPI_Comm &comm, int level, double SR, double total_f
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(bool is_multigrid, MPI_Comm &comm, int level, double SR, int nsmooth, 
+void gatekeeper_method(bool is_multigrid, MPI_Comm &comm, int level, double SR, int nsmooth, int nsmooth_mat,
     int ninnercyc, std::string cycle_type, T omega, int ORDER, T omega_min, T omega_max, int n_krylov, double total_force) {
     if (is_multigrid) {
-        solve_nonlinear_multigrid<T, Assembler>(comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omega_min, omega_max, n_krylov, total_force);
+        solve_nonlinear_multigrid<T, Assembler>(comm, level, SR, nsmooth, nsmooth_mat, ninnercyc, cycle_type, omega, ORDER, omega_min, omega_max, n_krylov, total_force);
     } else {
         solve_nonlinear_direct<T, Assembler>(comm, level, SR, total_force);
     }
@@ -631,8 +634,10 @@ int main(int argc, char **argv) {
     int ORDER = 4;
     double omega = 0.3; // after spectral radius norm (which appears to work as omega > 1 diverges, omega < 1 conv)
     // line search breaking down a lot..
+    // double omegaLS_min = 0.25;
     double omegaLS_min = 1.0; // default min line search omega
     double omegaLS_max = 1.0;
+    int nsmooth_mat = 1;
 
     // NOTE : may need lower omega for higher meshes like 0.1
 
@@ -728,6 +733,13 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --nsmooth\n";
                 return 1;
             }
+        } else if (strcmp(arg, "--nsmooth_mat") == 0) {
+            if (i + 1 < argc) {
+                nsmooth_mat = std::atoi(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --nsmooth_mat\n";
+                return 1;
+            }
         } else if (strcmp(arg, "--order") == 0) {
             if (i + 1 < argc) {
                 ORDER = std::atoi(argv[++i]);
@@ -739,7 +751,7 @@ int main(int argc, char **argv) {
             if (i + 1 < argc) {
                 ninnercyc = std::atoi(argv[++i]);
             } else {
-                std::cerr << "Missing value for --nsmooth\n";
+                std::cerr << "Missing value for --ninnercyc\n";
                 return 1;
             }
         } else {
@@ -763,15 +775,15 @@ int main(int argc, char **argv) {
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, n_krylov, force);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, nsmooth_mat, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, n_krylov, force);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, n_krylov, force);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, nsmooth_mat, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, n_krylov, force);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, n_krylov, force);
+        gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, nsmooth_mat, ninnercyc, cycle_type, omega, ORDER, omegaLS_min, omegaLS_max, n_krylov, force);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }

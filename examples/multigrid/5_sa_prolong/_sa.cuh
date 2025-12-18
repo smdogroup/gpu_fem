@@ -39,7 +39,7 @@ __global__ void k_compute_P_K_P_mmprod(int nnzb_prod, int block_dim, T scale,
 
 
 template <typename T>
-__global__ void k_compute_Dinv_P_mmprod(int nnzb_prod, int block_dim, 
+__global__ void k_compute_Dinv_P_mmprod_hc(int nnzb_prod, int block_dim, 
     const T *d_Dinv_vals, int *d_PF_rows, T *d_PF_vals) {
     
     // computes K * P => new P array as mat-mat product with pre-computed nonzero block pattern
@@ -79,7 +79,7 @@ __global__ void k_compute_Dinv_P_mmprod(int nnzb_prod, int block_dim,
 }
 
 template <typename T>
-__global__ void k_add_colored_submat_PFP(int color_nnzb, int block_dim, T omegaMC, int start_block, 
+__global__ void k_add_colored_submat_PFP_hc(int color_nnzb, int block_dim, T omegaMC, int start_block, 
     const T *d_PF_vals, T *d_P_vals) {
     /* add colored rows of Dinv*PF=>PF previous step into P matrix as color smoother update */
     

@@ -1,4 +1,7 @@
 /* demo smoothed aggregation GMG on a plate */
+// 1_sa_plate_hc.cu stands for hardcoded (local code) or original version of smoothed aggregation on plate
+// the next 2_sa_plate_gen.cu uses code integrated into main include/ or headers
+
 
 // based on the paper, \href{https://link.springer.com/article/10.1007/s006070050022}{Energy Optimization of Algebraic Multigrid Bases}
 // goal here is to do small plate first, explicitly forming and modifying the prolong matrix
@@ -29,7 +32,8 @@
 // local multigrid imports
 #include "multigrid/grid.h"
 #include "multigrid/utils/fea.h"
-#include "multigrid/smoothers/mc_smooth1.h"
+// #include "multigrid/smoothers/mc_smooth1.h"
+#include "multigrid/smoothers/cheb4_poly.h"
 #include "multigrid/prolongation/structured.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>
@@ -66,7 +70,8 @@ int main() {
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
 
     const SCALER scaler  = LINE_SEARCH;
-    using Smoother = MulticolorGSSmoother_V1<Assembler>;
+    // using Smoother = MulticolorGSSmoother_V1<Assembler>;
+    using Smoother = ChebyshevPolynomialSmoother<Assembler>;
     using Prolongation = StructuredProlongation<Assembler, PLATE>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
 
@@ -81,6 +86,11 @@ int main() {
     // double SR = 10.0;
     double SR = 100.0;
 
+    // smoother settings
+    // double omega = 1.0;
+    double omega = 0.4;
+    int ORDER = 1; // like jacobi
+
     printf("1) create handles\n");
     cublasHandle_t cublasHandle = NULL;
     CHECK_CUBLAS(cublasCreate(&cublasHandle));
@@ -92,7 +102,7 @@ int main() {
     
     printf("2.1) create fine assembler\n");
     double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
-    int nxe_per_comp = nxe / 2, nye_per_comp = nxe/2; // for now (should have 25 grids)
+    int nxe_per_comp = nxe, nye_per_comp = nxe; // for now (should have 25 grids)
     auto assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
     double Q = 1.0; // load magnitude
     // T *fine_loads = getPlateLoads<T, Physics>(nxe, nxe, Lx, Ly, Q); // comlicated load case
@@ -113,7 +123,8 @@ int main() {
     assembler.add_jacobian_fast(kmat);
     assembler.apply_bcs(kmat);
     printf("2.2) create fine smoother, prolong + grid\n");
-    auto f_smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, 1.0);
+    // auto f_smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, 1.0);
+    auto f_smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
     auto f_prolongation = new Prolongation(assembler);
     auto f_grid = new GRID(assembler, f_prolongation, f_smoother, kmat, loads, cublasHandle, cusparseHandle);
 
@@ -141,7 +152,8 @@ int main() {
     c_assembler.add_jacobian_fast(c_kmat);
     c_assembler.apply_bcs(c_kmat);
     printf("3.2) create coarse smoother, prolong + grid\n");
-    auto c_smoother = new Smoother(cublasHandle, cusparseHandle, c_assembler, c_kmat, c_h_color_rowp, 1.0);
+    // auto c_smoother = new Smoother(cublasHandle, cusparseHandle, c_assembler, c_kmat, c_h_color_rowp, 1.0);
+    auto c_smoother = new Smoother(cublasHandle, cusparseHandle, c_assembler, c_kmat, omega, ORDER);
     auto c_prolongation = new Prolongation(c_assembler);
     auto c_grid = new GRID(c_assembler, c_prolongation, c_smoother, c_kmat, c_loads, cublasHandle, cusparseHandle);
 
@@ -1010,17 +1022,19 @@ int main() {
     // T omegaMC = 0.1;
     // T omegaMC = -0.1;
     // T omegaMC = 0.2;
-    T omegaMC = 0.4;
     // T omegaMC = 0.7; // smoother constant
     // T omegaMC = 1.5;
+
+    // T omegaMC = 0.4;
+    T omegaMC = omega; // = 0.4 is default
 
     // for debugging
     // bool write_vtk = true;
     bool write_vtk = false;
 
     // use multicolor vs jacobi smoother
-    bool use_multicolor = true;
-    // bool use_multicolor = false;
+    // bool use_multicolor = true;
+    bool use_multicolor = false; // false since doing chebyshev/jacobi now..
     int nloop_colors = 1;
     if (use_multicolor) {
         // // TEMP DEBUG
@@ -1054,6 +1068,8 @@ int main() {
         printf("\tnot doing orthogonal projector for row-sum + rigid body mode constraint\n");
     }
 
+    printf("PF_nnzb = %d, nnzb_prod %d\n", PF_nnzb, nnzb_prod);
+
     int itest = 0;
     for (int ismooth = 0; ismooth < nsmooth; ismooth++) {
 
@@ -1077,7 +1093,7 @@ int main() {
         // printf("\tcolor %d with nodes %d to %d and nnzb = %d\n", icolor, start_node, end_node, PF_color_nnzb);
         dim3 DP_block(216);
         dim3 DP_grid(PF_nnzb);
-        k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(PF_nnzb, block_dim, 
+        k_compute_Dinv_P_mmprod_hc<T><<<DP_grid, DP_block>>>(PF_nnzb, block_dim, 
             d_dinv_vals.getPtr(), d_PF_rows, d_PF_vals);
 
         /* 7.4) apply orthogonal projector to the P matrix update dP = Dinv * PF, Q(dP) => dP' */
@@ -1206,13 +1222,13 @@ int main() {
             dim3 add_block(64);
             dim3 add_grid(PF_color_nnzb);
             // printf("\tadd dP color %d update\n", icolor);
-            k_add_colored_submat_PFP<T><<<add_grid, add_block>>>(PF_nnzb, block_dim, omegaMC, start_block,
+            k_add_colored_submat_PFP_hc<T><<<add_grid, add_block>>>(PF_nnzb, block_dim, omegaMC, start_block,
                 d_PF_vals, d_P_vals);
         } else {
             // add whole dP update in
             dim3 add_block(64);
             // printf("\tadd dP update\n");
-            k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(PF_nnzb, block_dim, omegaMC, 0,
+            k_add_colored_submat_PFP_hc<T><<<DP_grid, add_block>>>(PF_nnzb, block_dim, omegaMC, 0,
                 d_PF_vals, d_P_vals);
         }
         
