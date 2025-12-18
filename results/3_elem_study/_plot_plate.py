@@ -5,9 +5,10 @@ import niceplots
 from matplotlib.lines import Line2D
 
 # --- Load CSV data ---
-csv_file = 'csv/_plate.csv'
+# csv_file = 'csv/_plate.csv'
 # csv_file = 'csv/_plate10.csv'
 # csv_file = 'csv/_plate100.csv'
+csv_file = 'csv/_plate500.csv'
 
 df = pd.read_csv(csv_file)
 

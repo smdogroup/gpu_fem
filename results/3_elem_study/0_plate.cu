@@ -143,6 +143,10 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int n
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     // T omegaLS_min = 0.5, omegaLS_max = 2.0;
 
+    if (Basis::order == 1) {
+        ORDER = 8;
+    }
+
     // get nxe_min for not exactly power of 2 case
     // int nxe_start = 16 / Basis::order;
     int pre_nxe_min;
