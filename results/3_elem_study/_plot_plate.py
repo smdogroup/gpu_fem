@@ -26,7 +26,7 @@ plt.rcParams.update({
 })
 
 size = (8, 6.5)
-elem_order = ['MITC4', 'MITC9', 'MITC16', 'CFI4', 'CFI9', 'CFI16', 'HRA4', 'LFI16']
+elem_order = ['MITC4', 'MITC9', 'MITC16', 'CFI4', 'CFI9', 'CFI16', 'HRA4', 'LFI16', 'AIG9']
 
 # =====================================================
 # Compute mesh convergence error
@@ -62,6 +62,8 @@ elem_colors = {
 
     # LFI family: purple (distinct from CFI16)
     'LFI16': "#8e6cb3",   # dusty purple
+
+    'AIG9': "#8b5a2b",   # warm brown / sienna
 }
 
 
@@ -117,7 +119,7 @@ plot_variable('lin_runtime(s)', 'mesh_error', "out/plate_lin_error_runtime.png",
 # =====================================================
 # Legend figure
 # =====================================================
-legend_order = ['CFI4', 'MITC4', 'CFI9', 'MITC9', 'CFI16', 'MITC16', 'HRA4','LFI16']
+legend_order = ['CFI4', 'MITC4', 'CFI9', 'MITC9', 'CFI16', 'MITC16', 'HRA4','LFI16', 'AIG9']
 
 legend_handles = []
 for elem_type in legend_order:
@@ -136,7 +138,7 @@ for elem_type in legend_order:
 
 fig, ax = plt.subplots(figsize=(10, 3))
 ax.axis('off')
-ax.legend(handles=legend_handles, labels=legend_order, loc='center', ncol=4, frameon=False)
+ax.legend(handles=legend_handles, labels=legend_order, loc='center', ncol=5, frameon=False)
 plt.tight_layout()
 plt.savefig("out/plate_legend.png", dpi=400)
 plt.close()
