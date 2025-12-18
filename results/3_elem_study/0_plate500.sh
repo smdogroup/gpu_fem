@@ -1,3 +1,4 @@
+# for local smaller mem GPU
 
 ./0_plate.out --SR 500 --elem CFI4 --nxe 16 --nsmooth 1
 ./0_plate.out --SR 500 --elem CFI4 --nxe 32 --nsmooth 1
