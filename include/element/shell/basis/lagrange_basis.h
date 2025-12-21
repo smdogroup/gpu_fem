@@ -52,8 +52,13 @@ class LagrangeQuadBasis {
 
     __HOST_DEVICE__ static T getGaussPoint(int i) {
         // evenly spaced gauss-points
-        return -1.0 + 2.0 * i / (nx - 1);
+        T pt[2] = {0};
+        Quadrature::getQuadraturePoint(i, pt);
+        return pt[0];
     }
+
+    pt[0] = -1.0 + (2.0 / (nx - 1)) * (n % nx);
+    pt[1] = -1.0 + (2.0 / (nx - 1)) * (n / nx);
 
     // generic evalBasis call for interps in multigrid and FEA
     __HOST_DEVICE__ static void getBasis(const T pt[2], T N[num_nodes]) {

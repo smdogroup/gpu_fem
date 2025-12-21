@@ -132,8 +132,10 @@ class ChebyshevQuadBasis {
     using Geo = LinearQuadGeo;
 
     __HOST_DEVICE__ static T getGaussPoint(int i) {
-        // for use in assembler and structured prolong (external tools)
-        return Basis1D::getXi(i);
+        // evenly spaced gauss-points
+        T pt[2] = {0};
+        Quadrature::getQuadraturePoint(i, pt);
+        return pt[0];
     }
 
     // generic evalBasis call for interps in multigrid and FEA

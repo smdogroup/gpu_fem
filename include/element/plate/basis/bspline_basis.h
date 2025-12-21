@@ -80,110 +80,113 @@ class BsplineQuadBasis {
     };  // end of class LinearQuadGeo
     using Geo = LinearQuadGeo;
 
-    //     __HOST_DEVICE__ static T getGaussPoint(int i) {
-    //         // for use in assembler and structured prolong (external tools)
-    //         return Basis1D::getXi(i);
-    //     }
+    __HOST_DEVICE__ static T getGaussPoint(int i) {
+        // evenly spaced gauss-points
+        T pt[2] = {0};
+        Quadrature::getQuadraturePoint(i, pt);
+        return pt[0];
+    }
 
-    //     // generic evalBasis call for interps in multigrid and FEA
-    //     __HOST_DEVICE__ static void getBasis(const T pt[2], T N[num_nodes]) {
-    //         eval_chebyshev_2d_basis(pt, N);
-    //     }
+    // generic evalBasis call for interps in multigrid and FEA
+    __HOST_DEVICE__ static void getBasis(const T pt[2], const bool bndry[4], T N[num_nodes]) {
+        eval_bspline_basis(pt, bndry, N);
+    }
 
-    //     __HOST_DEVICE__ static void getNodePoint(const int n, T pt[]) {
-    //         pt[0] = Basis1D::getXi(n % nx);
-    //         pt[1] = Basis1D::getXi(n / nx);
-    //     }
+    __HOST_DEVICE__ static void getNodePoint(const int n, T pt[]) {
+        pt[0] = Basis1D::getXi(n % nx);
+        pt[1] = Basis1D::getXi(n / nx);
+    }
 
-    //     __HOST_DEVICE__ static void eval_chebyshev_2d_basis(const T pt[], T N[]) {
-    //         T N1[nx], N2[nx];
-    //         Basis1D::evalBasis(pt[0], N1);
-    //         Basis1D::evalBasis(pt[1], N2);
+    __HOST_DEVICE__ static void eval_bspline_basis(const T pt[2], const bool bndry[4], T N[]) {
+        T N1[nx], N2[nx];
+        Basis1D::evalBasis(pt[0], bndry, N1);
+        Basis1D::evalBasis(pt[1], &bndry[2], N2);
 
-    // #pragma unroll
-    //         for (int i = 0; i < nx * nx; i++) {
-    //             int ix = i % nx, iy = i / nx;
-    //             N[i] = N1[ix] * N2[iy];
-    //         }
-    //     }
+#pragma unroll
+        for (int i = 0; i < nx * nx; i++) {
+            int ix = i % nx, iy = i / nx;
+            N[i] = N1[ix] * N2[iy];
+        }
+    }
 
-    //     __HOST_DEVICE__ static void eval_chebyshev_2d_basis_grad(const T pt[], T Nxi[], T Neta[])
-    //     {
-    //         T N1[nx], dN1[nx];
-    //         T N2[nx], dN2[nx];
-    //         Basis1D::evalBasis(pt[0], N1), Basis1D::evalBasis(pt[1], N2);
-    //         Basis1D::evalBasisGrad(pt[0], dN1), Basis1D::evalBasisGrad(pt[1], dN2);
+    __HOST_DEVICE__ static void eval_bspline_basis_grad(const T pt[2], const bool bndry[4], T Nxi[],
+                                                        T Neta[]) {
+        T N1[nx], dN1[nx];
+        T N2[nx], dN2[nx];
+        Basis1D::evalBasis(pt[0], bndry, N1), Basis1D::evalBasis(pt[1], &bndry[2], N2);
+        Basis1D::evalBasisGrad(pt[0], bndry, dN1), Basis1D::evalBasisGrad(pt[1], &bndry[2], dN2);
 
-    // #pragma unroll
-    //         for (int i = 0; i < nx * nx; i++) {
-    //             int i1 = i % nx, i2 = i / nx;
-    //             Nxi[i] = dN1[i1] * N2[i2];
-    //             Neta[i] = N1[i1] * dN2[i2];
-    //         }
-    //     }
+#pragma unroll
+        for (int i = 0; i < nx * nx; i++) {
+            int i1 = i % nx, i2 = i / nx;
+            Nxi[i] = dN1[i1] * N2[i2];
+            Neta[i] = N1[i1] * dN2[i2];
+        }
+    }
 
-    //     template <int vars_per_node, int num_fields>
-    //     __HOST_DEVICE__ static void interpFields(const T pt[], const T values[], T field[]) {
-    //         T N[num_nodes];
-    //         eval_chebyshev_2d_basis(pt, N);
+    template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFields(const T pt[2], const bool bndry[4], const T values[],
+                                             T field[]) {
+        T N[num_nodes];
+        eval_bspline_basis(pt, bndry, N);
 
-    // #pragma unroll
-    //         for (int ifield = 0; ifield < num_fields; ifield++) {
-    //             field[ifield] = 0.0;
-    // #pragma unroll
-    //             for (int inode = 0; inode < num_nodes; inode++) {
-    //                 field[ifield] += N[inode] * values[inode * vars_per_node + ifield];
-    //             }
-    //         }
-    //     }  // end of interpFields method
+#pragma unroll
+        for (int ifield = 0; ifield < num_fields; ifield++) {
+            field[ifield] = 0.0;
+#pragma unroll
+            for (int inode = 0; inode < num_nodes; inode++) {
+                field[ifield] += N[inode] * values[inode * vars_per_node + ifield];
+            }
+        }
+    }  // end of interpFields method
 
-    //     template <int vars_per_node, int num_fields>
-    //     __HOST_DEVICE__ static void interpFieldsGrad(const T pt[], const T values[], T dxi[],
-    //                                                  T deta[]) {
-    //         T dNdxi[num_nodes], dNdeta[num_nodes];
-    //         eval_chebyshev_2d_basis_grad(pt, dNdxi, dNdeta);
+    template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFieldsGrad(const T pt[2], const bool bndry[4],
+                                                 const T values[], T dxi[], T deta[]) {
+        T dNdxi[num_nodes], dNdeta[num_nodes];
+        eval_bspline_basis_grad(pt, bndry, dNdxi, dNdeta);
 
-    // #pragma unroll
-    //         for (int ifield = 0; ifield < num_fields; ifield++) {
-    //             dxi[ifield] = 0.0;
-    //             deta[ifield] = 0.0;
-    // #pragma unroll
-    //             for (int inode = 0; inode < num_nodes; inode++) {
-    //                 dxi[ifield] += dNdxi[inode] * values[inode * vars_per_node + ifield];
-    //                 deta[ifield] += dNdeta[inode] * values[inode * vars_per_node + ifield];
-    //             }
-    //         }
-    //     }  // end of interpFieldsGrad method
+#pragma unroll
+        for (int ifield = 0; ifield < num_fields; ifield++) {
+            dxi[ifield] = 0.0;
+            deta[ifield] = 0.0;
+#pragma unroll
+            for (int inode = 0; inode < num_nodes; inode++) {
+                dxi[ifield] += dNdxi[inode] * values[inode * vars_per_node + ifield];
+                deta[ifield] += dNdeta[inode] * values[inode * vars_per_node + ifield];
+            }
+        }
+    }  // end of interpFieldsGrad method
 
-    //     template <int vars_per_node, int num_fields>
-    //     __HOST_DEVICE__ static void interpFieldsTranspose(const T pt[], const T field_bar[],
-    //                                                       T values_bar[]) {
-    //         T N[num_nodes];
-    //         eval_chebyshev_2d_basis(pt, N);
+    template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFieldsTranspose(const T pt[2], const bool bndry[4],
+                                                      const T field_bar[], T values_bar[]) {
+        T N[num_nodes];
+        eval_bspline_basis(pt, bndry, N);
 
-    // #pragma unroll
-    //         for (int ifield = 0; ifield < num_fields; ifield++) {
-    // #pragma unroll
-    //             for (int inode = 0; inode < num_nodes; inode++) {
-    //                 values_bar[inode * vars_per_node + ifield] += field_bar[ifield] * N[inode];
-    //             }
-    //         }
-    //     }  // end of interpFieldsTranspose method
+#pragma unroll
+        for (int ifield = 0; ifield < num_fields; ifield++) {
+#pragma unroll
+            for (int inode = 0; inode < num_nodes; inode++) {
+                values_bar[inode * vars_per_node + ifield] += field_bar[ifield] * N[inode];
+            }
+        }
+    }  // end of interpFieldsTranspose method
 
-    //     template <int vars_per_node, int num_fields>
-    //     __HOST_DEVICE__ static void interpFieldsGradTranspose(const T pt[], const T dxi_bar[],
-    //                                                           const T deta_bar[], T values_bar[])
-    //                                                           {
-    //         T dNdxi[num_nodes], dNdeta[num_nodes];
-    //         eval_chebyshev_2d_basis_grad(pt, dNdxi, dNdeta);
+    template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFieldsGradTranspose(const T pt[2], const bool bndry[4],
+                                                          const T dxi_bar[], const T deta_bar[],
+                                                          T values_bar[]) {
+        T dNdxi[num_nodes], dNdeta[num_nodes];
+        eval_bspline_basis_grad(pt, bndry, dNdxi, dNdeta);
 
-    // #pragma unroll
-    //         for (int ifield = 0; ifield < num_fields; ifield++) {
-    // #pragma unroll
-    //             for (int inode = 0; inode < num_nodes; inode++) {
-    //                 values_bar[inode * vars_per_node + ifield] +=
-    //                     dxi_bar[ifield] * dNdxi[inode] + deta_bar[ifield] * dNdeta[inode];
-    //             }
-    //         }
-    //     }  // end of interpFieldsGrad method
-};  // end of class BsplineQuadBasis
+#pragma unroll
+        for (int ifield = 0; ifield < num_fields; ifield++) {
+#pragma unroll
+            for (int inode = 0; inode < num_nodes; inode++) {
+                values_bar[inode * vars_per_node + ifield] +=
+                    dxi_bar[ifield] * dNdxi[inode] + deta_bar[ifield] * dNdeta[inode];
+            }
+        }
+    }  // end of interpFieldsGradTranspose method
+};     // end of class BsplineQuadBasis
