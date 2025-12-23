@@ -449,7 +449,14 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
     int m = 3, n = 1;
     bool uniform_load = false;
     // bool uniform_load = true; // makes it const load not sine load anymore
-    T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, nxe, nxe, Lx, Ly,nodal_loads, uniform_load, m, n);
+    // T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, nxe, nxe, Lx, Ly,nodal_loads, uniform_load, m, n);
+    int ndof = assembler.get_num_vars();
+    int num_nodes = ndof / 6;
+    T *my_loads = new T[ndof]; // TODO : change back to plate mesh conv loads later..
+    memset(my_loads, 0.0, ndof * sizeof(T));
+    for (int inode = 0; inode < num_nodes; inode++) {
+        my_loads[6 * inode + 2] = pressure;
+    }
 
     // print loads
     // printf("loads: ");
@@ -513,12 +520,38 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
     // }
     // return;
 
-    assembler.apply_bcs(kmat); // comment out for temp debug
+    // CHECK_CUDA(cudaDeviceSynchronize());
+    // auto h_mat1 = kmat.getVec().createHostVec();
+    // const double *h_mat_ptr1 = h_mat1.getPtr();
+    // for (int inz = 0; inz < 81; inz++) {
+    //     const T *h_mat_block1 = &h_mat_ptr1[36 * inz];
+    //     printf("------------------------\nkmat block (%d, %d):\n------------------------\n", inz % 9, inz / 9);
+    //     for (int j = 0; j < 6; j++) {
+    //         printf("row %d: ", j);
+    //         printVec<double>(6, &h_mat_block1[6 * j]);
+    //     }
+    // }
+
+    // bool include_cols = true; // maybe default include_cols = true not working well for IGA case?
+    assembler.apply_bcs(kmat,true); //, include_cols); // comment out for temp debug
     CHECK_CUDA(cudaDeviceSynchronize());
-    printf("\tdone with jacobian\n");
-    // return;
-    CHECK_CUDA(cudaDeviceSynchronize());
+    // int nnz = kmat.get_nnz();
+    // printf("\tdone with jacobian with nnz %d\n", nnz);
+    // // return;
+    // CHECK_CUDA(cudaDeviceSynchronize());
     auto start_lin = std::chrono::high_resolution_clock::now();
+
+    // auto h_mat = kmat.getVec().createHostVec();
+    // const double *h_mat_ptr = h_mat.getPtr();
+    // for (int inz = 0; inz < 81; inz++) {
+    //     const T *h_mat_block = &h_mat_ptr[36 * inz];
+    //     printf("------------------------\nkmat block (%d, %d):\n------------------------\n", inz % 9, inz / 9);
+    //     for (int j = 0; j < 6; j++) {
+    //         printf("row %d: ", j);
+    //         printVec<double>(6, &h_mat_block[6 * j]);
+    //     }
+    // }
+
 
     printf("try linear solve\n");
     CUSPARSE::direct_LU_solve(kmat, loads, soln);
@@ -584,7 +617,6 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
     }
 
     
-    int ndof = assembler.get_num_vars();
     double total = startup_time.count() + solve_time.count();
     printf("nonlinear Newton-Raphson Direct-LU solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), solve_time.count(), total);
 
@@ -718,7 +750,7 @@ int main(int argc, char **argv) {
     using Quad = QuadQuadraticQuadrature<T>;
     using Basis = BsplineQuadBasis<T, Quad, 2>;
     using Assembler = AsymptoticIsogeometricPlateAssembler<T, Basis, Physics, VecType, BsrMat>;
-    SR = 5.0;
+    // SR = 5.0;
     gatekeeper_method<T, Assembler>("AIG9", is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
 
     return 0;

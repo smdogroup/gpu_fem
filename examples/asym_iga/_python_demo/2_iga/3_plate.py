@@ -61,7 +61,8 @@ def gauss(n):
     w = 0.5*w
     return pts, w
 quad_pts, quad_wts = gauss(p+1)
-# print(f"{xi_pts=}")
+_pts = quad_pts*2-1.0
+print(f"{_pts=}")
 
 def quad_bernstein(xi):
     N = np.array([(1-xi)**2, 2*xi*(1-xi), xi**2])
@@ -73,6 +74,8 @@ def get_1d_basis_and_deriv(xi, bndry_span):
     B, dB = quad_bernstein(xi)
     left_bndry = abs(bndry_span[0] - bndry_span[1]) < 1e-12
     right_bndry = abs(bndry_span[2] - bndry_span[3]) < 1e-12
+
+    # print(f"{left_bndry=} {right_bndry=}")
 
     # bndry adjustment and regular basis
     # on GPU can code it up with ? ternary operators probably
@@ -130,6 +133,7 @@ for ielem in range(nelems):
         v = y_span[0] + eta * np.diff(y_span)[0]
 
         # get 1d basis functions and derivs
+        print(f"{x_bndry_span=} {y_bndry_span=}")
         na, dna = get_1d_basis_and_deriv(xi, x_bndry_span)
         nb, dnb = get_1d_basis_and_deriv(eta, y_bndry_span)
         # print(f"{na=} {nb=} {dna=}")
@@ -141,6 +145,10 @@ for ielem in range(nelems):
             R[i] = na[ia] * nb[ib]
             dR_da[i] = dna[ia] * nb[ib]
             dR_db[i] = na[ia] * dnb[ib]
+
+        print(f"{R=}\n{dR_da=}\n{dR_db=}")
+        # plt.imshow(R.reshape((3,3)))
+        # plt.show()
 
         # compute d(xy)/d(ab) derivs at the quadpt
         xy_ab = np.zeros((2,2))
@@ -168,15 +176,21 @@ for ielem in range(nelems):
         for a in range(nn):
             # w DOF index = 3*a, thx = 3*a+1, thy = 3*a+2
             # curvature contributions from rotation DOFs derivatives
-            Bb[0, 3*a+1] = dR_dx[a]    # d(phx)/dx
-            Bb[1, 3*a+2] = dR_dy[a]    # d(phy)/dy
-            Bb[2, 3*a+1] = dR_dy[a]    # d(phx)/dy
-            Bb[2, 3*a+2] = dR_dx[a]    # d(phy)/dx
+            Bb[0, 3*a+2] = dR_dx[a]    # d(phy)/dx
+            Bb[1, 3*a+1] = -dR_dy[a]    # -d(phx)/dy
+            Bb[2, 3*a+2] = dR_dy[a]    # d(phy)/dy
+            Bb[2, 3*a+1] = -dR_dx[a]    # -d(phx)/dx
             # shear
             Bs[0, 3*a+0] = dR_dx[a]    # dw/dx coefficient
-            Bs[0, 3*a+1] = R[a]       # phi_x coefficient
+            Bs[0, 3*a+2] = R[a]       # phi_y coefficient
             Bs[1, 3*a+0] = dR_dy[a]    # dw/dy
-            Bs[1, 3*a+2] = R[a]       # phi_y
+            Bs[1, 3*a+1] = -R[a]       # -phi_x
+
+        # print(f"{Bb=}")
+        # B = np.concatenate([Bb, Bs], axis=0)
+        # plt.imshow(B)
+        # plt.show()
+
         # element stiffness contribution
         weight = xiw * etaw * detJ
         Ke += (Bb.T @ D_b @ Bb + Bs.T @ D_s @ Bs) * weight
@@ -197,6 +211,8 @@ for ielem in range(nelems):
                 F[I] += Fe[ii_local]
                 for jj_local, Jidx in enumerate(dof_map):
                     K[I,Jidx] += Ke[ii_local, jj_local]
+
+print(f"{K[:3,:3]=}")
 
 # ========================================
 # SOLVE THE LINEAR SYSTEM

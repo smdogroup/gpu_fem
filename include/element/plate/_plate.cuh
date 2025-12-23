@@ -92,19 +92,19 @@ __GLOBAL__ static void k_add_aigplate_jacobian_fast(int32_t vars_num_nodes, int3
     }
     __syncthreads();
 
-    // // compute drill strains
+    // compute drill strains
     ElemGroup::template add_element_quadpt_jacobian_col_fast<Data, DRILL>(
         iquad, block_bndry[local_elem], block_xpts[local_elem], block_data[local_elem],
         block_vars[local_elem], p_vars, local_mat_col);
     __syncthreads();
 
-    // // compute bending strains
+    // compute bending strains
     ElemGroup::template add_element_quadpt_jacobian_col_fast<Data, BENDING>(
         iquad, block_bndry[local_elem], block_xpts[local_elem], block_data[local_elem],
         block_vars[local_elem], p_vars, local_mat_col);
     __syncthreads();
 
-    // // // compute tying strains
+    // compute tying strains
     ElemGroup::template add_element_quadpt_jacobian_col_fast<Data, TYING>(
         iquad, block_bndry[local_elem], block_xpts[local_elem], block_data[local_elem],
         block_vars[local_elem], p_vars, local_mat_col);

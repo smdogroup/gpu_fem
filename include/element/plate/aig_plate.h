@@ -107,7 +107,7 @@ class AsymptoticIsogeometricPlateAssembler
         int nblocks = (this->num_nodes + 31) / 32;
         dim3 grid(nblocks);
 
-        k_asymptotic_rhs_transform<T, Assembler, Data, Vec><<<grid, block>>>(
+        k_asymptotic_rhs_transform<T, Assembler, Data, Vec_><<<grid, block>>>(
             this->num_vars_nodes, this->num_elements, this->elem_components, this->compData, fext);
     }
 
@@ -162,10 +162,17 @@ class AsymptoticIsogeometricPlateAssembler
     __DEVICE__ static void add_element_quadpt_residual_fast(  // __noinline__
         const int iquad, const bool bndry[4], const T xpts[xpts_per_elem], const Data &compData,
         const T vars[dof_per_elem], T res[dof_per_elem]) {
+        constexpr bool bending = strain == BENDING || strain == ALL;
+        constexpr bool tying = strain == TYING || strain == ALL;
+        constexpr bool drill = strain == DRILL || strain == ALL;
+
         // 0) startup of this element residual
         // -----------------------------------
         T pt[2];
         T weight = Quadrature::getQuadraturePoint(iquad, pt);
+        // 1/4 the quad weight (see examples/asym_iga/_python_demo/2_iga/3_plate.py since we've
+        // halfed the comp domain
+        weight *= 0.25;
         T Xdinv[4];
         T detJ = getTransformMatrix<T, Basis>(pt, bndry, xpts, Xdinv);
         T scale = detJ * weight;
@@ -175,10 +182,18 @@ class AsymptoticIsogeometricPlateAssembler
         XdinvT[1] = Xdinv[1], XdinvT[4] = Xdinv[3];
         XdinvT[8] = 1.0;
 
-        // data to store in forwards + backwards section
-        static constexpr bool is_nonlinear = Phys::is_nonlinear;
+        // if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {
+        //     printf("Xdinv: ");
+        //     printVec<T>(4, Xdinv);
 
-        if constexpr (BENDING) {
+        //     printf("XdinvT: ");
+        //     printVec<T>(9, XdinvT);
+        // }
+
+        // data to store in forwards + backwards section
+        // static constexpr bool is_nonlinear = Phys::is_nonlinear;
+
+        if constexpr (bending) {
             A2D::ADObj<A2D::Vec<T, 3>> ek;
 
             computeBendingStrain<T, vars_per_node, Basis>(pt, bndry, Xdinv, vars, ek.value());
@@ -187,7 +202,7 @@ class AsymptoticIsogeometricPlateAssembler
                                                                    res);
         }
 
-        if constexpr (TYING) {
+        if constexpr (tying) {
             A2D::ADObj<A2D::SymMat<T, 3>> e0ty;
 
             A2D::SymMat<T, 3> gty;
@@ -205,7 +220,7 @@ class AsymptoticIsogeometricPlateAssembler
                                                                 res);
         }
 
-        if constexpr (DRILL) {
+        if constexpr (drill) {
             A2D::ADObj<A2D::Vec<T, 1>> et;
             computeDrillStrain<T, vars_per_node, Basis>(pt, bndry, Xdinv, vars,
                                                         et.value().get_data());
@@ -228,7 +243,7 @@ class AsymptoticIsogeometricPlateAssembler
                     "strains not "
                     "fully nonlinear. Kmat reverted to linear.\n");
             }
-            return;
+            // return;
         }
 
         // since it's linear just call residual array on pvars input

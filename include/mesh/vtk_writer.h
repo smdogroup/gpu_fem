@@ -10,6 +10,8 @@ template <class Assembler, class Vec>
 void printToVTK(Assembler assembler, Vec soln, std::string filename) {
     // NOTE : better to use F5 binary for large cases, we will handle that
 
+    using Basis = typename Assembler::Basis;
+
     // later
     using namespace std;
     string sp = " ";
@@ -151,7 +153,10 @@ void printToVTK(Assembler assembler, Vec soln, std::string filename) {
     DeviceVec<double> strains(nstresses), stresses(nstresses);
 
     // compute visualization states
-    assembler.compute_visualization_states(d_dvs, fail_index, strains, stresses);
+    if (!Basis::ISOGEOM) {
+        // TODO : for non ISOGEOM later..
+        assembler.compute_visualization_states(d_dvs, fail_index, strains, stresses);
+    }
 
     // write thicknesses
     double *h_dvs = d_dvs.createHostVec().getPtr();
@@ -191,7 +196,6 @@ void printToVTK(Assembler assembler, Vec soln, std::string filename) {
             int comp_id = h_elem_comp[ielem];
             myfile << h_dvs[ndvs_per_comp * comp_id + 3] << "\n";
         }
-
     }
 
     // write failure indexes

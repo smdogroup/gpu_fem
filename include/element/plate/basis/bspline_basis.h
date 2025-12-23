@@ -34,7 +34,7 @@ class Bspline1D<T, 2> {
 
         // basis functions change slightly on boundary to go from C1 to C^{-1} continuity there
         N[0] = 0.5 * (1.0 + bndry[0]) * B0;
-        N[1] = 0.5 * (B0 + B1 + B2) - 0.5 * (bndry[0] * B0 + bndry[1] * B2);
+        N[1] = 0.5 * (B0 + 2 * B1 + B2) - 0.5 * (bndry[0] * B0 + bndry[1] * B2);
         N[2] = 0.5 * (1.0 + bndry[1]) * B2;
     }
 
@@ -46,7 +46,7 @@ class Bspline1D<T, 2> {
 
         // basis functions change slightly on boundary to go from C1 to C^{-1} continuity there
         dN[0] = 0.5 * (1.0 + bndry[0]) * dB0;
-        dN[1] = 0.5 * (dB0 + dB1 + dB2) - 0.5 * (bndry[0] * dB0 + bndry[1] * dB2);
+        dN[1] = 0.5 * (dB0 + 2 * dB1 + dB2) - 0.5 * (bndry[0] * dB0 + bndry[1] * dB2);
         dN[2] = 0.5 * (1.0 + bndry[1]) * dB2;
     }
 };
@@ -59,6 +59,7 @@ class BsplineQuadBasis {
     using Quadrature = Quadrature_;
     using Basis1D = Bspline1D<T, _order>;
     static constexpr int32_t order = _order;
+    static constexpr bool ISOGEOM = true;
 
     // Required for loading solution data
     static constexpr int32_t nx = order + 1;  // num nodes in a single direction
@@ -124,6 +125,8 @@ class BsplineQuadBasis {
 #pragma unroll
         for (int i = 0; i < nx * nx; i++) {
             int i1 = i % nx, i2 = i / nx;
+            // Nxi[i] = 0.5 * dN1[i1] * N2[i2];
+            // Neta[i] = 0.5 * N1[i1] * dN2[i2];
             Nxi[i] = dN1[i1] * N2[i2];
             Neta[i] = N1[i1] * dN2[i2];
         }

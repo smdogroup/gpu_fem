@@ -44,10 +44,12 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
     assert(nye % nye_per_comp == 0);
 
     // number of nodes per direction
-    int nnx = order * nxe + 1;
-    int nny = order * nye + 1;
+    int nnx = Basis::ISOGEOM ? nxe + order : order * nxe + 1;
+    int nny = Basis::ISOGEOM ? nye + order : order * nye + 1;
     int num_nodes = nnx * nny;
     int num_elements = nxe * nye;
+
+    // printf("num nodes %d, num_elements %d\n", num_nodes, num_elements);
 
     // printf("checkpoint 1\n");
 
@@ -157,7 +159,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
     // printf("checkpoint 2 - post bcs\n");
 
     // printf("bcs: ");
-    // printVec<int>(my_bcs.size(), bcs.getPtr());
+    // printVec<int>(bcs.getSize(), bcs.getPtr());
     int n = order + 1;  // num local nodes
 
     // now initialize the element connectivity
@@ -170,8 +172,8 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
             // no sorted order like in MITC?
             for (int iloc = 0; iloc < n * n; iloc++) {
                 int ilx = iloc % n, ily = iloc / n;
-                int ix = order * ixe + ilx;
-                int iy = order * iye + ily;
+                int ix = Basis::ISOGEOM ? ixe + ilx : order * ixe + ilx;
+                int iy = Basis::ISOGEOM ? iye + ily : order * iye + ily;
                 int inode = nnx * iy + ix;
 
                 elem_conn[Basis::num_nodes * ielem + iloc] = inode;
@@ -196,7 +198,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
         for (int ix = 0; ix < nnx; ix++) {
             int inode = nnx * iy + ix;
             T *xpt_node = &xpts[Geo::spatial_dim * inode];
-            if constexpr (Basis::order == 1) {
+            if constexpr (Basis::order == 1 || Basis::ISOGEOM) {
                 xpt_node[0] = dx * ix;
                 xpt_node[1] = dy * iy;
                 xpt_node[2] = 0.0;
@@ -614,8 +616,8 @@ T *getPlateMeshConvLoads(Assembler &assembler, int nxe, int nye, double Lx, doub
     using Quadrature = typename Basis::Quadrature;
 
     // number of nodes per direction
-    int nnx = order * nxe + 1;
-    int nny = order * nye + 1;
+    int nnx = Basis::ISOGEOM ? order + nxe : order * nxe + 1;
+    int nny = Basis::ISOGEOM ? order + nye : order * nye + 1;
     int num_nodes = nnx * nny;
 
     constexpr bool IS_HR_ELEM = Phys::hellingerReissner;

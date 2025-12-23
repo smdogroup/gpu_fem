@@ -10,6 +10,15 @@ __HOST_DEVICE__ T getTransformMatrix(const T pt[2], const bool bndry[4], const T
     T Xd[4];  // d(x,y)/d(xi,eta) matrix
     Xd[0] = Xxi[0], Xd[2] = Xeta[0];
     Xd[1] = Xxi[1], Xd[3] = Xeta[1];
+
+    // if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && blockIdx.x == 0) {
+    //     printf("Xxi: ");
+    //     printVec<T>(3, Xxi);
+
+    //     printf("Xeta: ");
+    //     printVec<T>(3, Xeta);
+    // }
+
     // now compute inverse matrix and determinant
     T detJ = Xd[0] * Xd[3] - Xd[1] * Xd[2];
     // T Xdinv[4];
@@ -31,13 +40,14 @@ __HOST_DEVICE__ void computeBendingStrain(const T pt[2], const bool bndry[4], co
     T Uxi[vars_per_node], Ueta[vars_per_node];
     Basis::template interpFieldsGrad<vars_per_node, vars_per_node>(pt, bndry, vars, Uxi, Ueta);
 
-    // d(thx)/dx
-    ek[0] = Xdinv[0] * Uxi[3] + Xdinv[2] * Ueta[3];
-    // d(thy)/dy
-    ek[1] = Xdinv[1] * Uxi[4] + Xdinv[3] * Ueta[4];
-    // d(thx)/dy + d(thy)/dx
-    ek[2] = Xdinv[1] * Uxi[3] + Xdinv[3] * Ueta[3];
-    ek[2] += Xdinv[0] * Uxi[4] + Xdinv[2] * Ueta[4];
+    // director with normal (0,0,1) makes d = [thy, -thx, 0]
+    // d(thy)/dx
+    ek[0] = Xdinv[0] * Uxi[4] + Xdinv[2] * Ueta[4];
+    // -d(thx)/dy
+    ek[1] = -1 * (Xdinv[1] * Uxi[3] + Xdinv[3] * Ueta[3]);
+    // -d(thx)/dx + d(thy)/dy
+    ek[2] = Xdinv[1] * Uxi[4] + Xdinv[3] * Ueta[4];
+    ek[2] -= Xdinv[0] * Uxi[3] + Xdinv[2] * Ueta[3];
 }
 
 template <typename T, int vars_per_node, class Basis>
@@ -48,20 +58,20 @@ __HOST_DEVICE__ void computeBendingStrainTranspose(const T pt[2], const bool bnd
     T xi_bar[vars_per_node] = {0};
     T eta_bar[vars_per_node] = {0};
 
-    // ek[0] = d(thx)/dx
-    xi_bar[3] += Xdinv[0] * ek_bar[0];
-    eta_bar[3] += Xdinv[2] * ek_bar[0];
+    // ek[0] = d(thy)/dx
+    xi_bar[4] += Xdinv[0] * ek_bar[0];
+    eta_bar[4] += Xdinv[2] * ek_bar[0];
 
-    // ek[1] = d(thy)/dy
-    xi_bar[4] += Xdinv[1] * ek_bar[1];
-    eta_bar[4] += Xdinv[3] * ek_bar[1];
+    // ek[1] = -d(thx)/dy
+    xi_bar[3] -= Xdinv[1] * ek_bar[1];
+    eta_bar[3] -= Xdinv[3] * ek_bar[1];
 
-    // ek[2] = d(thx)/dy + d(thy)/dx
-    xi_bar[3] += Xdinv[1] * ek_bar[2];
-    eta_bar[3] += Xdinv[3] * ek_bar[2];
+    // ek[2] = d(thy)/dy - d(thx)/dx
+    xi_bar[4] += Xdinv[1] * ek_bar[2];
+    eta_bar[4] += Xdinv[3] * ek_bar[2];
 
-    xi_bar[4] += Xdinv[0] * ek_bar[2];
-    eta_bar[4] += Xdinv[2] * ek_bar[2];
+    xi_bar[3] -= Xdinv[0] * ek_bar[2];
+    eta_bar[3] -= Xdinv[2] * ek_bar[2];
 
     // push adjoints back through interpolation
     Basis::template interpFieldsGradTranspose<vars_per_node, vars_per_node>(pt, bndry, xi_bar,
@@ -96,13 +106,16 @@ __DEVICE__ static void computeFullTyingStrain(const T pt[2], const bool bndry[4]
     // ----------------------------------------
 
     T U[vars_per_node];
-    Basis::template interpFields<vars_per_node, vars_per_node>(pt, vars, U);
+    Basis::template interpFields<vars_per_node, vars_per_node>(pt, bndry, vars, U);
+    T d0[3] = {0.0};
+    d0[0] = U[4];   // thy
+    d0[1] = -U[3];  // -thx
 
     // g23 strain
-    gty[4] = 0.5 * (Xeta[1] * U[4] + Ueta[2]);
+    gty[4] = 0.5 * (A2D::VecDotCore<T, 3>(Xeta, d0) + Ueta[2]);
 
     // g13 strain
-    gty[2] = 0.5 * (Xxi[0] * U[3] + Uxi[2]);
+    gty[2] = 0.5 * (A2D::VecDotCore<T, 3>(Xxi, d0) + Uxi[2]);
 
     // g33 strain
     gty[5] = 0.0;
@@ -137,14 +150,19 @@ __DEVICE__ static void computeFullTyingStrainSens(const T pt[], const bool bndry
     // ----------------------------------------
 
     T U_bar[6] = {0};
+    T d_bar[3] = {0.0};
 
     // g23 strain
-    U_bar[4] += Xeta[1] * 0.5 * gty_bar[4];
+    A2D::VecAddCore<T, 3>(0.5 * gty_bar[4], Xeta, d_bar);
     Ueta_bar[2] += 0.5 * gty_bar[4];
 
     // g13 strain
-    U_bar[3] += 0.5 * gty_bar[2] * Xxi[0];
+    A2D::VecAddCore<T, 3>(0.5 * gty_bar[2], Xxi, d_bar);
     Uxi_bar[2] += 0.5 * gty_bar[2];
+
+    // backwards of cross-product with normal direction
+    U_bar[4] += d_bar[0];
+    U_bar[3] -= d_bar[1];
 
     // g33 strain == 0
 
@@ -165,19 +183,18 @@ __DEVICE__ static void computeDrillStrain(const T pt[2], const bool bndry[4], co
                                           const T vars[], T et[1]) {
     // Interpolate the field values
     T Uxi[3], Ueta[3], U[vars_per_node];
-    Basis::template interpFields<vars_per_node, vars_per_node>(pt, vars, U);
+    Basis::template interpFields<vars_per_node, vars_per_node>(pt, bndry, vars, U);
     Basis::template interpFieldsGrad<vars_per_node, 3>(pt, bndry, vars, Uxi, Ueta);
 
-    T du_dy = Xdinv[0] * Uxi[0] + Xdinv[2] * Ueta[0];
-    T dv_dx = Xdinv[1] * Uxi[1] + Xdinv[3] * Ueta[1];
+    T du_dy = Xdinv[1] * Uxi[0] + Xdinv[3] * Ueta[0];
+    T dv_dx = Xdinv[0] * Uxi[1] + Xdinv[2] * Ueta[1];
 
-    et[0] = U[5] - 0.5 * (du_dy - dv_dx);
+    et[0] = U[5] + 0.5 * (du_dy - dv_dx);
 }
 
 template <typename T, int vars_per_node, class Basis>
 __DEVICE__ static void computeDrillStrainTranspose(const T pt[2], const bool bndry[4],
-                                                   const T Xdinv[4], const T et_bar[1],
-                                                   T vars_bar[]) {
+                                                   const T Xdinv[4], const T et_bar[1], T res[]) {
     // Adjoint variables
     T U_bar[vars_per_node] = {0.0};
     T Uxi_bar[3] = {0.0, 0.0, 0.0};
@@ -188,20 +205,18 @@ __DEVICE__ static void computeDrillStrainTranspose(const T pt[2], const bool bnd
     // et = U[5] - 0.5*(du_dy - dv_dx)
     U_bar[5] += scale;
 
-    const T d_du_dy = -0.5 * scale;
-    const T d_dv_dx = +0.5 * scale;
+    const T d_du_dy = 0.5 * scale;
+    const T d_dv_dx = -0.5 * scale;
 
-    // du_dy = Xdinv[0]*Uxi[0] + Xdinv[2]*Ueta[0]
-    Uxi_bar[0] += Xdinv[0] * d_du_dy;
-    Ueta_bar[0] += Xdinv[2] * d_du_dy;
+    // du_dy = Xdinv[1]*Uxi[0] + Xdinv[3]*Ueta[0]
+    Uxi_bar[0] += Xdinv[1] * d_du_dy;
+    Ueta_bar[0] += Xdinv[3] * d_du_dy;
 
-    // dv_dx = Xdinv[1]*Uxi[1] + Xdinv[3]*Ueta[1]
-    Uxi_bar[1] += Xdinv[1] * d_dv_dx;
-    Ueta_bar[1] += Xdinv[3] * d_dv_dx;
+    // dv_dx = Xdinv[0]*Uxi[1] + Xdinv[2]*Ueta[1]
+    Uxi_bar[1] += Xdinv[0] * d_dv_dx;
+    Ueta_bar[1] += Xdinv[2] * d_dv_dx;
 
     // Push adjoints back through basis operators
-    Basis::template interpFieldsTranspose<vars_per_node, vars_per_node>(pt, U_bar, vars_bar);
-
-    Basis::template interpFieldsGradTranspose<vars_per_node, 3>(pt, bndry, Uxi_bar, Ueta_bar,
-                                                                vars_bar);
+    Basis::template interpFieldsTranspose<vars_per_node, vars_per_node>(pt, bndry, U_bar, res);
+    Basis::template interpFieldsGradTranspose<vars_per_node, 3>(pt, bndry, Uxi_bar, Ueta_bar, res);
 }

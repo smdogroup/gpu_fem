@@ -9,6 +9,7 @@ class LagrangeQuadBasis {
     using Quadrature = Quadrature_;
     static constexpr int32_t order = _order;
     static constexpr int32_t nx = order + 1;
+    static constexpr bool ISOGEOM = false;
 
     // Required for loading solution data
     static constexpr int32_t num_nodes = nx * nx;
@@ -56,9 +57,6 @@ class LagrangeQuadBasis {
         Quadrature::getQuadraturePoint(i, pt);
         return pt[0];
     }
-
-    pt[0] = -1.0 + (2.0 / (nx - 1)) * (n % nx);
-    pt[1] = -1.0 + (2.0 / (nx - 1)) * (n / nx);
 
     // generic evalBasis call for interps in multigrid and FEA
     __HOST_DEVICE__ static void getBasis(const T pt[2], T N[num_nodes]) {

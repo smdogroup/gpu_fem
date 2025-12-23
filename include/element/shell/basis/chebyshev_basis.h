@@ -106,6 +106,7 @@ class ChebyshevQuadBasis {
     using Quadrature = Quadrature_;
     using Basis1D = ChebyShev1D<T, _order>;
     static constexpr int32_t order = _order;
+    static constexpr bool ISOGEOM = false;
 
     // Required for loading solution data
     static constexpr int32_t nx = order + 1;  // num nodes in a single direction
