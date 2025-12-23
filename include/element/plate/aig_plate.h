@@ -1,13 +1,20 @@
 #pragma once
 
 #include "../../assembler.h"
+#include "../shell/a2d/a2dsymmatrotateframe.h"
+#include "../shell/strains/basic_utils.h"
+#include "../shell/strains/strain_types.h"
 #include "_plate.cuh"
 #include "a2dcore.h"
 #include "cuda_utils.h"
+#include "physics/_plate_utils.h"
 
 // fully integrated here means we don't reduced integrated or MITC (mixed integrated)
 // the transverse shear or membrane strains (in order to have better multigrid performance)
 // only certain bases (chebyshev) can use it without shear locking..
+
+// NOTE : the way it is written, it should only be solving plate bending problems (not membrane)
+// because asymptotic transformation in plane not done correctly yet..
 
 template <typename T, class Basis_, class Phys_, template <typename> class Vec_,
           template <typename> class Mat_>
@@ -19,7 +26,7 @@ class AsymptoticIsogeometricPlateAssembler
     using Geo = typename Basis::Geo;
     using Phys = Phys_;
     using Data = typename Phys_::Data;
-    using Assembler = AsymptoticIsogeometricPlateAssembler<T, Director_, Basis_, Phys_, Vec_, Mat_>;
+    using Assembler = AsymptoticIsogeometricPlateAssembler<T, Basis_, Phys_, Vec_, Mat_>;
     using Base = ElementAssembler<Assembler, T, Basis_, Phys_, Vec_, Mat_>;
     using Quadrature = typename Basis::Quadrature;
     using FADType = typename A2D::ADScalar<T, 1>;
@@ -66,9 +73,10 @@ class AsymptoticIsogeometricPlateAssembler
         int nblocks = (nelem_cols + elem_cols_per_block - 1) / elem_cols_per_block;
         dim3 grid(nblocks);
 
-        k_add_jacobian_fast<T, elems_per_block, Assembler, Data, Vec_, Mat><<<grid, block>>>(
-            this->num_vars_nodes, this->num_elements, cols_per_elem, this->elem_components,
-            this->geo_conn, this->vars_conn, this->xpts, this->vars, this->compData, mat);
+        k_add_aigplate_jacobian_fast<T, elems_per_block, Assembler, Data, Vec_, Mat>
+            <<<grid, block>>>(this->num_vars_nodes, this->num_elements, cols_per_elem,
+                              this->elem_components, this->geo_conn, this->vars_conn, this->xpts,
+                              this->vars, this->compData, mat);
 
         CHECK_CUDA(cudaDeviceSynchronize());
         // #endif
@@ -84,7 +92,7 @@ class AsymptoticIsogeometricPlateAssembler
         int nblocks = (this->num_elements + elems_per_block - 1) / elems_per_block;
         dim3 grid(nblocks);
 
-        k_add_residual_fast<T, elems_per_block, Assembler, Data, Vec_><<<grid, block>>>(
+        k_add_aigplate_residual_fast<T, elems_per_block, Assembler, Data, Vec_><<<grid, block>>>(
             this->num_vars_nodes, this->num_elements, this->elem_components, this->geo_conn,
             this->vars_conn, this->xpts, this->vars, this->compData, res);
 
@@ -92,43 +100,161 @@ class AsymptoticIsogeometricPlateAssembler
         // #endif
     }
 
+    void asymptotic_rhs_transform(Vec_<T> fext) {
+        // host side function to rescale right hand side for asymptotic correctness
+
+        dim3 block(32);
+        int nblocks = (this->num_nodes + 31) / 32;
+        dim3 grid(nblocks);
+
+        k_asymptotic_rhs_transform<T, Assembler, Data, Vec><<<grid, block>>>(
+            this->num_vars_nodes, this->num_elements, this->elem_components, this->compData, fext);
+    }
+
+    void recover_asymptotic_solution(Vec_<T> soln) {
+        // subtract first derivatives of rotations to w(x,y) for asymptotic correctness
+    }
+
+    // ==================================================================================================
+    // ==================================================================================================
+    // HELPER FUNCTIONS
+    // ==================================================================================================
+    // ==================================================================================================
+
     template <class Data>
-    __HOST_DEVICE__ static void add_element_quadpt_residual(
-        const bool active_thread, const int iquad, const T xpts[xpts_per_elem],
-        const T vars[dof_per_elem], const Data compData, T res[dof_per_elem]) {
-        if (!active_thread) return;
+    __DEVICE__ static void _asymptotic_lhs_transform(T xpts[xpts_per_elem], Data &compData) {
+        // rescale xpts by 1/thickness
+        for (int i = 0; i < xpts_per_elem; i++) {
+            xpts[i] /= compData.thick;
+        }
 
-        // TODO
-
-    }  // end of method add_element_quadpt_residual
+        // then replace thickness with 1 (so that weak form is thickness independent)
+        compData.thick = 1.0;
+    }
 
     template <class Data>
-    __HOST_DEVICE__ static void add_element_quadpt_jacobian_col(
-        const bool active_thread, const int iquad, const int ivar, const T xpts[xpts_per_elem],
-        const T vars[dof_per_elem], const Data compData, T res[dof_per_elem],
-        T matCol[dof_per_elem]) {
-        if (!active_thread) return;
+    __DEVICE__ static void _asymptotic_rhs_transform(T fext_node[vars_per_node], Data &compData) {
+        T G = compData.E / 2.0 / (1 + compData.nu);
+        fext_node[2] *= compData.thick;  // / G;  // just w force is rescaled by thickness
+        // don't think I need to rescale by mu.. (only thickness needs to be eliminated)
+        // see p. 3 of "Asymptotically accurate and locking-free finite element implementation
+        // of first order shear deformation theory for plates"
 
-        // TODO
-    }  // add_element_quadpt_jacobian_col
+        // for membrane part: rescale by thicknesses too
+        fext_node[0] *= compData.thick;
+        fext_node[1] *= compData.thick;
+    }
 
-    // template <class Data, STRAIN strain = ALL>
-    // __DEVICE__ static void add_element_quadpt_residual_fast(  // __noinline__
-    //     const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
-    //     const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
-    //     const T vars[dof_per_elem], T res[dof_per_elem]) {}
+    template <class Data>
+    __DEVICE__ static void _asymptotic_soln_update(T fext_node[vars_per_node], Data &compData) {
+        T G = compData.E / 2.0 / (1 + compData.nu);
+        fext_node[2] *= compData.thick;  // / G;  // just w force is rescaled by thickness
+        // don't think I need to rescale by mu.. (only thickness needs to be eliminated)
+        // see p. 3 of "Asymptotically accurate and locking-free finite element implementation
+        // of first order shear deformation theory for plates"
 
-    // template <class Data, STRAIN strain = ALL>
-    // __DEVICE__ static void add_element_quadpt_jacobian_col_fast(  // __noinline__
-    //     const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
-    //     const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
-    //     const T vars[dof_per_elem], const T pvars[dof_per_elem], T matCol[dof_per_elem]) {}
+        // for membrane part: rescale by thicknesses too
+        fext_node[0] *= compData.thick;
+        fext_node[1] *= compData.thick;
+    }
+
+    template <class Data, STRAIN strain = ALL>
+    __DEVICE__ static void add_element_quadpt_residual_fast(  // __noinline__
+        const int iquad, const bool bndry[4], const T xpts[xpts_per_elem], const Data &compData,
+        const T vars[dof_per_elem], T res[dof_per_elem]) {
+        // 0) startup of this element residual
+        // -----------------------------------
+        T pt[2];
+        T weight = Quadrature::getQuadraturePoint(iquad, pt);
+        T Xdinv[4];
+        T detJ = getTransformMatrix<T, Basis>(pt, bndry, xpts, Xdinv);
+        T scale = detJ * weight;
+
+        T XdinvT[9] = {0};  // 3x3 version of rotation matrix for tying strains
+        XdinvT[0] = Xdinv[0], XdinvT[3] = Xdinv[2];
+        XdinvT[1] = Xdinv[1], XdinvT[4] = Xdinv[3];
+        XdinvT[8] = 1.0;
+
+        // data to store in forwards + backwards section
+        static constexpr bool is_nonlinear = Phys::is_nonlinear;
+
+        if constexpr (BENDING) {
+            A2D::ADObj<A2D::Vec<T, 3>> ek;
+
+            computeBendingStrain<T, vars_per_node, Basis>(pt, bndry, Xdinv, vars, ek.value());
+            Phys::computeBendingStress(scale, compData, ek.value(), ek.bvalue());
+            computeBendingStrainTranspose<T, vars_per_node, Basis>(pt, bndry, Xdinv, ek.bvalue(),
+                                                                   res);
+        }
+
+        if constexpr (TYING) {
+            A2D::ADObj<A2D::SymMat<T, 3>> e0ty;
+
+            A2D::SymMat<T, 3> gty;
+            computeFullTyingStrain<T, vars_per_node, Basis>(pt, bndry, xpts, vars, gty.get_data());
+            A2D::SymMatRotateFrame<T, 3>(XdinvT, gty, e0ty.value());
+            computeEngineerTyingStrains<T>(e0ty.value());
+
+            Phys::computeTyingStress(scale, compData, e0ty.value(), e0ty.bvalue());
+
+            computeEngineerTyingStrains<T>(e0ty.bvalue());
+            A2D::SymMat<T, 3> gty_bar;
+            A2D::SymMat3x3RotateFrameReverse<T>(XdinvT, e0ty.bvalue().get_data(),
+                                                gty_bar.get_data());
+            computeFullTyingStrainSens<T, vars_per_node, Basis>(pt, bndry, xpts, gty_bar.get_data(),
+                                                                res);
+        }
+
+        if constexpr (DRILL) {
+            A2D::ADObj<A2D::Vec<T, 1>> et;
+            computeDrillStrain<T, vars_per_node, Basis>(pt, bndry, Xdinv, vars,
+                                                        et.value().get_data());
+            Phys::computeDrillStress(scale, compData, et.value().get_data(),
+                                     et.bvalue().get_data());
+            computeDrillStrainTranspose<T, vars_per_node, Basis>(pt, bndry, Xdinv,
+                                                                 et.bvalue().get_data(), res);
+        }
+    }
+
+    template <class Data, STRAIN strain = ALL>
+    __DEVICE__ static void add_element_quadpt_jacobian_col_fast(  // __noinline__
+        const int iquad, const bool bndry[4], const T xpts[xpts_per_elem], const Data &compData,
+        const T vars[dof_per_elem], const T pvars[dof_per_elem], T matCol[dof_per_elem]) {
+        static constexpr bool is_nonlinear = Phys::is_nonlinear;
+        if constexpr (is_nonlinear) {
+            if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0) {
+                printf(
+                    "WARNING: doesn't do nonlinear physics with AIG plate element yet.. tying "
+                    "strains not "
+                    "fully nonlinear. Kmat reverted to linear.\n");
+            }
+            return;
+        }
+
+        // since it's linear just call residual array on pvars input
+        add_element_quadpt_residual_fast<Data, strain>(iquad, bndry, xpts, compData, pvars, matCol);
+    }
+
+    // ------------------------------------------------------------
+    // inactive methods from main assembler
+    // ------------------------------------------------------------
 
     template <class Data>
     __HOST_DEVICE__ static void add_element_quadpt_energy(const bool active_thread, const int iquad,
                                                           const T xpts[xpts_per_elem],
                                                           const T vars[dof_per_elem],
                                                           const Data compData, T &Uelem) {}
+
+    template <class Data>
+    __HOST_DEVICE__ static void add_element_quadpt_residual(
+        const bool active_thread, const int iquad, const T xpts[xpts_per_elem],
+        const T vars[dof_per_elem], const Data compData, T res[dof_per_elem]) {}
+
+    template <class Data>
+    __HOST_DEVICE__ static void add_element_quadpt_jacobian_col(
+        const bool active_thread, const int iquad, const int ivar, const T xpts[xpts_per_elem],
+        const T vars[dof_per_elem], const bool bndry[4], const Data compData, T res[dof_per_elem],
+        T matCol[dof_per_elem]) {}
 
     template <class Data>
     __HOST_DEVICE__ static void add_element_quadpt_mass_residual(

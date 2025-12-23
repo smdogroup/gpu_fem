@@ -8,6 +8,9 @@
 // 1D bspline basis first
 // =====================================
 
+// whereas lagrange-lobatto bases have xi, eta in [-1, 1]
+// the b-spline basis has xi, eta in [0, 1]
+
 // supporting class that helps with compile-time specifications
 template <typename T, int order>
 class Bspline1D;  // forward declaration for specialization
@@ -18,7 +21,8 @@ class Bspline1D<T, 2> {
     static constexpr int num_nodes = 3;
 
     __HOST_DEVICE__ __forceinline__ static T getXi(int i) {
-        return (i == 0) ? -1.0 : (i == 1 ? 0.0 : 1.0);
+        // xi here are from 0 to 1 not [-1, 1] like in lagrange-lobatto
+        return (i == 0) ? 0.0 : (i == 1 ? 0.5 : 1.0);
     }
 
     // Quadratic bspline basis
@@ -92,15 +96,13 @@ class BsplineQuadBasis {
         eval_bspline_basis(pt, bndry, N);
     }
 
-    __HOST_DEVICE__ static void getNodePoint(const int n, T pt[]) {
-        pt[0] = Basis1D::getXi(n % nx);
-        pt[1] = Basis1D::getXi(n / nx);
-    }
-
     __HOST_DEVICE__ static void eval_bspline_basis(const T pt[2], const bool bndry[4], T N[]) {
+        // convert from pt[2] in [-1,1]^2 to (xi,eta) in [0,1] for bsplines
+        T _xi = 0.5 * (pt[0] + 1), _eta = 0.5 * (pt[1] + 1);
+
         T N1[nx], N2[nx];
-        Basis1D::evalBasis(pt[0], bndry, N1);
-        Basis1D::evalBasis(pt[1], &bndry[2], N2);
+        Basis1D::evalBasis(_xi, bndry, N1);
+        Basis1D::evalBasis(_eta, &bndry[2], N2);
 
 #pragma unroll
         for (int i = 0; i < nx * nx; i++) {
@@ -111,10 +113,13 @@ class BsplineQuadBasis {
 
     __HOST_DEVICE__ static void eval_bspline_basis_grad(const T pt[2], const bool bndry[4], T Nxi[],
                                                         T Neta[]) {
+        // convert from pt[2] in [-1,1]^2 to (xi,eta) in [0,1] for bsplines
+        T _xi = 0.5 * (pt[0] + 1), _eta = 0.5 * (pt[1] + 1);
+
         T N1[nx], dN1[nx];
         T N2[nx], dN2[nx];
-        Basis1D::evalBasis(pt[0], bndry, N1), Basis1D::evalBasis(pt[1], &bndry[2], N2);
-        Basis1D::evalBasisGrad(pt[0], bndry, dN1), Basis1D::evalBasisGrad(pt[1], &bndry[2], dN2);
+        Basis1D::evalBasis(_xi, bndry, N1), Basis1D::evalBasis(_eta, &bndry[2], N2);
+        Basis1D::evalBasisGrad(_xi, bndry, dN1), Basis1D::evalBasisGrad(_eta, &bndry[2], dN2);
 
 #pragma unroll
         for (int i = 0; i < nx * nx; i++) {
@@ -189,4 +194,32 @@ class BsplineQuadBasis {
             }
         }
     }  // end of interpFieldsGradTranspose method
-};     // end of class BsplineQuadBasis
+
+    // ========================================================
+    // DUMMY methods to allow import with elem study and shells
+    // even though won't call these particular ones with Bspline
+    // difference is need bndry info (see above)
+    // =========================================================
+
+    __HOST_DEVICE__ static void getNodePoint(const int n, T pt[]) {
+        pt[0] = Basis1D::getXi(n % nx);
+        pt[1] = Basis1D::getXi(n / nx);
+    }
+
+    __HOST_DEVICE__ static void getBasis(const T pt[2], T N[num_nodes]) {}
+
+    template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFields(const T pt[2], const T values[], T field[]) {}
+
+    template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFieldsGrad(const T pt[2], const T values[], T dxi[],
+                                                 T deta[]) {}
+
+    template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFieldsTranspose(const T pt[2], const T field_bar[],
+                                                      T values_bar[]) {}
+
+    template <int vars_per_node, int num_fields>
+    __HOST_DEVICE__ static void interpFieldsGradTranspose(const T pt[2], const T dxi_bar[],
+                                                          const T deta_bar[], T values_bar[]) {}
+};  // end of class BsplineQuadBasis

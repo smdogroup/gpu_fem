@@ -11,33 +11,18 @@
 #include "solvers/nonlinear_static/continuation.h"
 
 // shell imports
-#include "assembler.h"
-#include "element/shell/director/linear_rotation.h"
 #include "element/shell/physics/isotropic_shell.h"
 
 // aig plate
-// in devel check first..
-// #include "element/plate/basis/bspline_basis.h"
-// #include "element/plate/aig_plate.h"
-// #include "multigrid/prolongation/structured_iga.h"
-
-// lagrange MITC element
-#include "element/shell/basis/lagrange_basis.h"
-#include "element/shell/mitc_shell.h"
-
-// chebyshev element
-#include "element/shell/basis/chebyshev_basis.h"
-#include "element/shell/fint_shell.h"
-
-// hellinger reissner element
-#include "element/shell/hr_shell.h"
+#include "element/plate/basis/bspline_basis.h"
+#include "element/plate/aig_plate.h"
 
 // local multigrid imports
 #include "multigrid/grid.h"
 #include "multigrid/utils/fea.h"
 #include "multigrid/smoothers/cheb4_poly.h"
 #include "multigrid/smoothers/mc_smooth1.h"
-#include "multigrid/prolongation/structured.h"
+#include "multigrid/prolongation/structured_iga.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>
 #include <chrono>
@@ -89,7 +74,7 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
     return my_max;
 }
 
-template <typename T, class Prolongation, class Assembler>
+template <typename T, class Assembler>
 void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int nsmooth, int ninnercyc, std::string cycle_type, T omega, T pressure = 5.0e7) {
     // geometric multigrid method here..
     // need to make a number of grids..
@@ -97,6 +82,7 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int n
     using Physics = typename Assembler::Phys;
     // using Smoother = MulticolorGSSmoother_V1<Assembler>;
     using Smoother = ChebyshevPolynomialSmoother<Assembler>;
+    using Prolongation = StructuredIGAProlongation<Assembler>;
     
     // sometimes line search helps, sometimes not
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
@@ -623,10 +609,10 @@ void solve_direct(std::string elem_type, int nxe, double SR, T pressure = 5.0e7)
     assembler.free();
 }
 
-template <typename T, class Prolongation, class Assembler>
+template <typename T, class Assembler>
 void gatekeeper_method(std::string elem_type, bool is_multigrid, int nxe, double SR, int ORDER, int nsmooth, int ninnercyc, std::string cycle_type, T omega, T load_mag = 5.0e7) {
     if (is_multigrid) {
-        multigrid_solve<T, Prolongation, Assembler>(elem_type, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, load_mag);
+        multigrid_solve<T, Assembler>(elem_type, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, load_mag);
     } else {
         solve_direct<T, Assembler>(elem_type, nxe, SR, load_mag);
     }
@@ -646,9 +632,6 @@ int main(int argc, char **argv) {
     int ninnercyc = 1;
     int ORDER = 4;
     std::string cycle_type = "K"; // "V", "F", "W", "K"
-    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9', 'HR4'
-    // std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
-    std::string elem_type = "CFI9"; 
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -694,13 +677,6 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --level\n";
                 return 1;
             }
-        } else if (strcmp(arg, "--elem") == 0) {
-            if (i + 1 < argc) {
-                elem_type = argv[++i];
-            } else {
-                std::cerr << "Missing value for --elem\n";
-                return 1;
-            }
         } else if (strcmp(arg, "--nsmooth") == 0) {
             if (i + 1 < argc) {
                 nsmooth = std::atoi(argv[++i]);
@@ -731,86 +707,19 @@ int main(int argc, char **argv) {
 
     // type specifications here
     using T = double;   
-    using Director = LinearizedRotation<T>;
     constexpr bool has_ref_axis = false;
-    constexpr bool is_nonlinear = true; // this is a nonlinear GMG case
+    constexpr bool is_nonlinear = false; // this is a linear GMG case
     using Data = ShellIsotropicData<T, has_ref_axis>;
 
-    printf("plate mesh with geomNL %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
-    if (elem_type == "MITC4") {
-        using Physics = IsotropicShell<T, Data, is_nonlinear>;
-        using Quad = QuadLinearQuadrature<T>;
-        using Basis = LagrangeQuadBasis<T, Quad, 1>;
-        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    // MITC higher order don't really work? but LFI16 would..
-    } else if (elem_type == "MITC9") {
-        using Physics = IsotropicShell<T, Data, is_nonlinear>;
-        using Quad = QuadQuadraticQuadrature<T>;
-        using Basis = LagrangeQuadBasis<T, Quad, 2>;
-        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    } else if (elem_type == "MITC16") {
-        using Physics = IsotropicShell<T, Data, is_nonlinear>;
-        using Quad = QuadCubicQuadrature<T>;
-        using Basis = LagrangeQuadBasis<T, Quad, 3>;
-        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    } else if (elem_type == "CFI4") {
-        using Physics = IsotropicShell<T, Data, is_nonlinear>;
-        using Quad = QuadLinearQuadrature<T>;
-        using Basis = ChebyshevQuadBasis<T, Quad, 1>;
-        using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    } else if (elem_type == "CFI9") {
-        using Physics = IsotropicShell<T, Data, is_nonlinear>;
-        // probably do need quadratic, but need to fix assembly issues with 9 quadpts
-        using Quad = QuadQuadraticQuadrature<T>;
-        using Basis = ChebyshevQuadBasis<T, Quad, 2>;
-        using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    } else if (elem_type == "CFI16") {
-        using Physics = IsotropicShell<T, Data, is_nonlinear>;
-        // probably do need quadratic, but need to fix assembly issues with 9 quadpts
-        using Quad = QuadCubicQuadrature<T>;
-        using Basis = ChebyshevQuadBasis<T, Quad, 3>;
-        using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    } else if (elem_type == "LFI16") {
-        using Physics = IsotropicShell<T, Data, is_nonlinear>;
-        // probably do need quadratic, but need to fix assembly issues with 9 quadpts
-        using Quad = QuadCubicQuadrature<T>;
-        using Basis = LagrangeQuadBasis<T, Quad, 3>;
-        using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    } else if (elem_type == "HRA4") {
-        // hellinger-reissner element
-        const bool HR = true; // whether is HR element (then physics has 5 extra DOF at start for strain-gap)
-        using Physics = IsotropicShell<T, Data, is_nonlinear, HR>;
-        using Quad = QuadLinearQuadrature<T>;
-        using Basis = LagrangeQuadBasis<T, Quad, 1>;
-        using Assembler = HellingerReissnerShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    // } else if (elem_type == "AIG9") {
-    //     // runs like AIG9 when I finish implementing
-    //     using Physics = IsotropicShell<T, Data, is_nonlinear>;
-    //     using Quad = QuadQuadraticQuadrature<T>;
-    //     using Basis = ChebyshevQuadBasis<T, Quad, 2>;
-    //     using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-    //     using Prolongation = StructuredProlongation<Assembler, PLATE>;
-    //     SR = 5.0;
-    //     gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
-    } else {
-        printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
-    }
+    printf("plate mesh with geomNL AIG9 elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
+    
+    // runs like AIG9 when I finish implementing
+    using Physics = IsotropicShell<T, Data, is_nonlinear>;
+    using Quad = QuadQuadraticQuadrature<T>;
+    using Basis = BsplineQuadBasis<T, Quad, 2>;
+    using Assembler = AsymptoticIsogeometricPlateAssembler<T, Basis, Physics, VecType, BsrMat>;
+    SR = 5.0;
+    gatekeeper_method<T, Assembler>("AIG9", is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
 
     return 0;
 
