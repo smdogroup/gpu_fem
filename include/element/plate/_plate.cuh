@@ -18,7 +18,8 @@ __GLOBAL__ static void k_add_aigplate_jacobian_fast(int32_t vars_num_nodes, int3
     int local_elem_col = threadIdx.y + cols_per_elem * threadIdx.z;
     int cols_per_block = elems_per_block * cols_per_elem;
     int global_elem_col = local_elem_col + blockIdx.x * cols_per_block;
-    const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
+    const int vars_per_node = Phys::vars_per_node;
+    const int vars_per_elem = Basis::num_nodes * vars_per_node;
     int n_elem_cols = num_elements * vars_per_elem;
     bool active_thread = global_elem_col < n_elem_cols;
     if (!active_thread) return;
@@ -85,12 +86,25 @@ __GLOBAL__ static void k_add_aigplate_jacobian_fast(int32_t vars_num_nodes, int3
     memset(p_vars, 0.0, sizeof(T) * vars_per_elem);
     p_vars[ideriv] = 1.0;
 
+    // get original thickness 
+    T orig_thick = block_data[local_elem].thick;
+
     // asymptotic transformation for stiffness matrix
     if (tid_xy == 0) {
         // rescale xyz coords by thickness and replace thickness with 1.0
         ElemGroup::template _asymptotic_lhs_transform<Data>(block_xpts[local_elem], block_data[local_elem]);
+
+        // rescale rotations by original thickness
+        asymptoticRotationTransform<T, vars_per_node, Basis>(orig_thick, block_vars[local_elem]);
     }
     __syncthreads();
+
+    // if (blockIdx.x == 0) {
+    //     printf("new thick = %.4e from orig thick %.4e\n", block_data[local_elem].thick, orig_thick);
+    // }
+
+    // rescale rotations by original thickness
+    asymptoticRotationTransform<T, vars_per_node, Basis>(orig_thick, p_vars);
 
     // compute drill strains
     ElemGroup::template add_element_quadpt_jacobian_col_fast<Data, DRILL>(
@@ -109,6 +123,9 @@ __GLOBAL__ static void k_add_aigplate_jacobian_fast(int32_t vars_num_nodes, int3
         iquad, block_bndry[local_elem], block_xpts[local_elem], block_data[local_elem],
         block_vars[local_elem], p_vars, local_mat_col);
     __syncthreads();
+
+    // rescale rotations by original thickness
+    asymptoticRotationTransform<T, vars_per_node, Basis>(orig_thick, local_mat_col);
 
 
     if constexpr (Quadrature::num_quad_pts == 4) {
@@ -161,6 +178,7 @@ __GLOBAL__ static void k_add_aigplate_residual_fast(int32_t vars_num_nodes, int3
     int tid = blockDim.x * threadIdx.y + threadIdx.x;
     // int nthreads = blockDim.x * blockDim.y;
 
+    const int vars_per_node = Phys::vars_per_node;
     const int nxpts_per_elem = Geo::num_nodes * Geo::spatial_dim;
     const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
     // const int vars_per_elem2 = vars_per_elem * vars_per_elem;
@@ -204,6 +222,8 @@ __GLOBAL__ static void k_add_aigplate_residual_fast(int32_t vars_num_nodes, int3
     }
     __syncthreads();
 
+    T orig_thick = block_data[local_elem].thick;
+
     int iquad = threadIdx.x;
 
     T local_res[vars_per_elem];
@@ -213,8 +233,13 @@ __GLOBAL__ static void k_add_aigplate_residual_fast(int32_t vars_num_nodes, int3
     if (tid == 0) {
         // rescale xyz coords by thickness and replace thickness with 1.0
         ElemGroup::template _asymptotic_lhs_transform<Data>(block_xpts[local_elem], block_data[local_elem]);
+
+        // rescale rotations by original thickness
+        asymptoticRotationTransform<T, vars_per_node, Basis>(orig_thick, block_vars[local_elem]);
     }
     __syncthreads();
+
+    
 
     // compute drill strains
     ElemGroup::template add_element_quadpt_residual_fast<Data, DRILL>(
@@ -233,6 +258,9 @@ __GLOBAL__ static void k_add_aigplate_residual_fast(int32_t vars_num_nodes, int3
     iquad, block_bndry[local_elem], block_xpts[local_elem], block_data[local_elem],
     block_vars[local_elem], local_res);
     __syncthreads();
+
+    // rescale rotations by original thickness
+    asymptoticRotationTransform<T, vars_per_node, Basis>(orig_thick, local_res);
 
     if constexpr (Quadrature::num_quad_pts == 4) {
         /* warp shuffle here.. */

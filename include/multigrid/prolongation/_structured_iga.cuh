@@ -36,11 +36,15 @@ __global__ static void k_plate_iga_prolongate(const int order, const int vars_pe
         // adjust for boundary conditions
         P_y += ((iy_f / 2) == 0) * ((local_coarse / 2 == 0) ? 0.25 : -0.25);
         P_y += ((iy_f / 2) == (nx_c - 2)) * ((local_coarse / 2 == 0) ? -0.25 : 0.25);
-        
+
         // compute full prolongation coefficient and perform on permuted vecs
         int coarse_node = nx_c * iy_c + ix_c;
         int perm_coarse_node = d_coarse_iperm[coarse_node];
         T scale = P_x * P_y; // kronecker product
+
+        // printf("P_x = %.4e from ix_c %d to ix_f %d\n", P_x, ix_c, ix_f);
+        // printf("P_y = %.4e from iy_c %d to iy_f %d\n", P_y, iy_c, iy_f);
+        // printf("P_scale = %.4e for (f_node, c_node)=(%d,%d)\n", scale, fine_node, coarse_node);
 
         // now loop over each DOF
         for (int idof = 0; idof < vars_per_node; idof++) {

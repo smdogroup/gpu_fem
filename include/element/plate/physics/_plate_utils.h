@@ -30,6 +30,21 @@ __HOST_DEVICE__ T getTransformMatrix(const T pt[2], const bool bndry[4], const T
     return detJ;
 }
 
+// rotation by thickness transformation in asymptotic..
+// -----------------------------------------------------
+template <typename T, int vars_per_node, class Basis>
+__HOST_DEVICE__ void asymptoticRotationTransform(const T orig_thick, T vars[]) {
+    int num_nodes = Basis::num_nodes;
+    for (int inode = 0; inode < num_nodes; inode++) {
+        vars[vars_per_node * inode + 3] *= orig_thick;
+        vars[vars_per_node * inode + 4] *= orig_thick;
+        vars[vars_per_node * inode + 5] *= orig_thick;
+        // vars[vars_per_node * inode + 3] /= orig_thick;
+        // vars[vars_per_node * inode + 4] /= orig_thick;
+        // vars[vars_per_node * inode + 5] /= orig_thick;
+    }
+}
+
 // compute bending strains
 // -----------------------------
 template <typename T, int vars_per_node, class Basis>

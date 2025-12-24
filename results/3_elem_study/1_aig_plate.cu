@@ -85,8 +85,8 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int n
     using Prolongation = StructuredIGAProlongation<Assembler>;
     
     // sometimes line search helps, sometimes not
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
-    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
+    // using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, NONE>;
     
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
@@ -126,13 +126,21 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int n
 
     // T omegaLS_min = 0.01, omegaLS_max = 4.0;
     T omegaLS_min, omegaLS_max;
-    if (Basis::order > 1 || SR >= 1000.0) {
-        omegaLS_min = 0.01, omegaLS_max = 4.0;
-    } else {
-        omegaLS_min = 0.1, omegaLS_max = 2.0;
-    }
+    // if (Basis::order > 1 || SR >= 1000.0) {
+    //     omegaLS_min = 0.01, omegaLS_max = 4.0;
+    // } else {
+    //     omegaLS_min = 0.1, omegaLS_max = 2.0;
+    // }
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
-    // T omegaLS_min = 0.5, omegaLS_max = 2.0;
+    // omegaLS_min = 0.5, omegaLS_max = 2.0;
+
+    
+    if (Basis::ISOGEOM) {
+        // needs some improvement in defect / smoothed prolongation, otherwise can't do line searches rn..
+        // equiv to basically not doing the line search
+        omegaLS_min = 1.0, omegaLS_max = 1.0;
+    }
+    
 
     if (Basis::order == 1) {
         ORDER = 8;
@@ -158,10 +166,10 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int n
         nxe_min = c_nxe;
     }
 
-    if (cycle_type != "K") {
-        printf("only does Kcycle mg in this example rn (just haven't adapted generally)\n");
-        return;
-    }
+    // if (cycle_type != "K") {
+    //     printf("only does Kcycle mg in this example rn (just haven't adapted generally)\n");
+    //     return;
+    // }
 
     // make each grid
     for (int c_nxe = nxe; c_nxe >= nxe_min; c_nxe /= 2) {
@@ -177,8 +185,16 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int n
         int m = 3, n = 1;
         bool uniform_load = false;
         // bool uniform_load = true; // makes it const load not sine load anymore
-        T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, c_nxe, c_nye, Lx, Ly,nodal_loads, uniform_load, m, n);
+        // T *my_loads = getPlateMeshConvLoads<T, Assembler>(assembler, c_nxe, c_nye, Lx, Ly,nodal_loads, uniform_load, m, n);
         printf("making grid with nxe %d\n", c_nxe);
+
+        int ndof = assembler.get_num_vars();
+        int num_nodes = ndof / 6;
+        T *my_loads = new T[ndof]; // TODO : change back to plate mesh conv loads later..
+        memset(my_loads, 0.0, ndof * sizeof(T));
+        for (int inode = 0; inode < num_nodes; inode++) {
+            my_loads[6 * inode + 2] = pressure;
+        }
 
         auto &bsr_data = assembler.getBsrData();
         int num_colors, *_color_rowp;
@@ -242,7 +258,7 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int n
     auto end0 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> startup_time = end0 - start0;
 
-    T init_resid_nrm = is_kcycle ? kmg->grids[0].getResidNorm() : mg->grids[0].getResidNorm();
+    // T init_resid_nrm = is_kcycle ? kmg->grids[0].getResidNorm() : mg->grids[0].getResidNorm();
 
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
     // bool print = true;
@@ -282,20 +298,61 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int n
     }
 
     std::vector<GRID>& grids = kmg->grids;
+    // std::vector<GRID> &grids = mg->grids;
 
     // fine grid states
-    auto& fine_assembler = grids[0].assembler;
-    auto fine_soln = fine_assembler.createVarsVec();
-    auto fine_res = fine_assembler.createVarsVec();
-    auto fine_rhs = fine_assembler.createVarsVec();
-    auto fine_loads = fine_assembler.createVarsVec();
-    auto fine_vars = fine_assembler.createVarsVec();
-    auto& fine_kmat = grids[0].Kmat;
+    auto& fine_assembler_prev = grids[0].assembler;
+    auto fine_soln = fine_assembler_prev.createVarsVec();
+    auto fine_res = fine_assembler_prev.createVarsVec();
+    auto fine_rhs = fine_assembler_prev.createVarsVec();
+    auto fine_loads = fine_assembler_prev.createVarsVec();
+    auto fine_vars = fine_assembler_prev.createVarsVec();
+    auto& fine_kmat_prev = grids[0].Kmat;
 
     // get fine loads from fine grid init rhs
     bool perm_out = true;
     grids[0].getDefect(fine_loads, perm_out);
-    fine_assembler.apply_bcs(fine_loads);
+    fine_assembler_prev.apply_bcs(fine_loads);
+
+    // debug prolongation first
+    // -------------------------
+
+    // // also make a fine direct solver (for debug), full LU pattern
+    // // make the assembler
+    // double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+    // int nxe_per_comp = nxe, nye_per_comp = nxe; // for now (should have 25 grids)
+    // auto fine_assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+    // printf("making fine grid direct solver with nxe %d\n", nxe);
+
+    // auto &fine_bsr_data = fine_assembler.getBsrData();
+    // // make the grid
+    // fine_bsr_data.AMD_reordering();
+    // fine_bsr_data.compute_full_LU_pattern(10.0, false);
+    // fine_assembler.moveBsrDataToDevice();
+    // // auto loads = fine_assembler.createVarsVec(my_loads);
+    // // fine_assembler.apply_bcs(loads);
+    // auto fine_kmat = createBsrMat<Assembler, VecType<T>>(fine_assembler);
+    // fine_assembler.add_jacobian_fast(fine_kmat);
+    // fine_assembler.apply_bcs(fine_kmat);
+
+    // // fine grid direct solver
+    // auto fine_solver = new CoarseSolver(cublasHandle, cusparseHandle, fine_assembler, fine_kmat);
+    // fine_solver->factor_matrix();
+
+    // // ====================================
+
+    // if (cycle_type == "V") {
+    //     // debug solve
+    //     int n_cycles = 10;
+    //     mg->template debug_vcycle_solve<Assembler>(fine_solver, fine_bsr_data, 0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); //(good option)
+    // } else {
+    //     printf("rerun and change to V-cycle for now (debug)\n");
+    // }
+
+    // printf("end early: doing debug of vcycle solve for now\n");
+    // return;
+
+
 
     // 1) do a linear solve here
     // -------------------------------------------------------
@@ -326,87 +383,87 @@ void multigrid_solve(std::string elem_type, int nxe, double SR, int ORDER, int n
     // printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_mg_lin.vtk");
 
 
-    // -----------------------------------------------------------
-    // 2) actually try Newton-mg solve here (this is just V1, later versions may use FMG cycle so less extra work needs to be done on fine grids)
-    //     i.e. you can do most of hte nonlinear solves to get in basin of attraction on coarser grids first.. (then nonlinear fine grid at end only, or some FMG cycle)
+    // // -----------------------------------------------------------
+    // // 2) actually try Newton-mg solve here (this is just V1, later versions may use FMG cycle so less extra work needs to be done on fine grids)
+    // //     i.e. you can do most of hte nonlinear solves to get in basin of attraction on coarser grids first.. (then nonlinear fine grid at end only, or some FMG cycle)
 
-    // new nonlinear solver
-    // ======================
+    // // new nonlinear solver
+    // // ======================
 
-    std::chrono::duration<double> solve_time;
-    T nl_max_disp = 0.0;
+    // std::chrono::duration<double> solve_time;
+    // T nl_max_disp = 0.0;
 
-    if (false) { // temp
-    // if (Basis::order == 1) {
-        // build the inexact newton + outer continuation solver
-        using Mat = BsrMat<DeviceVec<T>>;
-        using Vec = DeviceVec<T>;
-        using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG>;
-        using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
+    // if (false) { // temp
+    // // if (Basis::order == 1) {
+    //     // build the inexact newton + outer continuation solver
+    //     using Mat = BsrMat<DeviceVec<T>>;
+    //     using Vec = DeviceVec<T>;
+    //     using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, KMG>;
+    //     using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
-        INK *inner_solver = new INK(cublasHandle, fine_assembler, fine_kmat, fine_loads, kmg);
-        // bool use_predictor = true, debug = false;
-        bool use_predictor = false, debug = false;
-        NL *nl_solver = new NL(cublasHandle, fine_assembler, inner_solver, use_predictor, debug);
+    //     INK *inner_solver = new INK(cublasHandle, fine_assembler_prev, fine_kmat_prev, fine_loads, kmg);
+    //     // bool use_predictor = true, debug = false;
+    //     bool use_predictor = false, debug = false;
+    //     NL *nl_solver = new NL(cublasHandle, fine_assembler_prev, inner_solver, use_predictor, debug);
 
-        // now try calling it
-        T lambda0 = 0.2;
-        // T lambda0 = 0.05;
-        // T inner_atol = 1e-2;
-        // T inner_atol = 1e-4;
-        // T inner_atol = 1e-4;
-        T inner_atol = 1e-6;
+    //     // now try calling it
+    //     T lambda0 = 0.2;
+    //     // T lambda0 = 0.05;
+    //     // T inner_atol = 1e-2;
+    //     // T inner_atol = 1e-4;
+    //     // T inner_atol = 1e-4;
+    //     T inner_atol = 1e-6;
 
-        CHECK_CUDA(cudaDeviceSynchronize());
-        auto start1 = std::chrono::high_resolution_clock::now();
+    //     CHECK_CUDA(cudaDeviceSynchronize());
+    //     auto start1 = std::chrono::high_resolution_clock::now();
 
-        if constexpr (!Physics::hellingerReissner) {
-            nl_solver->solve(fine_vars, lambda0, inner_atol);
-        }
+    //     if constexpr (!Physics::hellingerReissner) {
+    //         nl_solver->solve(fine_vars, lambda0, inner_atol);
+    //     }
 
-        CHECK_CUDA(cudaDeviceSynchronize());
-        auto end1 = std::chrono::high_resolution_clock::now();
-        solve_time = end1 - start1;
+    //     CHECK_CUDA(cudaDeviceSynchronize());
+    //     auto end1 = std::chrono::high_resolution_clock::now();
+    //     solve_time = end1 - start1;
 
-        nl_max_disp = get_max_disp<T, Physics>(fine_vars);
+    //     nl_max_disp = get_max_disp<T, Physics>(fine_vars);
 
-        // print some of the data of host residual
-        auto h_vars = fine_vars.createHostVec();
-        printToVTK<Assembler,HostVec<T>>(fine_assembler, h_vars, "out/plate_mg_nl.vtk");
+    //     // print some of the data of host residual
+    //     auto h_vars = fine_vars.createHostVec();
+    //     printToVTK<Assembler,HostVec<T>>(fine_assembler_prev, h_vars, "out/plate_mg_nl.vtk");
 
-        // important to know reduction for how NL regime we are
-        T ratio = nl_max_disp / lin_max_disp;
-        printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
+    //     // important to know reduction for how NL regime we are
+    //     T ratio = nl_max_disp / lin_max_disp;
+    //     printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
 
-        int ndof1 = fine_assembler.get_num_vars();
-        double total = startup_time.count() + solve_time.count();
-    }
+    //     int ndof1 = fine_assembler_prev.get_num_vars();
+    //     double total = startup_time.count() + solve_time.count();
+    // }
 
-    int ndof = fine_assembler.get_num_vars();
-    printf("nonlinear Newton-Raphson KMG solve of plate geom, ndof %d : startup time %.2e, solve time %.2e\n", ndof, startup_time.count(), solve_time.count());
+    // int ndof = fine_assembler_prev.get_num_vars();
+    // printf("nonlinear Newton-Raphson KMG solve of plate geom, ndof %d : startup time %.2e, solve time %.2e\n", ndof, startup_time.count(), solve_time.count());
 
 
     
-    // write to csv (this particular run)
-    // ---------------------------------------
-    std::ofstream csv("csv/_plate.csv", std::ios::app);
-    if (csv.tellp() == 0)
-        csv << "t/R,nxe,NDOF,elem_type,lin_disp,nl_disp,lin_runtime(s),nl_runtime(s),solver\n";
+    // // write to csv (this particular run)
+    // // ---------------------------------------
+    // std::ofstream csv("csv/_plate.csv", std::ios::app);
+    // if (csv.tellp() == 0)
+    //     csv << "t/R,nxe,NDOF,elem_type,lin_disp,nl_disp,lin_runtime(s),nl_runtime(s),solver\n";
 
-    double lin_runtime = lin_solve_time.count(), nl_runtime = solve_time.count();
-    // Set high precision for CSV output
-    csv << std::setprecision(15) << std::scientific;
-    csv << (1.0/SR) << "," << nxe << "," << ndof << ","
-        << elem_type << "," << lin_max_disp << "," << nl_max_disp << ","
-        << lin_runtime << "," << nl_runtime << ","
-        << "gmg\n";
+    // double lin_runtime = lin_solve_time.count(), nl_runtime = solve_time.count();
+    // // Set high precision for CSV output
+    // csv << std::setprecision(15) << std::scientific;
+    // csv << (1.0/SR) << "," << nxe << "," << ndof << ","
+    //     << elem_type << "," << lin_max_disp << "," << nl_max_disp << ","
+    //     << lin_runtime << "," << nl_runtime << ","
+    //     << "gmg\n";
 
-    // free and cleanup
-    // --------------------
+    // // free and cleanup
+    // // --------------------
 
-    // nl_solver.free();
-    kmg->free();
-    fine_assembler.free();
+    // // nl_solver.free();
+    // kmg->free();
+    // fine_assembler.free();
 }
 
 template <typename T, class Assembler>
@@ -660,10 +717,13 @@ int main(int argc, char **argv) {
     double omega = 0.8; // works better with omega near 1
 
     // old GSMC settings
-    int nsmooth = 1; // use nsmooth = 2 for 3rd order elements (needed)
+    // int nsmooth = 1; // use nsmooth = 2 for 3rd order elements (needed)
+    int nsmooth = 2;
     int ninnercyc = 1;
-    int ORDER = 4;
+    // int ORDER = 4;
+    int ORDER = 8;
     std::string cycle_type = "K"; // "V", "F", "W", "K"
+    // std::string cycle_type = "V";
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {

@@ -743,7 +743,7 @@ int main(int argc, char **argv) {
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Prolongation, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     // MITC higher order don't really work? but LFI16 would..
     } else if (elem_type == "MITC9") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
@@ -751,21 +751,21 @@ int main(int argc, char **argv) {
         using Basis = LagrangeQuadBasis<T, Quad, 2>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Prolongation, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "MITC16") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadCubicQuadrature<T>;
         using Basis = LagrangeQuadBasis<T, Quad, 3>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Prolongation, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI4") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         using Quad = QuadLinearQuadrature<T>;
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Prolongation, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI9") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         // probably do need quadratic, but need to fix assembly issues with 9 quadpts
@@ -773,7 +773,7 @@ int main(int argc, char **argv) {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Prolongation, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "CFI16") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         // probably do need quadratic, but need to fix assembly issues with 9 quadpts
@@ -781,7 +781,7 @@ int main(int argc, char **argv) {
         using Basis = ChebyshevQuadBasis<T, Quad, 3>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Prolongation, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "LFI16") {
         using Physics = IsotropicShell<T, Data, is_nonlinear>;
         // probably do need quadratic, but need to fix assembly issues with 9 quadpts
@@ -789,7 +789,7 @@ int main(int argc, char **argv) {
         using Basis = LagrangeQuadBasis<T, Quad, 3>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Prolongation, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     } else if (elem_type == "HRA4") {
         // hellinger-reissner element
         const bool HR = true; // whether is HR element (then physics has 5 extra DOF at start for strain-gap)
@@ -798,7 +798,7 @@ int main(int argc, char **argv) {
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = HellingerReissnerShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
         using Prolongation = StructuredProlongation<Assembler, PLATE>;
-        gatekeeper_method<T, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
+        gatekeeper_method<T, Prolongation, Assembler>(elem_type, is_multigrid, nxe, SR, ORDER, nsmooth, ninnercyc, cycle_type, omega, pressure);
     // } else if (elem_type == "AIG9") {
     //     // runs like AIG9 when I finish implementing
     //     using Physics = IsotropicShell<T, Data, is_nonlinear>;
