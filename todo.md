@@ -1,5 +1,18 @@
 # Current Devel tasks
 
+## Qordering ILU(0) NASA
+- [x] read through qordering ILU(0) libraries in NASA FUN3D (SFE section is where Kyle's code is)
+   * do they do pivoting in each block and how do they do pivoting (YES)
+   * do they use cusparse on GPU? (NO)
+- [ ] code up qorder "iluk_sse" block size 6 pivoting (slow version in C++)
+- [ ] demo iluk_sse qorder on wing case (like in Kyle's paper) first CPU parallel
+- [ ] write my own pivoted ILU factorization on GPU with level sets (to replace CuSparse no pivot ILU factor), if possible. will have to see if it is possible.
+
+## Smoothed aggregation AMG
+- [ ] demo SA-AMG on plate in python
+
+## AIG Elements
+
 - [ ] AIG9 plate element
     - [x] reused physics and data class from isotropic shell
     - [x] finish outer plate assembler
@@ -25,7 +38,13 @@
    - [ ] maybe try on beams..
    - [ ] compare to the direct weak form proposed in the original AIG plate element paper.. see if it matches that.. cause I kind of hacked it and it may not be the exact same..
 - [ ] lit review and/or devel AIG element for non-constant thickness
-- [ ] smoothed aggregation algebraic multigrid
-- [ ] qordering ILU(0) based on NASA FUN3D
+- [ ] develop some theory on whether the condition number should improve for AIG elements vs CFI
+   * seems like actually condition number is gonna be the same as before..
+   * confirm this with numerical experiments
+   - [ ] add this to paper showing block 2x2 Kelem OMAG
+   - [ ] look at beam case and see if it is possible to recover Kirchoff-like multigrid performance again.. need the strain-gap DOF like HR element?
+   - [ ] extend that to plate and shell case..
+   - [ ] may need a new element that improves condition number after all?
+   * in paper if this is true: explain why asymptotic element would prevent locking but not improve condition number (so restores mesh convergence to high order) but would not necessarily improve multigrid solve times (though IGA may help with that some too as it is better at representing geometries)
 
 # done tasks
