@@ -8,5 +8,10 @@
 - [ ] demo iluk_sse qorder on wing case (like in Kyle's paper) first CPU parallel
 - [ ] write my own pivoted ILU factorization on GPU with level sets (to replace CuSparse no pivot ILU factor), if possible. will have to see if it is possible.
 
+- [ ] lit review
+    - [ ] https://www.sciencedirect.com/science/article/pii/S0045782519305213
+    - [ ] https://www.academia.edu/95989671/Crout_Versions_of_ILU_for_General_Sparse_Matrices
+    - [ ] 
+
 
 ## done tasks
