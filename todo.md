@@ -3,7 +3,11 @@
 ## Smoothed aggregation AMG
 - [ ] demo SA-AMG on plate in python
 
+
 ## AIG Elements
+
+- [ ] implement schwarz smoother and isogeometric cohomology stuff here, https://grandmaster.colorado.edu/copper/2016/StudentCompetition/Benzaken_Isogeometric_Multigrid.pdf
+    * shows how isogeometric can be used to make thin plate friendly smoothers using cohomology
 
 - [ ] AIG9 plate element
     - [x] reused physics and data class from isotropic shell
