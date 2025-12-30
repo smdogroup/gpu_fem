@@ -102,12 +102,13 @@ plot_plate_vec(nxe, x.copy(), ax, sort_fw, nodal_dof=2)
 
 # precond = ILU_pivot_precond(A)
 # from __ilu_nasa import GaussJordanBlockPrecond
-precond = GaussJordanBlockPrecond(A)
+ilu_gj = GaussJordanBlockPrecond(A)
 
 # build multilevel ILU matrix
 milu = MultilevelILU(A)
 
 
+# precond = ilu_gj
 precond = milu
     
 # ========================================================

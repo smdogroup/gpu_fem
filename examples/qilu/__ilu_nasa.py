@@ -215,6 +215,57 @@ def block_ilu6_gj_solve(A_lu, x, y):
 
     return False # fail
 
+def extract_bsr_triangular(A_bsr, lower:bool=True):
+    # extract either the L or U bsr matrix
+    nnodes = A_bsr.shape[0] // 6
+    rows = [[] for i in range(nnodes)]
+    cols = [[] for i in range(nnodes)]
+    data = [[] for i in range(nnodes)]
+    for i in range(nnodes):
+        for jp in range(A_bsr.indptr[i], A_bsr.indptr[i+1]):
+            j = A_bsr.indices[i]
+            if i >= j and lower:
+                rows[i] += [i]
+                cols[i] += [j]
+                data[i] += [np.eye(6)]
+            elif i <= j and not(lower):
+                rows[i] += [i]
+                cols[i] += [j]
+                data[i] += [np.eye(6)]
+    
+    nrows = nnodes
+    ncols = nnodes
+    # assemble bsr
+    indptr = np.zeros(nrows + 1, dtype=int)
+    indices = []
+    blocks = []
+
+    for i in range(nrows):
+        indptr[i+1] = indptr[i] + len(cols[i])
+        indices.extend(cols[i])
+        blocks.extend(data[i])
+    # print(f"{indptr=}\n{indices=}\n")
+    bs = 6
+
+    return sp.bsr_matrix(
+        (np.array(blocks), np.array(indices), indptr),
+        shape=(nrows * bs, ncols * bs),
+        blocksize=(bs, bs)
+    )
+
+
+    data = np.zeros((nnodes, bs, bs), dtype=dtype)
+    for i in range(bs):
+        data[:, i, i] = 1.0
+
+    indptr = np.arange(nnodes + 1, dtype=np.int32)
+    indices = np.arange(nnodes, dtype=np.int32)
+
+    return sp.bsr_matrix(
+        (data, indices, indptr),
+        shape=(nnodes * bs, nnodes * bs),
+    )
+
 
 def block_ilu6_gj_solve_matmat_sym(B_lu, F):
     """
@@ -242,9 +293,29 @@ def block_ilu6_gj_solve_matmat_sym(B_lu, F):
 
     # preallocate Y with correct sparsity
     # Y = B_lu @ F
-    Y = F.copy()
-    Y.data[:] = 0.0  # zero out values
+    # # Y = F.copy()
+    # Y.data[:] = 0.0  # zero out values
+
+    bs = 6
     nnodes = B_lu.shape[0] // bs
+    # L = sp.tril(B_lu, k=0)
+    # U = sp.triu(B_lu)
+    L = extract_bsr_triangular(B_lu, lower=True)
+    U = extract_bsr_triangular(B_lu, lower=False)
+    print(f"{U=}")
+    Y = L @ (U @ F)
+    Y.data[:] = 0.0
+
+    print(f"{U.indptr=}\n{U.indices=}\n")
+
+    LU = L @ U
+
+    print(f"{LU.indptr=}\n{LU.indices=}\n")
+    print(f"{B_lu.indptr=}\n{B_lu.indices=}\n")
+
+    # print(f"{Y.indptr=} {Y.indices=}")
+    # Y2 = B_lu @ F
+    # print(f"{Y2.indptr=} {Y2.indices=}")
 
     # --------------------------------------------------
     # forward solve (L y = F)
@@ -355,9 +426,9 @@ class MultilevelILU:
         self.fine_nodes = fine_nodes
         # print(f"{fine_nodes=}\n{coarse_nodes=}\n")
 
-        num_fine_nodes = fine_nodes.shape[0]
-        num_coarse_nodes = coarse_nodes.shape[0]
-        print(f"{num_fine_nodes=}\n{num_coarse_nodes=}\n")
+        self.num_fine_nodes = fine_nodes.shape[0]
+        self.num_coarse_nodes = coarse_nodes.shape[0]
+        # print(f"{self.num_fine_nodes=}\n{self.num_coarse_nodes=}\n")
         self.fine_mask = np.array([6 * inode + _ for inode in fine_nodes for _ in range(6)])
         self.coarse_mask = np.array([6 * inode + _ for inode in coarse_nodes for _ in range(6)])
 
@@ -411,8 +482,8 @@ class MultilevelILU:
         self.E = self._assemble_bsr(E_rows, E_cols, E_data, nc, nf, bs)
         self.C = self._assemble_bsr(C_rows, C_cols, C_data, nc, nc, bs)
 
-        print(f"{self.A.shape=}")
-        print(f"{self.B.shape=}\n{self.F.shape=}\n{self.E.shape=}\n{self.C.shape=}\n")
+        # print(f"{self.A.shape=}")
+        # print(f"{self.B.shape=}\n{self.F.shape=}\n{self.E.shape=}\n{self.C.shape=}\n")
 
     @staticmethod
     def _assemble_bsr(rows, cols, data, nrows, ncols, bs):
@@ -443,11 +514,42 @@ class MultilevelILU:
         # with Y = Binv * F computed with mat-mat solve
         Y = block_ilu6_gj_solve_matmat_sym(self.B_pc.A, self.F)
 
+        # test correct linear solve vs vectors..
+        vec_fine = np.zeros(6 * self.num_fine_nodes)
+        vec_coarse = np.zeros(6 * self.num_coarse_nodes)
+        max_rel_err = 0.0
+        for i_f in range(6 * self.num_fine_nodes):
+            for i_c in range(6 * self.num_coarse_nodes):
+                
+                vec_fine[:] = 0.0
+                vec_fine[i_f] = 1.0
+                vec_coarse[:] = 0.0
+                vec_coarse[i_c] = 1.0
+
+                # vec_fine = np.random.rand(6 * self.num_fine_nodes)
+                # vec_coarse = np.random.rand(6 * self.num_coarse_nodes)
+                v1 = self.F.dot(vec_coarse)
+                v2 = np.zeros_like(v1)
+                # print(f"{v1.shape=} {v2.shape=}")
+                block_ilu6_gj_solve(self.B_pc.A, v2, v1)
+                s1 = np.dot(vec_fine, v2)
+
+                v3 = Y.dot(vec_coarse)
+                s2 = np.dot(vec_fine, v3)
+
+                if abs(s1) >= 1e-12 or abs(s2) >= 1e-12:
+                    rel_err = abs((s1-s2)/s1)
+                    max_rel_err = np.max([max_rel_err, rel_err])
+                    if rel_err > 1e-5:
+                        print(f"node ({i_f//6},{i_c//6}), DOF ({i_f},{i_c}) : {s1=:.5e} {s2=:.5e} {rel_err=:.5e}")
+
+        print(f"{max_rel_err=}")
+
         # check residual here for B * Y = F system
-        R = self.B @ Y - self.F
-        R_dense = R.toarray()
-        R_nrm = np.linalg.norm(R_dense)
-        print(f"{R_nrm=:.4e}")
+        # R = self.B @ Y - self.F
+        # R_dense = R.toarray()
+        # R_nrm = np.linalg.norm(R_dense)
+        # print(f"{R_nrm=:.4e}")
         # extra fillin in B @ Y makes it not true?
         
         # --- compute residual only on nonzero blocks of Y ---
@@ -460,7 +562,7 @@ class MultilevelILU:
 
 
         self.S = self.C - self.E @ Y
-        print(f"{self.S.shape=}")
+        # print(f"{self.S.shape=}")
 
         # --- compute S ILU factor ---
         if new_levels <= 1:
@@ -476,21 +578,21 @@ class MultilevelILU:
         # first a fine solve
         x = np.zeros_like(rhs)
         fine_rhs1 = rhs[self.fine_mask]
-        print(f"{fine_rhs1.shape=}")
+        # print(f"{fine_rhs1.shape=}")
         fine_soln1 = self.B_pc.solve(fine_rhs1)
         x[self.fine_mask] = self.B_pc.solve(fine_soln1)
     
         # first pair of outer product terms from coarse solve
-        coarse_rhs1 = self.E.multiply(fine_soln1)
+        coarse_rhs1 = self.E.dot(fine_soln1)
         coarse_soln1 = self.S_pc.solve(coarse_rhs1)
-        fine_soln1 = self.B_pc.solve(self.F.multiply(coarse_soln1))
+        fine_soln1 = self.B_pc.solve(self.F.dot(coarse_soln1))
         x[self.fine_mask] += fine_soln1
         x[self.coarse_mask] -= coarse_soln1
 
         # outer product terms from coarse solve
-        coarse_rhs2 = rhs[self.coarse_nodes]
+        coarse_rhs2 = rhs[self.coarse_mask]
         coarse_soln2 = self.S_pc.solve(coarse_rhs2)
-        fine_soln2 = self.B_pc.solve(self.F.multiply(coarse_soln2))
+        fine_soln2 = self.B_pc.solve(self.F.dot(coarse_soln2))
         x[self.fine_mask] -= fine_soln2
         x[self.coarse_mask] += coarse_soln2
 
