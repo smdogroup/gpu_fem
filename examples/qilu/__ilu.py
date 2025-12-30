@@ -81,6 +81,77 @@ def _get_diagp(A_bsr):
             raise RuntimeError(f"Missing diagonal block at row {brow=}")
     return diagp
 
+
+def extract_bsr_triangular(A_bsr, lower:bool=True):
+    # print(f"{A_bsr.indptr=}\n{A_bsr.indices=}\n")
+
+    # extract either the L or U bsr matrix
+    nnodes = A_bsr.shape[0] // 6
+    rows = [[] for i in range(nnodes)]
+    cols = [[] for i in range(nnodes)]
+    data = [[] for i in range(nnodes)]
+    for i in range(nnodes):
+        for jp in range(A_bsr.indptr[i], A_bsr.indptr[i+1]):
+            j = A_bsr.indices[jp]
+            if i >= j and lower:
+                rows[i] += [i]
+                cols[i] += [j]
+                data[i] += [np.eye(6)]
+            elif i <= j and not(lower):
+                rows[i] += [i]
+                cols[i] += [j]
+                data[i] += [np.eye(6)]
+    
+    nrows = nnodes
+    ncols = nnodes
+    # assemble bsr
+    indptr = np.zeros(nrows + 1, dtype=int)
+    indices = []
+    blocks = []
+
+    # print(f"{rows=}\n{cols=}")
+    for i in range(nrows):
+        indptr[i+1] = indptr[i] + len(cols[i])
+        indices.extend(cols[i])
+        blocks.extend(data[i])
+    # print(f"{indptr=}\n{indices=}\n")
+    bs = 6
+
+    return sp.bsr_matrix(
+        (np.array(blocks), np.array(indices), indptr),
+        shape=(nrows * bs, ncols * bs),
+        blocksize=(bs, bs)
+    )
+
+def sort_bsr_indices(A):
+    """
+    Return a BSR matrix with sorted column indices per block row.
+    No duplicate handling.
+    """
+    assert sp.isspmatrix_bsr(A)
+
+    indptr = A.indptr
+    indices = A.indices
+    data = A.data
+
+    new_indices = indices.copy()
+    new_data = data.copy()
+
+    for i in range(A.indptr.size - 1):
+        p0, p1 = indptr[i], indptr[i+1]
+        if p1 - p0 <= 1:
+            continue
+
+        order = np.argsort(indices[p0:p1], kind="stable")
+        new_indices[p0:p1] = indices[p0:p1][order]
+        new_data[p0:p1] = data[p0:p1][order]
+
+    return sp.bsr_matrix(
+        (new_data, new_indices, indptr.copy()),
+        shape=A.shape,
+        blocksize=A.blocksize,
+    )
+
 def block_ilu6_gj_factor(A_bsr):
     """
     ILU factorization based on NASA SLAT:
@@ -89,6 +160,7 @@ def block_ilu6_gj_factor(A_bsr):
     """
 
     # print(f"{A_bsr.shape=}")
+    # print(f"factor: {A_bsr.indptr=}\n{A_bsr.indices=}\n")
 
     # preamble (allocation)
     assert isinstance(A_bsr, sp.bsr_matrix)
@@ -215,56 +287,6 @@ def block_ilu6_gj_solve(A_lu, x, y):
 
     return False # fail
 
-def extract_bsr_triangular(A_bsr, lower:bool=True):
-    # extract either the L or U bsr matrix
-    nnodes = A_bsr.shape[0] // 6
-    rows = [[] for i in range(nnodes)]
-    cols = [[] for i in range(nnodes)]
-    data = [[] for i in range(nnodes)]
-    for i in range(nnodes):
-        for jp in range(A_bsr.indptr[i], A_bsr.indptr[i+1]):
-            j = A_bsr.indices[i]
-            if i >= j and lower:
-                rows[i] += [i]
-                cols[i] += [j]
-                data[i] += [np.eye(6)]
-            elif i <= j and not(lower):
-                rows[i] += [i]
-                cols[i] += [j]
-                data[i] += [np.eye(6)]
-    
-    nrows = nnodes
-    ncols = nnodes
-    # assemble bsr
-    indptr = np.zeros(nrows + 1, dtype=int)
-    indices = []
-    blocks = []
-
-    for i in range(nrows):
-        indptr[i+1] = indptr[i] + len(cols[i])
-        indices.extend(cols[i])
-        blocks.extend(data[i])
-    # print(f"{indptr=}\n{indices=}\n")
-    bs = 6
-
-    return sp.bsr_matrix(
-        (np.array(blocks), np.array(indices), indptr),
-        shape=(nrows * bs, ncols * bs),
-        blocksize=(bs, bs)
-    )
-
-
-    data = np.zeros((nnodes, bs, bs), dtype=dtype)
-    for i in range(bs):
-        data[:, i, i] = 1.0
-
-    indptr = np.arange(nnodes + 1, dtype=np.int32)
-    indices = np.arange(nnodes, dtype=np.int32)
-
-    return sp.bsr_matrix(
-        (data, indices, indptr),
-        shape=(nnodes * bs, nnodes * bs),
-    )
 
 
 def block_ilu6_gj_solve_matmat_sym(B_lu, F):
@@ -291,31 +313,22 @@ def block_ilu6_gj_solve_matmat_sym(B_lu, F):
     assert F.blocksize == (6,6)
     bs = 6
 
-    # preallocate Y with correct sparsity
-    # Y = B_lu @ F
-    # # Y = F.copy()
-    # Y.data[:] = 0.0  # zero out values
+    L = extract_bsr_triangular(B_lu, lower=True)
+    U = extract_bsr_triangular(B_lu, lower=False)
+    UF = sort_bsr_indices(U @ F)
+    Y0 = sort_bsr_indices(L @ UF)
+
+    # do another mat-multiply for extra fillin to mimic inverse?
+    Ytmp = sort_bsr_indices(U @ Y0)
+    Y1 = sort_bsr_indices(L @ Ytmp)
+    
+    # do another mat-multiply for extra fillin
+    Ytmp2 = sort_bsr_indices(U @ Y1)
+    Y = sort_bsr_indices(L @ Ytmp2)
+    Y.data[:] = 0.0  # zero out values
 
     bs = 6
     nnodes = B_lu.shape[0] // bs
-    # L = sp.tril(B_lu, k=0)
-    # U = sp.triu(B_lu)
-    L = extract_bsr_triangular(B_lu, lower=True)
-    U = extract_bsr_triangular(B_lu, lower=False)
-    print(f"{U=}")
-    Y = L @ (U @ F)
-    Y.data[:] = 0.0
-
-    print(f"{U.indptr=}\n{U.indices=}\n")
-
-    LU = L @ U
-
-    print(f"{LU.indptr=}\n{LU.indices=}\n")
-    print(f"{B_lu.indptr=}\n{B_lu.indices=}\n")
-
-    # print(f"{Y.indptr=} {Y.indices=}")
-    # Y2 = B_lu @ F
-    # print(f"{Y2.indptr=} {Y2.indices=}")
 
     # --------------------------------------------------
     # forward solve (L y = F)
@@ -515,53 +528,43 @@ class MultilevelILU:
         Y = block_ilu6_gj_solve_matmat_sym(self.B_pc.A, self.F)
 
         # test correct linear solve vs vectors..
-        vec_fine = np.zeros(6 * self.num_fine_nodes)
-        vec_coarse = np.zeros(6 * self.num_coarse_nodes)
-        max_rel_err = 0.0
-        for i_f in range(6 * self.num_fine_nodes):
-            for i_c in range(6 * self.num_coarse_nodes):
-                
-                vec_fine[:] = 0.0
-                vec_fine[i_f] = 1.0
-                vec_coarse[:] = 0.0
-                vec_coarse[i_c] = 1.0
+        debug = False
+        # debug = True
 
-                # vec_fine = np.random.rand(6 * self.num_fine_nodes)
-                # vec_coarse = np.random.rand(6 * self.num_coarse_nodes)
-                v1 = self.F.dot(vec_coarse)
-                v2 = np.zeros_like(v1)
-                # print(f"{v1.shape=} {v2.shape=}")
-                block_ilu6_gj_solve(self.B_pc.A, v2, v1)
-                s1 = np.dot(vec_fine, v2)
+        if debug:
+            vec_fine = np.zeros(6 * self.num_fine_nodes)
+            vec_coarse = np.zeros(6 * self.num_coarse_nodes)
+            max_rel_err = 0.0
+            for i_f in range(6 * self.num_fine_nodes):
+                for i_c in range(6 * self.num_coarse_nodes):
+                    
+                    vec_fine[:] = 0.0
+                    vec_fine[i_f] = 1.0
+                    vec_coarse[:] = 0.0
+                    vec_coarse[i_c] = 1.0
 
-                v3 = Y.dot(vec_coarse)
-                s2 = np.dot(vec_fine, v3)
+                    # vec_fine = np.random.rand(6 * self.num_fine_nodes)
+                    # vec_coarse = np.random.rand(6 * self.num_coarse_nodes)
+                    v1 = self.F.dot(vec_coarse)
+                    v2 = np.zeros_like(v1)
+                    # print(f"{v1.shape=} {v2.shape=}")
+                    block_ilu6_gj_solve(self.B_pc.A, v2, v1)
+                    s1 = np.dot(vec_fine, v2)
 
-                if abs(s1) >= 1e-12 or abs(s2) >= 1e-12:
-                    rel_err = abs((s1-s2)/s1)
-                    max_rel_err = np.max([max_rel_err, rel_err])
-                    if rel_err > 1e-5:
-                        print(f"node ({i_f//6},{i_c//6}), DOF ({i_f},{i_c}) : {s1=:.5e} {s2=:.5e} {rel_err=:.5e}")
+                    v3 = Y.dot(vec_coarse)
+                    s2 = np.dot(vec_fine, v3)
 
-        print(f"{max_rel_err=}")
+                    if abs(s1) >= 1e-12 or abs(s2) >= 1e-12:
+                        rel_err = abs((s1-s2)/s1)
+                        max_rel_err = np.max([max_rel_err, rel_err])
+                        if rel_err > 1e-5:
+                            print(f"node ({i_f//6},{i_c//6}), DOF ({i_f},{i_c}) : {s1=:.5e} {s2=:.5e} {rel_err=:.5e}")
 
-        # check residual here for B * Y = F system
-        # R = self.B @ Y - self.F
-        # R_dense = R.toarray()
-        # R_nrm = np.linalg.norm(R_dense)
-        # print(f"{R_nrm=:.4e}")
-        # extra fillin in B @ Y makes it not true?
-        
-        # --- compute residual only on nonzero blocks of Y ---
-        # R_nrm = np.sqrt(sum(np.linalg.norm(self.B.data[k] @ Y.data[jp] - self.F.data[jp])**2
-        #             for i in range(Y.shape[0]//6)
-        #             for jp in range(Y.indptr[i], Y.indptr[i+1])
-        #             for k in range(self.B.indptr[i], self.B.indptr[i+1])
-        #             if self.B.indices[k] == Y.indices[jp]))
-        # print(f"Residual over Y pattern: {R_nrm:.4e}")
+            print(f"{max_rel_err=}")
 
 
-        self.S = self.C - self.E @ Y
+        # self.S = self.C - self.E @ Y
+        self.S = self.C - sort_bsr_indices(self.E @ Y)
         # print(f"{self.S.shape=}")
 
         # --- compute S ILU factor ---
@@ -599,6 +602,7 @@ class MultilevelILU:
         return x
 
 def block_row_bandwidth(A_bsr):
+
     rowp = A_bsr.indptr
     cols = A_bsr.indices
     nnodes = A_bsr.shape[0] // 6

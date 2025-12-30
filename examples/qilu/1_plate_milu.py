@@ -57,8 +57,17 @@ for i in range(perm.shape[0]):
     perm[i] = j
     iperm[j] = i
 # print(f"{perm=}")
+
+old_zero = iperm[0]
+start = A00.indptr[old_zero]
+end = A00.indptr[old_zero+1]
+cols = A00.indices[start:end]
+# print(f"A00 true row 0: {start}:{end} => {cols=}")
+
 A0 = reorder_bsr6_nofill(A00.copy(), perm, iperm)
 rhs0 = rhs00.reshape(nnodes, 6)[iperm].reshape(-1) 
+
+# print(f"A0 sparsity: {A0.indptr=}\n{A0.indices=}\n")
 
 if not args.norandom:
     print("doing random..")

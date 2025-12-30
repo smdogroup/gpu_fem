@@ -327,6 +327,8 @@ def reorder_bsr6_nofill(A_bsr, perm, iperm):
 
         nnzb += k
 
+    # print(f"{new_indices=}\n{new_indptr=}\n")
+
     A_new = sp.sparse.bsr_matrix(
         (new_data, new_indices, new_indptr),
         shape=A_bsr.shape,
