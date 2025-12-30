@@ -3,6 +3,9 @@
 ## Multilevel ILU
 
 - [ ] implement multilevel ILU based on https://arxiv.org/pdf/1901.03249 for linear time complexity
+    - [x] prototype multilevel ILU
+    - [ ] fix Linv and Uinv fillin for schur complement
+    - [ ] make schur complement more symmetric and check coarse system makes more sense..
 - [ ] then do multipatch version of multilevel ILU for wing case? see someone's master's thesis on 
 - [ ] implement schwarz smoother and isogeometric cohomology stuff here, https://grandmaster.colorado.edu/copper/2016/StudentCompetition/Benzaken_Isogeometric_Multigrid.pdf
 
