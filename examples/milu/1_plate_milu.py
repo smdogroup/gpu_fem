@@ -6,7 +6,7 @@ import numpy as np
 import sys, scipy as sp
 from __src import get_tacs_matrix, sort_vis_maps, plot_plate_vec
 from __src import random_ordering, reorder_bsr6_nofill, right_pgmres, gen_plate_mesh
-from __ilu_nasa import GaussJordanBlockPrecond, q_ordering, MultilevelILU
+from __ilu import GaussJordanBlockPrecond, q_ordering, MultilevelILU
 import argparse
 import matplotlib.pyplot as plt
 

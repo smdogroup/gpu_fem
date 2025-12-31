@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.sparse as sp
 import scipy.linalg as la
-from __ilu_nasa import GaussJordanBlockPrecond, gaussJordan, get_lu_residual
+from __ilu import GaussJordanBlockPrecond, gaussJordan, get_lu_residual
 
 np.set_printoptions(precision=3, suppress=True)
 

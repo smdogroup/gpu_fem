@@ -392,7 +392,15 @@ class GaussJordanBlockPrecond:
         block_ilu6_gj_solve(self.A, x, rhs)
         return x
     
+class DirectSolver:
+    def __init__(self, A_bsr):
+        # convert to dense matrix (full fillin)
+        self.A = A_bsr.toarray()
 
+    def solve(self, rhs):
+        # use python dense solver..
+        x = np.linalg.solve(self.A, rhs)
+        return x
 
 class MultilevelILU:
     def __init__(self, A_bsr, levels:int=2):
@@ -569,7 +577,9 @@ class MultilevelILU:
 
         # --- compute S ILU factor ---
         if new_levels <= 1:
-            self.S_pc = GaussJordanBlockPrecond(self.S)
+            # on coarsest level need full LU solve (so ILU(0) solve not acceptable)
+            self.S_pc = DirectSolver(self.S)
+            # self.S_pc = GaussJordanBlockPrecond(self.S) # can't do ILU(0) here
         else:
             # recursively make new MILU factor
             self.S_pc = MultilevelILU(self.S, levels=new_levels)

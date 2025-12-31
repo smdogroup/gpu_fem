@@ -6,7 +6,7 @@ import numpy as np
 import sys, scipy as sp
 from __src import get_tacs_matrix, sort_vis_maps, random_ordering
 from __src import reorder_bsr6_nofill, gen_plate_mesh
-from __ilu_nasa import GaussJordanBlockPrecond, q_ordering, get_lu_residual
+from __ilu import GaussJordanBlockPrecond, q_ordering, get_lu_residual
 import argparse
 import matplotlib.pyplot as plt
 
@@ -25,8 +25,6 @@ gen_plate_mesh(nxe=args.nxe, lx=1.0, ly=1.0)
 thickness = args.thick
 
 A00, rhs00, xpts = get_tacs_matrix(bdf_file="plate.bdf", thickness=thickness)
-
-# doesn't quite work because the matrix values are not computed to higher precision first?
 
 # ===================================================
 # 2) random reordering (instead of Qordering for now)
@@ -73,62 +71,55 @@ else:
 # 4) block ILU(0) pivot factorization
 # =======================================================
 
-A_64 = A.copy()
-precond_64 = GaussJordanBlockPrecond(A)
-
-A_128 = A_64.copy()
-A_128.data.astype(np.longdouble)
-np.finfo(np.longdouble)
-precond_128 = GaussJordanBlockPrecond(A_128)
-# exit()
+precond = GaussJordanBlockPrecond(A)
 
 
 # normalize by max value in A (for relative errors)
-A_dense = A_128.toarray()
+A_dense = A.toarray()
 # A_nrm = np.linalg.norm(A_dense)
 A_nrm = np.max(np.abs(A_dense))
 
 # check factor error
-R_64 = get_lu_residual(A_128, precond_64.A)
-R_64_dense = R_64.toarray()
-R_64_dense[A_dense == 0] = 0.0 # tmp to check only error on sparsity
-R_nrm_64 = np.linalg.norm(R_64_dense) / A_nrm
-R_max_64 = np.max(np.abs(R_64_dense)) / A_nrm
-R_64_dense[A_dense == 0] = np.nan
-print(f"{R_nrm_64=:.4e} {R_max_64=:.4e} on sparsity")
+R = get_lu_residual(A, precond.A)
+R_dense = R.toarray()
 
+R_nrm = np.linalg.norm(R_dense) / A_nrm
+R_max = np.max(np.abs(R_dense)) / A_nrm
+print(f"{R_nrm=:.4e} {R_max=:.4e} with fillin")
 
-R_128 = get_lu_residual(A_128, precond_128.A)
-R_128_dense = R_128.toarray()
-R_128_dense[A_dense == 0] = 0.0 # tmp to check only error on sparsity
-R_nrm_128 = np.linalg.norm(R_128_dense) / A_nrm
-R_max_128 = np.max(np.abs(R_128_dense)) / A_nrm
-R_128_dense[A_dense == 0] = np.nan
-print(f"{R_nrm_128=:.4e} {R_max_128=:.4e} on sparsity")
+R_dense[A_dense == 0] = 0.0 # tmp to check only error on sparsity
+R_nrm2 = np.linalg.norm(R_dense) / A_nrm
+R_max2 = np.max(np.abs(R_dense)) / A_nrm
+R_dense[A_dense == 0] = np.nan
+print(f"{R_nrm2=:.4e} {R_max2=:.4e} on sparsity")
+
+# ind_max = np.argmax(R_dense)
+# # print(f"{ind_max=}")
+# N = R_dense.shape[0]
+# M = N
+# i, j = ind_max // N, ind_max % N
+# print(f"{ind_max=} {i=} {j=}")
+
+# # Now plot
+# if nnodes < 500:
+#     plt.imshow(np.log10(np.abs(R_dense / A_nrm) + 1e-14))
+#     plt.colorbar()
+#     plt.show()
 
 # for higher DOF problems, plot the residual by nodal rows
-R_nodal_64_err = np.zeros(nnodes)
-R_nodal_128_err = np.zeros(nnodes)
+R_nodal_err = np.zeros(nnodes)
 for idof in range(6*nnodes):
     i = idof // 6
-
-    row = R_64_dense[idof,:]
+    row = R_dense[idof,:]
     nz_row = row[np.logical_not(np.isnan(row))]
     nrm = np.linalg.norm(nz_row) / A_nrm
-    R_nodal_64_err[i] = np.max([R_nodal_64_err[i], nrm])
+    R_nodal_err[i] = np.max([R_nodal_err[i], nrm])
 
-    row = R_128_dense[idof,:]
-    nz_row = row[np.logical_not(np.isnan(row))]
-    nrm = np.linalg.norm(nz_row) / A_nrm
-    R_nodal_128_err[i] = np.max([R_nodal_128_err[i], nrm])
-
-plt.plot(np.arange(0, nnodes), R_nodal_64_err, label="64-bit")
-plt.plot(np.arange(0, nnodes), R_nodal_128_err, label="128-bit")
-plt.legend()
+plt.plot(np.arange(0, nnodes), R_nodal_err)
 plt.yscale('log')
 plt.show()
 
-# # plt.imshow(np.log10(np.abs(A.toarray()) + 1e-14))
-# # # plt.imshow(np.log10(np.abs(precond.A.toarray()) + 1e-14))
-# # plt.imshow(np.log10(np.abs(R.toarray()) + 1e-14))
-# # plt.show()
+# plt.imshow(np.log10(np.abs(A.toarray()) + 1e-14))
+# # plt.imshow(np.log10(np.abs(precond.A.toarray()) + 1e-14))
+# plt.imshow(np.log10(np.abs(R.toarray()) + 1e-14))
+# plt.show()

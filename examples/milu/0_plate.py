@@ -6,7 +6,7 @@ import numpy as np
 import sys, scipy as sp
 from __src import get_tacs_matrix, sort_vis_maps, plot_plate_vec
 from __src import random_ordering, reorder_bsr6_nofill, right_pgmres, gen_plate_mesh
-from __ilu_nasa import GaussJordanBlockPrecond, q_ordering
+from __ilu import GaussJordanBlockPrecond, q_ordering
 import argparse
 import matplotlib.pyplot as plt
 
@@ -15,7 +15,7 @@ parser.add_argument("--norandom", action=argparse.BooleanOptionalAction, default
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--noprec", action=argparse.BooleanOptionalAction, default=False, help="remove preconditioner in GMRES")
 parser.add_argument("--thick", type=float, default=1e-2) # 2e-3
-parser.add_argument("--nxe", type=int, default=30)
+parser.add_argument("--nxe", type=int, default=10)
 args = parser.parse_args()
 
 gen_plate_mesh(nxe=args.nxe, lx=1.0, ly=1.0)
@@ -89,6 +89,7 @@ x = sp.sparse.linalg.spsolve(A0.copy(), rhs0.copy())
 
 # for plotting
 nxe = int(nnodes**0.5)-1
+# sort_fw, sort_bk = sort_vis_maps(nxe, xpts, free_dof)
 sort_fw = np.arange(0, sort_fw.shape[0])
 fig = plt.figure()
 ax = fig.add_subplot(121, projection='3d')
@@ -104,10 +105,10 @@ plot_plate_vec(nxe, x.copy(), ax, sort_fw, nodal_dof=2)
 precond = GaussJordanBlockPrecond(A)
     
 # ========================================================
-# 5) plot plate ILU(0) approx solution vs true soln
+# 5) right-precond ILU(0)-GMRES
 # ========================================================
 
-x_perm2 = precond.solve(rhs)
+x_perm2 = right_pgmres(A, b=rhs, x0=None, restart=500, max_iter=500, M=precond if not(args.noprec) else None)
 x2 = x_perm2.reshape(nnodes, 6)[perm].reshape(-1)
 
 # plot right-precond solution

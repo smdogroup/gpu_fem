@@ -1,7 +1,7 @@
 # now let's test this out and visualize it
 import numpy as np
 import sys, scipy as sp
-from __ilu_nasa import gaussJordan
+from __ilu import gaussJordan
 import matplotlib.pyplot as plt
 
 max_err = 0.0
