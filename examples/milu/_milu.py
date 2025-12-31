@@ -166,9 +166,16 @@ def block_milu6_factor(A_bsr, perm_xpts, scale:float=1e0):
         # diagonal contribution (L = I on diagonal)
         LU_B += diag_block @ B[k]
 
+        # think sign might be wrong here?.. and thus it is boosting diagonals.. TBD
         R_B = A_B - LU_B
         # R_B = LU_B - A_B
 
+        # scale = 0.5
+        # scale = 0.1
+        # scale = 0.0
+
+        # either one is mostly fine.. row-distribute one not working as well as diag modification..
+        # just like MILU scalar DOF per node uses 
         # distribute_upper = True
         distribute_upper = False
 
@@ -189,22 +196,24 @@ def block_milu6_factor(A_bsr, perm_xpts, scale:float=1e0):
                 # DISTRIBUTED CORRECTION
                 # -----------------------------------------
                 if distribute_upper:
-                    pass
+                    # pass
                     # # this part is NOT CORRECT yet..
 
-                    # # count diag + strict upper
-                    # n_upper = rowp[k+1] - (j + 1)
-                    # N = 1 + n_upper
+                    # count diag + strict upper
+                    n_upper = rowp[k+1] - (j + 1)
+                    N = 1 + n_upper
 
-                    # dD_scaled = dD / N
+                    dD_scaled = dD / N
 
-                    # # diagonal update
-                    # diag_block -= dD_scaled
+                    # diagonal update
+                    diag_block -= dD_scaled
 
-                    # # strict upper updates
-                    # for qp in range(j+1, rowp[k+1]):
-                    #     # U_kq -= L_kq^{-1} * dD/N
-                    #     A_copy.data[qp] -= Linv[k] @ dD_scaled
+                    # free to do this because rest of matrix hasn't been factored yet..
+
+                    # strict upper updates
+                    for qp in range(j+1, rowp[k+1]):
+                        # U_kq -= dD/N
+                        A_copy.data[qp] -= dD_scaled
 
                 else:
                     # classic diagonal-only MILU
