@@ -34,7 +34,7 @@ def gaussJordan(A, RHS):
         # check for singular pivot
         if abs(A[ipeak,i]) < 1e-35:
             print(f"GJ (6x6) helper: singular pivot ({ipeak},{i})")
-            return True # failed
+            return True, perm # failed
         
         # permute if pivot is off-diag
         if ipeak != i:
@@ -175,7 +175,9 @@ def block_ilu6_gj_factor(A_bsr):
     cols = A_copy.indices
     data = A_copy.data
     nnodes = A_copy.shape[0] // 6
-    iw = np.full(nnodes, 0, dtype=int)
+    # null_val = 0
+    null_val = -1 # prob should be -1
+    iw = np.full(nnodes, null_val, dtype=int)
     diagp = _get_diagp(A_bsr)
     
         
@@ -191,7 +193,7 @@ def block_ilu6_gj_factor(A_bsr):
         # also based on ilu_generic_template.h
         # which is easier to read
 
-        j = j1
+        j = j1 # lower triangular iteration here
         while (j <= j2):
             jrow = cols[j]
             if (jrow >= k): 
@@ -204,11 +206,12 @@ def block_ilu6_gj_factor(A_bsr):
                 if cols[j] < nnodes:
                     data[j] = tmat.copy()
 
+                # upper triangular iteration
                 for jj in range(diagp[jrow] + 1, rowp[jrow+1]):
                     # rowp to cols jj
                     jw = iw[cols[jj]]
 
-                    if jw != 0:
+                    if jw != null_val:
                         if cols[jw] < nnodes and cols[jj] < nnodes:
                             # they used SSE packed double intrinsics in NASA CPU-parallel code here
                             data[jw] -= tmat @ data[jj]
@@ -233,7 +236,7 @@ def block_ilu6_gj_factor(A_bsr):
         
         # reset iw pointer
         for j in range(j1, j2+1):
-            iw[cols[j]] = 0
+            iw[cols[j]] = null_val
 
     return A_copy
 
