@@ -1,5 +1,10 @@
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 import numpy as np
 import scipy.sparse as sp
+import matplotlib.pyplot as plt
+from __src import plot_plate_vec
 
 def gaussJordan(A, RHS):
     # do gauss-jordan A => Ainv factorization in-place
@@ -322,9 +327,10 @@ def block_ilu6_gj_solve_matmat_sym(B_lu, F):
     Ytmp = sort_bsr_indices(U @ Y0)
     Y1 = sort_bsr_indices(L @ Ytmp)
     
-    # do another mat-multiply for extra fillin
+    # # do another mat-multiply for extra fillin
     Ytmp2 = sort_bsr_indices(U @ Y1)
     Y = sort_bsr_indices(L @ Ytmp2)
+    # Y = Y1.copy()
     Y.data[:] = 0.0  # zero out values
 
     bs = 6
@@ -571,8 +577,9 @@ class MultilevelILU:
             print(f"{max_rel_err=}")
 
 
-        # self.S = self.C - self.E @ Y
-        self.S = self.C - sort_bsr_indices(self.E @ Y)
+        # self.S = self.C
+        self.S = self.C - self.E @ Y
+        # self.S = self.C - sort_bsr_indices(self.E @ Y)
         # print(f"{self.S.shape=}")
 
         # --- compute S ILU factor ---
@@ -583,7 +590,7 @@ class MultilevelILU:
         else:
             # recursively make new MILU factor
             self.S_pc = MultilevelILU(self.S, levels=new_levels)
-
+    
     def solve(self, rhs:np.ndarray):
         """solve the MILU preconditioner for multiple levels"""
         
@@ -593,7 +600,7 @@ class MultilevelILU:
         fine_rhs1 = rhs[self.fine_mask]
         # print(f"{fine_rhs1.shape=}")
         fine_soln1 = self.B_pc.solve(fine_rhs1)
-        x[self.fine_mask] = self.B_pc.solve(fine_soln1)
+        x[self.fine_mask] = fine_soln1
     
         # first pair of outer product terms from coarse solve
         coarse_rhs1 = self.E.dot(fine_soln1)
@@ -608,6 +615,24 @@ class MultilevelILU:
         fine_soln2 = self.B_pc.solve(self.F.dot(coarse_soln2))
         x[self.fine_mask] -= fine_soln2
         x[self.coarse_mask] += coarse_soln2
+
+        nxe_c = int(self.num_coarse_nodes**0.5) - 1
+        nxe_f = int(self.num_fine_nodes**0.5) - 1
+        # print(f"{self.num_coarse_nodes=} {self.num_fine_nodes=}")
+        # print(f"{nxe_c=} {coarse_rhs2.shape=}")
+        num_nodes = self.num_coarse_nodes + self.num_fine_nodes
+        nxe = int(num_nodes**0.5) - 1
+
+        # fig, ax = plt.subplots(1, 2, figsize=(8, 6), subplot_kw={'projection': '3d'})
+        # plot_plate_vec(nxe, rhs, ax=ax[0], sort_fw=np.arange(0, 6 * num_nodes))
+        # plot_plate_vec(nxe, x, ax=ax[1], sort_fw=np.arange(0, 6 * num_nodes))
+        # plt.show()
+
+        # fig, ax = plt.subplots(1, 2, figsize=(8, 6), subplot_kw={'projection': '3d'})
+        # plot_plate_vec(nxe_c, coarse_rhs2, ax=ax[0], sort_fw=np.arange(0, 6 * self.num_coarse_nodes))
+        # # coarse_soln22 = np.linalg.solve(self.S.toarray(), coarse_rhs2)
+        # plot_plate_vec(nxe_c, coarse_soln2, ax=ax[1], sort_fw=np.arange(0, 6 * self.num_coarse_nodes))
+        # plt.show()
 
         return x
 

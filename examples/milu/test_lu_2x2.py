@@ -124,12 +124,12 @@ def main():
     R2_norm = np.linalg.norm(R2.toarray())
     print(f"{R2_norm=:.4e}")
     
-    import matplotlib.pyplot as plt
-    # plt.imshow(A_diff.toarray())
-    fig, ax = plt.subplots(1, 2, figsize=(9, 6))
-    ax[0].imshow(precond.A.toarray())
-    ax[1].imshow(A_bsr.toarray())
-    plt.show()
+    # import matplotlib.pyplot as plt
+    # # plt.imshow(A_diff.toarray())
+    # fig, ax = plt.subplots(1, 2, figsize=(9, 6))
+    # ax[0].imshow(precond.A.toarray())
+    # ax[1].imshow(A_bsr.toarray())
+    # plt.show()
 
 
 if __name__ == "__main__":

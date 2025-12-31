@@ -103,12 +103,12 @@ def main():
     # --------------------------------------------------------
     # Visualize A and LU product
     # --------------------------------------------------------
-    fig, ax = plt.subplots(1, 2, figsize=(10, 5))
-    ax[0].imshow(A_bsr.toarray(), cmap='viridis')
-    ax[0].set_title('A BSR matrix')
-    ax[1].imshow(precond.A.toarray(), cmap='viridis')
-    ax[1].set_title('LU factorized (block)')
-    plt.show()
+    # fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+    # ax[0].imshow(A_bsr.toarray(), cmap='viridis')
+    # ax[0].set_title('A BSR matrix')
+    # ax[1].imshow(precond.A.toarray(), cmap='viridis')
+    # ax[1].set_title('LU factorized (block)')
+    # plt.show()
 
 
 if __name__ == "__main__":

@@ -37,6 +37,13 @@ for test_ind in range(100):
     err_nrm = np.linalg.norm(err)
     print(f"{err_nrm=:.4e}")
 
+    if err_nrm >= 1e-13:
+        print(f"{err_nrm=}")
+        fig, ax = plt.subplots(1, 2, figsize=(6, 6))
+        ax[0].imshow(B)
+        ax[1].imshow(Ainv)
+        plt.show()
+
     max_err = np.max([max_err, err_nrm])
 
 print(f"MAX_ERR = {max_err:.4e}")

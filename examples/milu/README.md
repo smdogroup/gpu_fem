@@ -1,5 +1,22 @@
 # Python examples of single and multilevel ILU for plate
 
+## TODO
+
+- [ ] look at plot precond scripts
+    * random clearly stabilizes solve some..
+    * and lower thickness breaks down the preconditioner.. but why?
+    * I couldn't seem to find errors in the LU factorization.. why is the stencil breaking down?
+    * is it because of the mixed integration singularities in the matrix? need better element type? nonphysical energy modes?
+
+### maybe tasks
+
+- [ ] add extra fillin for fine preconditioners Binv so that coarse solves are more accurate
+    * otherwise lower thickness schur complement is bad and coarse updates are bad..
+- [ ] write my own pivoted ILU factorization on GPU with level sets (to replace CuSparse no pivot ILU factor), if possible. will have to see if it is possible.
+
+
+## NOTES
+
 * implemented qordering and gauss-jordan ILU like in NASA SLAT and Qordering paper (see below)
     * still did not give enough performance for low thickness problems for ILU(0)-GMRES
     * this is because the smoother is not good enough predictor of global solution in many cases I don't think
@@ -20,6 +37,3 @@
     * see paper by: https://grandmaster.colorado.edu/copper/2016/StudentCompetition/Benzaken_Isogeometric_Multigrid.pdf
 
 
-### maybe tasks
-
-- [ ] write my own pivoted ILU factorization on GPU with level sets (to replace CuSparse no pivot ILU factor), if possible. will have to see if it is possible.
