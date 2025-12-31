@@ -7,6 +7,11 @@
     * and lower thickness breaks down the preconditioner.. but why?
     * I couldn't seem to find errors in the LU factorization.. why is the stencil breaking down?
     * is it because of the mixed integration singularities in the matrix? need better element type? nonphysical energy modes?
+- [ ] how to stabilize the local ILU(0) or ILU(k) factorization?
+    * more fillin, change matrix some, use ML, idk? 
+    * there has to be some way to recover more stable factorization like what Kyle Anderson did..
+- [ ] almost want to remove the nonphysical energy modes from the matrix in order to do the smoothing..
+    * so it solves a smoother version? would need asymptotic IGA elements for that no?
 
 ### maybe tasks
 
