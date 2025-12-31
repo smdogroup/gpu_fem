@@ -177,6 +177,7 @@ def block_milu6_factor(A_bsr, perm_xpts, scale:float=1e0):
         # -------------------------------------------------
         Bk = B[k]
         if k not in node_bcs:
+        # if True:
             G = Bk @ Bk.T
             if np.linalg.cond(G) < 1e8:
 
