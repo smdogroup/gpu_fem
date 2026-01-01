@@ -1,10 +1,11 @@
 
-from __src import get_tacs_matrix, sort_vis_maps, plot_plate_vec
-from __src import random_ordering, reorder_bsr6_nofill, right_pgmres, gen_plate_mesh
-from __ilu import GaussJordanBlockPrecond, q_ordering
+from __src import get_tacs_matrix, sort_vis_maps
+from __src import random_ordering, reorder_bsr6_nofill, gen_plate_mesh
+from __ilu import q_ordering
+from _fillin import ilu_k_pattern_bsr
 import numpy as np
 
-def make_plate_case(args, qorder_p:float=0.5, complex_load:bool=True):
+def make_plate_case(args, qorder_p:float=1.0, complex_load:bool=True):
     """make plate case helper function (to be used in this script for single-level ILU and the next script for multilevel ILU)"""
 
     gen_plate_mesh(nxe=args.nxe, lx=1.0, ly=1.0)
@@ -69,5 +70,8 @@ def make_plate_case(args, qorder_p:float=0.5, complex_load:bool=True):
         A = A0.copy()
         rhs = rhs0.copy()
         perm, iperm = np.arange(0, nnodes), np.arange(0, nnodes)
+
+    # add ILU(k) fillin to the matrix
+    A = ilu_k_pattern_bsr(A, k_fill=args.fill)
 
     return A0, rhs0, A, rhs, perm
