@@ -1,5 +1,4 @@
-# adapt qordering and other codes from NASA FUN3D SFE + SLAT
-# for qordering ILU(0)-GMRES with 6x6 block pivots..
+# single level ILU(0)-GMRES solve of reissner-mindlin plate (with optional Q-ordering)
 
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)

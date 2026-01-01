@@ -1,3 +1,5 @@
+# test LU on 3 node (6x6 block) BSR matrix
+
 import numpy as np
 import scipy.sparse as sp
 import scipy.linalg as la

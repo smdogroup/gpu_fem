@@ -1,5 +1,4 @@
-# adapt qordering and other codes from NASA FUN3D SFE + SLAT
-# for qordering ILU(0)-GMRES with 6x6 block pivots..
+# test gauss-jordan 6x6 block solves on plate
 
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)

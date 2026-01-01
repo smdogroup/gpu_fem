@@ -25,7 +25,7 @@
 
 ## OTHER NOTES
 
-* implemented qordering and gauss-jordan ILU like in NASA SLAT and Qordering paper (see below)
+* implemented qordering and gauss-jordan ILU
     * still did not give enough performance for low thickness problems for ILU(0)-GMRES
     * this is because the smoother is not good enough predictor of global solution in many cases I don't think
     * convergence only 1e-2 per 100 iterations also for qordering on uCRM wing for ILU(0) and Kyle Anderson's paper, https://fun3d.larc.nasa.gov/papers/anderson_aiaa_2020_3022.pdf

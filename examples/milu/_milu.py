@@ -61,7 +61,7 @@ def get_node_bcs(A_bsr):
 
 def block_milu6_factor(A_bsr, perm_xpts, scale:float=1e0):
     """
-    Modified ILU factorization based on Saad chapter 7 and :
+    Modified ILU factorization based on Saad chapter 7
         * Block ILU(0) Gauss-jordan for 6x6 block BSR matrix
     """
 
@@ -102,8 +102,7 @@ def block_milu6_factor(A_bsr, perm_xpts, scale:float=1e0):
     # print(f"{B.shape=}")
     # exit()
         
-    # ILU(0) with Gauss-Jordan solves
-    # based on NASA SLAT code
+    # ILU(0) with Gauss-Jordan solves (based on Saad chapter 7)
     for k in range(nnodes):
         j1 = rowp[k]
         j2 = rowp[k+1] - 1
@@ -134,13 +133,11 @@ def block_milu6_factor(A_bsr, perm_xpts, scale:float=1e0):
 
                     if jw != null_val:
                         if cols[jw] < nnodes and cols[jj] < nnodes:
-                            # they used SSE packed double intrinsics in NASA CPU-parallel code here
                             data[jw] -= tmat @ data[jj]
 
             j += 1
         # done with matmult loop in crout ILU? is this crout ILU?
 
-        # diagp is already set in my code, but SLAT is setting it..
         diagp[k] = j
         if jrow != k:
             print(f"zero pivot {k=} {jrow=} {j=} in ILUGJ stopping\n")
@@ -288,8 +285,7 @@ def block_ilu6_svdpert_factor(A_bsr, alpha:float=0.1):
     diagp = _get_diagp(A_bsr)
     
         
-    # ILU(0) with Gauss-Jordan solves
-    # based on NASA SLAT code
+    # ILU(0) with Gauss-Jordan solves based on saad chapter 7
     for k in range(nnodes):
         j1 = rowp[k]
         j2 = rowp[k+1] - 1
@@ -320,13 +316,11 @@ def block_ilu6_svdpert_factor(A_bsr, alpha:float=0.1):
 
                     if jw != null_val:
                         if cols[jw] < nnodes and cols[jj] < nnodes:
-                            # they used SSE packed double intrinsics in NASA CPU-parallel code here
                             data[jw] -= tmat @ data[jj]
 
             j += 1
         # done with matmult loop in crout ILU? is this crout ILU?
 
-        # diagp is already set in my code, but SLAT is setting it..
         diagp[k] = j
         if jrow != k:
             print(f"zero pivot {k=} {jrow=} {j=} in ILUGJ stopping\n")

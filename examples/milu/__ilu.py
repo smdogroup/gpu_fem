@@ -24,7 +24,6 @@ def gaussJordan(A, RHS):
 
         if ipeak != i:
             # swap i with ipeak in perm
-            # perm not computed in NASA's SLAT
             # maybe because the row-perm doens't affect Linv * Uinv?
             # cause cols not permuted
             _temp = perm[ipeak]
@@ -159,9 +158,9 @@ def sort_bsr_indices(A):
 
 def block_ilu6_gj_factor(A_bsr):
     """
-    ILU factorization based on NASA SLAT:
-        * Block ILU(0) Gauss-jordan for 6x6 block BSR matrix
-        * Directly based on NASA SLAT ilu6_sse code (DO NOT DISTRIBUTE)
+    ILU factorization based on Saad chapter 7 for BSR matrix:
+        * no pivoting between nodes
+        * pivoting performed in each 6x6 block nodal matrix using Gauss-Jordan exact inverse
     """
 
     # print(f"{A_bsr.shape=}")
@@ -181,8 +180,7 @@ def block_ilu6_gj_factor(A_bsr):
     diagp = _get_diagp(A_bsr)
     
         
-    # ILU(0) with Gauss-Jordan solves
-    # based on NASA SLAT code
+    # ILU(0) with Gauss-Jordan solves (Saad chapter 7)
     for k in range(nnodes):
         j1 = rowp[k]
         j2 = rowp[k+1] - 1
@@ -213,13 +211,11 @@ def block_ilu6_gj_factor(A_bsr):
 
                     if jw != null_val:
                         if cols[jw] < nnodes and cols[jj] < nnodes:
-                            # they used SSE packed double intrinsics in NASA CPU-parallel code here
                             data[jw] -= tmat @ data[jj]
 
             j += 1
         # done with matmult loop in crout ILU? is this crout ILU?
 
-        # diagp is already set in my code, but SLAT is setting it..
         diagp[k] = j
         if jrow != k:
             print(f"zero pivot {k=} {jrow=} {j=} in ILUGJ stopping\n")
@@ -243,9 +239,9 @@ def block_ilu6_gj_factor(A_bsr):
         
 def block_ilu6_gj_solve(A_lu, x, y):
     """
-    ILU solve based on NASA SLAT:
-        * Block ILU(0) Gauss-jordan for 6x6 block BSR matrix
-        * Directly based on NASA SLAT ilu6_sse code (DO NOT DISTRIBUTE)
+    ILU solve based on Saad chapter 7, for BSR matrix 6x6 block sizes
+        * 6x6 block solves use exact inverse from Gauss-Jordan (intra-block pivoting)
+        * no pivoting between blocks
     """
 
     # preamble (allocation)

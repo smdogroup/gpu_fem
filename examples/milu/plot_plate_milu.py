@@ -1,7 +1,5 @@
-# adapt qordering and other codes from NASA FUN3D SFE + SLAT
-# for qordering ILU(0)-GMRES with 6x6 block pivots..
-
-# Modified ILU with rigid body mode constraints
+# modified ILU(0)-GMRES solve of reissner-mindlin plate
+# (with optional Gauss-jordan vs SVD(alpha) block solver)
 
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
