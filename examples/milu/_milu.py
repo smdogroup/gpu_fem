@@ -259,6 +259,7 @@ def svd_pert_inverse(A, RHS, alpha=1e-12):
 
     # Threshold singular values
     s_thresh = np.maximum(s, alpha * sigma1)
+    # s_thresh = np.minimum(s, alpha * sigma1)
 
     # Invert singular values
     s_inv = 1.0 / s_thresh

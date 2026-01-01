@@ -3,11 +3,10 @@ import numpy as np
 import scipy.sparse as sp
 import matplotlib.pyplot as plt
 from __src import plot_plate_vec
-
-
 from __ilu import extract_bsr_triangular, sort_bsr_indices, _get_diagp, GaussJordanBlockPrecond, block_ilu6_gj_solve
 from _milu import BILU_SVD_Precond
 
+# based on multilevel ILU from https://arxiv.org/pdf/1901.03249 
 
 def block_ilu6_gj_solve_matmat_sym(B_lu, F):
     """
@@ -115,6 +114,7 @@ class DirectSolver:
         return x
 
 class MultilevelILU:
+    # based on multilevel ILU from https://arxiv.org/pdf/1901.03249 
     def __init__(self, A_bsr, levels:int=2, alpha:float=None):
         """
         compute a multilevel ILU splitting into [B, F; E, C]
@@ -123,7 +123,7 @@ class MultilevelILU:
         assert sp.isspmatrix_bsr(A_bsr)
         self.A = A_bsr.copy()
 
-        self.alhpa = alpha
+        self.alpha = alpha
         self.use_svd = alpha is not None
 
         self.B = None
@@ -243,7 +243,7 @@ class MultilevelILU:
 
         # --- compute B ILU factor ---
         if self.use_svd:
-            self.B_pc = BILU_SVD_Precond(self.B)
+            self.B_pc = BILU_SVD_Precond(self.B, alpha=self.alpha)
         else:
             self.B_pc = GaussJordanBlockPrecond(self.B)
         new_levels = self.levels - 1
