@@ -4,10 +4,9 @@
    and the ignored (nofill) entries lead to high errors for near thin-shell singular matrices and poor approx solutions
 
 ### TASKS
-- [ ] modified ILU with rigid body constraints like we do in AMG..
-    * see Saad chapter 7 modified ILU constraints (https://www-users.cse.umn.edu/~saad/IterMethBook_2ndEd.pdf) on how to change each row factor..
-    * see SA-AMG energy opt paper on orthogonal projectors.. https://link.springer.com/article/10.1007/s006070050022
-    * this could restore energy smoothness somewhat? but unclear..
+- [ ] deflated LU decomposition, https://epubs.siam.org/doi/epdf/10.1137/0721050
+- [ ] deflated GMRES (see if helps with BILU(0)-SVD stalling)
+
 
 
 ### COMMENTS
@@ -63,3 +62,11 @@
     * there has to be some way to recover more stable factorization like what Kyle Anderson did..
 - [ ] almost want to remove the nonphysical energy modes from the matrix in order to do the smoothing..
     * so it solves a smoother version? would need asymptotic IGA elements for that no?
+
+### done tasks
+
+
+- [x] modified ILU with rigid body constraints like we do in AMG..
+    * see Saad chapter 7 modified ILU constraints (https://www-users.cse.umn.edu/~saad/IterMethBook_2ndEd.pdf) on how to change each row factor..
+    * see SA-AMG energy opt paper on orthogonal projectors.. https://link.springer.com/article/10.1007/s006070050022
+    * this could restore energy smoothness somewhat? but unclear..
