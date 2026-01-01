@@ -242,3 +242,114 @@ class MILU_GJ_BlockPrecond:
         x = np.zeros_like(rhs)
         block_ilu6_gj_solve(self.A, x, rhs)
         return x
+    
+# ==========================================
+# Block ILU(k) SVD(alpha) for near singular systems
+# ==========================================
+
+
+
+def svd_pert_inverse(A, RHS, alpha=1e-12):
+    """
+    Compute pseudo-inverse of 6x6 matrix A with singular values thresholded by alpha*sigma1.
+    Result stored in RHS.
+    """
+    U, s, VT = np.linalg.svd(A)
+    sigma1 = s[0]
+
+    # Threshold singular values
+    s_thresh = np.maximum(s, alpha * sigma1)
+
+    # Invert singular values
+    s_inv = 1.0 / s_thresh
+
+    # Reconstruct pseudo-inverse
+    np.dot(VT.T * s_inv, U.T, out=RHS)
+
+
+def block_ilu6_svdpert_factor(A_bsr, alpha:float=0.1):
+    """block-ILU with SVD singular value perturbations, see page 23 of paper https://faculty.cc.gatech.edu/~echow/pubs/newapinv.pdf
+    supposed to handle and precondition near singular systems better"""
+
+    # same as block_ilu6_gj_factor from other script, uses Saad Chapter 7 ILU(0)-factor
+
+    # preamble (allocation)
+    assert isinstance(A_bsr, sp.sparse.bsr_matrix)
+    assert A_bsr.blocksize == (6,6)
+    A_copy = A_bsr.copy()
+    rowp = A_copy.indptr
+    cols = A_copy.indices
+    data = A_copy.data
+    nnodes = A_copy.shape[0] // 6
+    # null_val = 0
+    null_val = -1 # prob should be -1
+    iw = np.full(nnodes, null_val, dtype=int)
+    diagp = _get_diagp(A_bsr)
+    
+        
+    # ILU(0) with Gauss-Jordan solves
+    # based on NASA SLAT code
+    for k in range(nnodes):
+        j1 = rowp[k]
+        j2 = rowp[k+1] - 1
+    
+        for j in range(j1, j2+1):
+            iw[cols[j]] = j
+        
+        # also based on ilu_generic_template.h
+        # which is easier to read
+
+        j = j1 # lower triangular iteration here
+        while (j <= j2):
+            jrow = cols[j]
+            if (jrow >= k): 
+                break
+            else:
+                # make a temp matrix
+                # tmat = np.zeros((6,6), dtype=np.double)
+                tmat = data[j] @ data[diagp[jrow]]
+
+                if cols[j] < nnodes:
+                    data[j] = tmat.copy()
+
+                # upper triangular iteration
+                for jj in range(diagp[jrow] + 1, rowp[jrow+1]):
+                    # rowp to cols jj
+                    jw = iw[cols[jj]]
+
+                    if jw != null_val:
+                        if cols[jw] < nnodes and cols[jj] < nnodes:
+                            # they used SSE packed double intrinsics in NASA CPU-parallel code here
+                            data[jw] -= tmat @ data[jj]
+
+            j += 1
+        # done with matmult loop in crout ILU? is this crout ILU?
+
+        # diagp is already set in my code, but SLAT is setting it..
+        diagp[k] = j
+        if jrow != k:
+            print(f"zero pivot {k=} {jrow=} {j=} in ILUGJ stopping\n")
+            return
+
+        # now do diagonal factor with gauss-jordan inverse 6x6 block
+        tmat = data[j].copy()
+        data[j] *= 0.0
+
+        svd_pert_inverse(tmat, data[j], alpha)
+        
+        # reset iw pointer
+        for j in range(j1, j2+1):
+            iw[cols[j]] = null_val
+
+    return A_copy
+
+class BILU_SVD_Precond:
+    # block ILU(0)-SVD preconditioner (if more fillin in original pattern, equiv to ILU(k))
+    def __init__(self, A, alpha:float=0.1):
+        self.A = block_ilu6_svdpert_factor(A.copy(), alpha)
+
+    def solve(self, rhs):
+        x = np.zeros_like(rhs)
+        block_ilu6_gj_solve(self.A, x, rhs)
+        return x
+    
