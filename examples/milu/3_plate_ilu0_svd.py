@@ -30,12 +30,12 @@ if __name__ == "__main__":
     parser.add_argument("--noplot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
     parser.add_argument("--noprec", action=argparse.BooleanOptionalAction, default=False, help="remove preconditioner in GMRES")
     parser.add_argument("--thick", type=float, default=1e-2) # 2e-3
-    parser.add_argument("--alpha", type=float, default=0.1) # coefficient for singular value thresholding
+    parser.add_argument("--alpha", type=float, default=1e-4) # coefficient for singular value thresholding
     parser.add_argument("--nxe", type=int, default=20) # 10
     parser.add_argument("--fill", type=int, default=2) # ILU(k) fill level, 0 is also good to try sometimes
     args = parser.parse_args()
 
-    A0, rhs0, A, rhs, perm = make_plate_case(args)
+    A0, rhs0, A, rhs, perm = make_plate_case(args, qorder_p=0.5)
 
     N = A0.shape[0]
     nnodes = N // 6

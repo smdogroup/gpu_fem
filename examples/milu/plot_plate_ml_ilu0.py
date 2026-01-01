@@ -7,7 +7,8 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.simplefilter("ignore")
 
 from _plate import make_plate_case
-from __ilu import MultilevelILU
+
+from __mlev_ilu import MultilevelILU
 import scipy as sp
 from __src import right_pgmres, plot_plate_vec
 import matplotlib.pyplot as plt
@@ -27,6 +28,7 @@ if __name__ == "__main__":
     parser.add_argument("--noprec", action=argparse.BooleanOptionalAction, default=False, help="remove preconditioner in GMRES")
     parser.add_argument("--thick", type=float, default=1e-2) # 2e-3
     parser.add_argument("--nxe", type=int, default=20) # 10
+    parser.add_argument("--alpha", type=float, default=None) # 1e-2 if use it, coefficient for singular value thresholding
     parser.add_argument("--levels", type=int, default=2)
     parser.add_argument("--fill", type=int, default=2) # ILU(k) fill level, 0 is also good to try sometimes
     args = parser.parse_args()
@@ -47,7 +49,7 @@ if __name__ == "__main__":
     # 3) multi level ILU(0) and precond soln
     # =======================================================
 
-    precond = MultilevelILU(A, levels=args.levels)
+    precond = MultilevelILU(A, levels=args.levels, alpha=args.alpha)
         
     x_perm2 = precond.solve(rhs)
     x2 = x_perm2.reshape(nnodes, 6)[perm].reshape(-1)
