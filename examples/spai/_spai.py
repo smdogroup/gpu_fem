@@ -2,6 +2,14 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import numpy as np
 
+def norm1(A):
+    col_sums = []
+    for j in range(A.shape[1]):
+        s = 0.0
+        for i in range(A.shape[0]):
+            s += abs(A[i, j])
+        col_sums.append(s)
+    return max(col_sums)
 
 def norm1_AAT(A):
     # rows of A
@@ -20,8 +28,9 @@ def initial_guess(K):
     # not good with zero, and don't just want regular identity usually
     # in https://www.sciencedirect.com/science/article/pii/S0168927499000471?via%3Dihub paper
     # they suggest using identity scaled by 1/||A A^T||_1 (1-norm)
-    one_norm = norm1_AAT(K)
-    scale = 1.0 / one_norm
+    # one_norm = norm1_AAT(K)
+    # scale = 1.0 / one_norm**0.5 #**0.5
+    scale = 1.0 / norm1(K)
     print(f"{scale=}")
     return scale * np.eye(K.shape[0])
 
@@ -106,9 +115,10 @@ def compute_spai_dense_mr_self_precond(K_csr, iters:int=10):
     # compute dense numpy matrix for now.. sparse versions later..
     K = K_csr.toarray()
     N = K.shape[0]
-    M = np.eye(N)
+    # M = np.eye(N)
     # M = 1e-7 * np.eye(N)
-    # M = initial_guess(K) # from https://www.sciencedirect.com/science/article/pii/S0168927499000471?via%3Dihub, but kind of sucked..
+    M = initial_guess(K) # from https://www.sciencedirect.com/science/article/pii/S0168927499000471?via%3Dihub
+    # they used 1/one-norm(AA^T) * I_N as initial matrix (but that has wrong units, so I changed it for better results)
 
     for j in range(N): # each column of M
         ej = np.zeros(N)

@@ -30,7 +30,10 @@ parser.add_argument("--iters", type=int, default=5, help="num SPAI opt iters")
 parser.add_argument("--mode", type=str, default='SelfMR', help="type of SPAI precond: ['SDesc', 'MR', 'SelfMR']")
 args = parser.parse_args()
 
-A0, rhs0, A, rhs, perm = make_plate_case(args)
+# complex_load = True
+complex_load = False
+
+A0, rhs0, A, rhs, perm = make_plate_case(args, complex_load=complex_load)
 
 N = A0.shape[0]
 nnodes = N // 6

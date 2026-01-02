@@ -8,6 +8,8 @@ SPAI preconditioners don't suffer from zero pivots and may be much better for in
     - [ ] "Enhanced multi-level block ILU preconditioning strategies for general sparse linear systems", https://link.springer.com/chapter/10.1007/978-3-031-25820-6_11
         - [ ] implement block-level permutations, Schur complement, and multilevel solves...
         - [ ] explore its relationship to AMG..
+    - [ ] "BILUM: Block Versions of Multielimination and Multilevel ILU Preconditioner for General Sparse Linear Systems", https://epubs.siam.org/doi/10.1137/S106482759732753X
+    - [ ] "A survey of multilevel preconditioned iterative methods", https://link.springer.com/article/10.1007/BF01932745
 
     - [ ] from paper https://epubs.siam.org/doi/abs/10.1137/S0895479899364441
     - [ ] from paper https://onlinelibrary.wiley.com/doi/full/10.1002/nla.2183

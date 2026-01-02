@@ -20,12 +20,14 @@ class DirectSolver:
 class MultilevelSPAI:
     # multilevel splitting from MultilevelILU paper https://arxiv.org/pdf/1901.03249 
     # SPAI preconditioner from https://faculty.cc.gatech.edu/~echow/pubs/newapinv.pdf
-    def __init__(self, A_bsr, levels:int=2, iters:int=5):
+    def __init__(self, A_bsr, levels:int=2, iters:int=5, n_smooth:int=4, omega:float=0.7):
         # convert to dense (TODO later is to do sparse version)
         self.A = A_bsr
         self.A_dense = A_bsr.toarray()
         self.levels = levels   
         self.iters = iters 
+        self.n_smooth = n_smooth
+        self.omega = omega
 
         self.B = None
         self.F = None
@@ -146,10 +148,18 @@ class MultilevelSPAI:
 
         # --- compute schur complement ---
         # S = C - E * B^{-1} * F
-        M_Binv = self.B_pc.M
-        Y = M_Binv @ self.F
-        self.S = self.C - self.E @ Y
+        C_dense = self.C.toarray()
+        E_dense = self.E.toarray()
+        B_dense = self.B.toarray()
+        F_dense = self.F.toarray()
 
+        # exact schur complement (dense) FOR DEBUG
+        # self.S = C_dense - E_dense @ np.linalg.inv(B_dense) @ F_dense
+        
+        # approx schur complement
+        M_Binv = self.B_pc.M
+        Y = M_Binv @ F_dense
+        self.S = C_dense - E_dense @ Y
 
         # --- compute S ILU factor ---
         if new_levels <= 1:
@@ -160,29 +170,108 @@ class MultilevelSPAI:
             # recursively make new MILU factor
             self.S_pc = MultilevelSPAI(self.S, levels=new_levels)
     
-    def solve(self, rhs:np.ndarray):
-        """solve the MILU preconditioner for multiple levels"""
-        
-        # from Eq. 6 of https://arxiv.org/pdf/1901.03249
-        # first a fine solve
-        x = np.zeros_like(rhs)
-        fine_rhs1 = rhs[self.fine_mask]
-        # print(f"{fine_rhs1.shape=}")
-        fine_soln1 = self.B_pc.solve(fine_rhs1)
-        x[self.fine_mask] = fine_soln1
-    
-        # first pair of outer product terms from coarse solve
-        coarse_rhs1 = self.E.dot(fine_soln1)
-        coarse_soln1 = self.S_pc.solve(coarse_rhs1)
-        fine_soln1 = self.B_pc.solve(self.F.dot(coarse_soln1))
-        x[self.fine_mask] += fine_soln1
-        x[self.coarse_mask] -= coarse_soln1
+    # def solve_old(self, rhs:np.ndarray):
+    #     """solve the MILU preconditioner for multiple levels"""
+    # not great preconditioner.. cause not true multilevel, the separate Binv
+    # results in low compatibility..
+    #     # from Eq. 6 of https://arxiv.org/pdf/1901.03249
+    #     # first a fine solve
+    #     x = np.zeros_like(rhs)
+    #     fine_rhs1 = rhs[self.fine_mask]
+    #     # print(f"{fine_rhs1.shape=}")
+    #     fine_soln1 = self.B_pc.solve(fine_rhs1)
+    #     x[self.fine_mask] = fine_soln1
+    #     # first pair of outer product terms from coarse solve
+    #     coarse_rhs1 = self.E.dot(fine_soln1)
+    #     coarse_soln1 = self.S_pc.solve(coarse_rhs1)
+    #     fine_soln1 = self.B_pc.solve(self.F.dot(coarse_soln1))
+    #     x[self.fine_mask] += fine_soln1
+    #     x[self.coarse_mask] -= coarse_soln1
+    #     # outer product terms from coarse solve
+    #     coarse_rhs2 = rhs[self.coarse_mask]
+    #     coarse_soln2 = self.S_pc.solve(coarse_rhs2)
+    #     fine_soln2 = self.B_pc.solve(self.F.dot(coarse_soln2))
+    #     x[self.fine_mask] -= fine_soln2
+    #     x[self.coarse_mask] += coarse_soln2
+    #     return x
 
-        # outer product terms from coarse solve
-        coarse_rhs2 = rhs[self.coarse_mask]
-        coarse_soln2 = self.S_pc.solve(coarse_rhs2)
-        fine_soln2 = self.B_pc.solve(self.F.dot(coarse_soln2))
-        x[self.fine_mask] -= fine_soln2
-        x[self.coarse_mask] += coarse_soln2
+    def block_jacobi_smooth(self, x, rhs, omega=0.7, iters=2):
+        """
+        Block Jacobi smoother for BSR matrices.
+
+        Parameters
+        ----------
+        x : ndarray
+            Initial guess (modified in-place).
+        rhs : ndarray
+            Right-hand side.
+        omega : float
+            Damping factor.
+        iters : int
+            Number of smoothing sweeps.
+        """
+        A = self.A
+        bs = A.blocksize[0]
+        nblocks = A.shape[0] // bs
+
+        # Precompute inverse diagonal blocks
+        Dinv = [None] * nblocks
+        for i in range(nblocks):
+            row_start = A.indptr[i]
+            row_end   = A.indptr[i+1]
+            cols = A.indices[row_start:row_end]
+            data = A.data[row_start:row_end]
+
+            for j, col in enumerate(cols):
+                if col == i:
+                    Dinv[i] = np.linalg.inv(data[j])
+                    break
+            else:
+                raise RuntimeError(f"Missing diagonal block at row {i}")
+
+        for _ in range(iters):
+            r = rhs - A.dot(x)
+
+            for i in range(nblocks):
+                ii = slice(i*bs, (i+1)*bs)
+                x[ii] += omega * (Dinv[i] @ r[ii])
 
         return x
+
+
+    
+    def solve(self, rhs:np.ndarray):
+        """new multilevel ILU solve based on paper from page 8,
+        "Sparse approximate inverse and multilevel block ILU preconditioning techniques for general sparse matrices", 
+        https://www.sciencedirect.com/science/article/pii/S0168927499000471?via%3Dihub"""
+
+        x0 = np.zeros_like(rhs)
+        # pre-smoothing
+        x1 = self.block_jacobi_smooth(x0, rhs, omega=self.omega, iters=self.n_smooth)
+        rhs1 = rhs - self.A.dot(x1)
+
+        # rhs inputs
+        rhs_fine = rhs1[self.fine_mask]
+        rhs_coarse = rhs1[self.coarse_mask]
+
+        # forward elimination (like smooth + restrict)
+        y_fine = self.B_pc.solve(rhs_fine)
+        y_coarse = rhs_coarse - self.E.dot(y_fine)
+
+        # coarse solve
+        x_coarse = self.S_pc.solve(y_coarse)
+
+        # backward elim (like prolong + smooth)
+        # x_coarse = x_coarse (unchanged)
+        x_fine = self.B_pc.solve(y_fine - self.F.dot(x_coarse))
+
+        # store output soln
+        x = np.zeros_like(rhs) # solution / output
+        x[self.fine_mask] = x_fine * 1.0
+        x[self.coarse_mask] = x_coarse * 1.0
+
+        # then do a few jacobi smooth steps here.. on top..
+        # like in regular multigrid
+        x_smooth = self.block_jacobi_smooth(x, rhs, omega=self.omega, iters=self.n_smooth)
+
+        return x_smooth
