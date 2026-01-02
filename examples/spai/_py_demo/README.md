@@ -4,7 +4,7 @@ SPAI preconditioners don't suffer from zero pivots and may be much better for in
 
 - [x] implement FSAI based on this paper from Saad, https://faculty.cc.gatech.edu/~echow/pubs/newapinv.pdf
 - [ ] implement multilevel SPAI solvers
-    - [ ] "Sparse approximate inverse and multilevel block ILU preconditioning techniques for general sparse matrices", https://www.sciencedirect.com/science/article/pii/S0168927499000471?via%3Dihub
+    - [x] "Sparse approximate inverse and multilevel block ILU preconditioning techniques for general sparse matrices", https://www.sciencedirect.com/science/article/pii/S0168927499000471?via%3Dihub
     - [ ] "Enhanced multi-level block ILU preconditioning strategies for general sparse linear systems", https://link.springer.com/chapter/10.1007/978-3-031-25820-6_11
         - [ ] implement block-level permutations, Schur complement, and multilevel solves...
         - [ ] explore its relationship to AMG..
