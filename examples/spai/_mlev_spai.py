@@ -4,6 +4,13 @@ import scipy.sparse.linalg as spla
 import numpy as np
 from _spai import *
 
+# algebraic multilevel method mostly based on these papers
+# I did add jacobi smoother for restrict + prolong, whereas they do not (cause they have much simpler problem with Poisson I guess)
+# 1) https://www.sciencedirect.com/science/article/pii/S0168927499000471?via%3Dihub
+# 2) https://link.springer.com/chapter/10.1007/978-3-031-25820-6_11
+# 3) https://epubs.siam.org/doi/10.1137/S106482759732753X
+
+
 class DirectSolver:
     def __init__(self, A_bsr):
         # convert to dense matrix (full fillin)
