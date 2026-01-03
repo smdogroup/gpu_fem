@@ -17,6 +17,7 @@ Implementing SA-AMG:
     * main paper, https://www.sciencedirect.com/science/article/pii/S0898122114004143
     * aggregation from Maximal independent set, https://epubs.siam.org/doi/10.1137/110838844
     * they did parallel version in their paper of MIS (aggregation steps)
+    * see also this paper, https://link.springer.com/article/10.1007/s211-001-8015-y
 - [ ] implement other types of coarsening CLJP, PMIS, HMIS (see coarsening.py)
 - [ ] demo with Reissner-mindlin plate
 
