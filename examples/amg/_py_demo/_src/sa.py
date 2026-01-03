@@ -43,146 +43,276 @@ def get_rigid_body_modes(xpts, bcs, th:float=1.0):
 
     return Bpred
 
-
-# def bgs_bsr_smoother(A: bsr_matrix, P: bsr_matrix, num_iter: int = 1, omega: float = 1.0):
-#     """
-#     Block Gauss–Seidel smoother: (L + D)^(-1) * P for BSR matrices with 6x6 blocks.
-#     """
-#     if not isinstance(A, bsr_matrix) or not isinstance(P, bsr_matrix):
-#         raise TypeError("A and P must be bsr_matrix")
-#     if A.blocksize != (6, 6) or P.blocksize != (6, 6):
-#         raise ValueError("A and P must have blocksize (6,6)")
-
-#     ndof = 6
-#     nblocks_row = A.shape[0] // ndof
-
-#     Pnew = P.copy()
-
-#     for _ in range(num_iter):
-#         for i in range(nblocks_row):
-#             # Find diagonal block
-#             diag_idx = None
-#             for kk in range(A.indptr[i], A.indptr[i+1]):
-#                 if A.indices[kk] == i:
-#                     diag_idx = kk
-#                     break
-#             if diag_idx is None:
-#                 raise ValueError(f"No diagonal block in row {i}")
-#             Aii = A.data[diag_idx]
-
-#             # Compute update for row i
-#             row_update = np.zeros_like(Pnew.data[P.indptr[i]:P.indptr[i+1]])
-#             for kk in range(A.indptr[i], A.indptr[i+1]):
-#                 j = A.indices[kk]
-#                 if j >= i:  # only lower triangular part (L)
-#                     continue
-#                 Aij = A.data[kk]
-#                 for kp in range(P.indptr[j], P.indptr[j+1]):
-#                     k = P.indices[kp]
-#                     # find matching block in row i of P
-#                     for kpi in range(P.indptr[i], P.indptr[i+1]):
-#                         if P.indices[kpi] == k:
-#                             row_update[kpi - P.indptr[i]] += Aij @ Pnew.data[kp]
-#                             break
-
-#             # Apply diagonal inverse
-#             for local_idx, kp in enumerate(range(P.indptr[i], P.indptr[i+1])):
-#                 Pnew.data[kp] = (1 - omega) * Pnew.data[kp] + omega * np.linalg.solve(Aii, Pnew.data[kp] - row_update[local_idx])
-
-#     return Pnew
-
-import numpy as np
-from scipy.sparse import bsr_matrix
-
-def bgs_bsr_smoother(A: bsr_matrix, P: bsr_matrix, num_iter: int = 1, omega: float = 1.0):
+def block_jacobi_smooth_operator(A: bsr_matrix, P: bsr_matrix, omega=1.0):
     """
-    Block Gauss-Seidel forward solve for (L + D) X = P using 6x6 BSR blocks.
-    Returns X with the same sparsity pattern as P (i.e. same indices/indptr).
+    Apply block-Jacobi smoother:
+        P_new = (I - omega * D^{-1} A) P
     """
-    if not isinstance(A, bsr_matrix) or not isinstance(P, bsr_matrix):
-        raise TypeError("A and P must be scipy.sparse.bsr_matrix")
     if A.blocksize != (6, 6) or P.blocksize != (6, 6):
         raise ValueError("A and P must have blocksize (6,6)")
 
     ndof = 6
-    nblocks_row = A.shape[0] // ndof
+    nrows = A.shape[0] // ndof
 
-    # Build quick-access maps for A and P blocks
-    A_rows = {i: [] for i in range(nblocks_row)}
-    for i in range(nblocks_row):
-        for aidx in range(A.indptr[i], A.indptr[i+1]):
-            j = A.indices[aidx]
-            A_rows[i].append((j, A.data[aidx]))   # (column-block-index, 6x6 block)
+    # Extract D^{-1}
+    Dinv = []
+    for i in range(nrows):
+        for p in range(A.indptr[i], A.indptr[i + 1]):
+            if A.indices[p] == i:
+                Dinv.append(np.linalg.inv(A.data[p]))
+                break
+        else:
+            raise ValueError(f"Missing diagonal block at row {i}")
 
-    # P_blocks: mapping (i,k) -> block (copy)
-    P_blocks = {}
-    for i in range(nblocks_row):
-        for pidx in range(P.indptr[i], P.indptr[i+1]):
+    # Compute A * P
+    AP = A @ P
+
+    # Scale rows of AP by D^{-1}
+    AP_scaled = AP.copy()
+    for i in range(nrows):
+        for p in range(AP.indptr[i], AP.indptr[i + 1]):
+            AP_scaled.data[p] = Dinv[i] @ AP.data[p]
+
+    # P_new = P - omega * Dinv * A * P
+    P_new = P - omega * AP_scaled
+    return P_new
+
+def block_jacobi_smooth_operator_inplace(A, P, omega=1.0):
+    """
+    Block-Jacobi smoothing of P:
+        P <- (I - omega D^{-1} A) P
+    keeping P sparsity.
+    """
+    if A.blocksize != (6, 6) or P.blocksize != (6, 6):
+        raise ValueError("A and P must have blocksize (6,6)")
+
+    ndof = 6
+    nrows = A.shape[0] // ndof
+
+    # Extract D^{-1}
+    Dinv = [None] * nrows
+    for i in range(nrows):
+        for p in range(A.indptr[i], A.indptr[i + 1]):
+            if A.indices[p] == i:
+                Dinv[i] = np.linalg.inv(A.data[p])
+                break
+
+    Pnew = P.copy()
+
+    for i in range(nrows):
+        for pidx in range(P.indptr[i], P.indptr[i + 1]):
             k = P.indices[pidx]
-            P_blocks[(i, k)] = P.data[pidx].copy()
 
-    # Initialize X_blocks possibly from previous iteration (start zeros)
-    X_blocks = {}  # mapping (i,k) -> block (6x6)
+            accum = np.zeros((ndof, ndof))
+            for aidx in range(A.indptr[i], A.indptr[i + 1]):
+                j = A.indices[aidx]
 
-    for _it in range(num_iter):
-        # forward sweep over block-rows
-        for i in range(nblocks_row):
-            # find diagonal Aii
-            Aii = None
-            for (j, Aij) in A_rows[i]:
-                if j == i:
-                    Aii = Aij
-                    break
-            if Aii is None:
-                raise ValueError(f"No diagonal block found in A row {i}")
-            
-            print(f"brow {i=} => {Aii=}")
+                # find P_{j,k}
+                for q in range(P.indptr[j], P.indptr[j + 1]):
+                    if P.indices[q] == k:
+                        accum += A.data[aidx] @ P.data[q]
+                        break
 
-            # set of block-columns to compute in row i (only those present in P)
-            cols_i = [k for (ii, k) in P_blocks.keys() if ii == i]
-            if not cols_i:
-                # nothing to do for this row (P has no blocks here) -> continue
-                continue
+            Pnew.data[pidx] -= omega * (Dinv[i] @ accum)
 
-            print(f"brow {i=} => {cols_i=}")
-
-            for k in cols_i:
-                # compute rhs = P_{i,k} - sum_{j<i} A_{i,j} * X_{j,k}
-                rhs = P_blocks.get((i, k), np.zeros((ndof, ndof)))
-                # accumulate contributions from previously solved rows j < i
-                for (j, Aij) in A_rows[i]:
-                    if j >= i:
-                        continue
-                    x_jk = X_blocks.get((j, k))
-                    if x_jk is None:
-                        # if X_{j,k} was never present (sparsity), treat as zero
-                        continue
-                    rhs = rhs - (Aij @ x_jk)
-
-                # solve Aii * x = rhs
-                x_new = np.linalg.solve(Aii, rhs)
-
-                # relaxation with any previous X value (Gauss-Seidel omega)
-                x_old = X_blocks.get((i, k), np.zeros_like(x_new))
-                X_blocks[(i, k)] = (1.0 - omega) * x_old + omega * x_new
-
-    # assemble new data array preserving P's sparsity order
-    new_data = np.empty_like(P.data)
-    for i in range(nblocks_row):
-        pstart = P.indptr[i]
-        pend = P.indptr[i+1]
-        for pidx in range(pstart, pend):
-            k = P.indices[pidx]
-            block = X_blocks.get((i, k))
-            if block is None:
-                # If no computed block (shouldn't happen unless P had none), set zeros
-                block = np.zeros((ndof, ndof))
-            new_data[pidx] = block
-
-    Pnew = bsr_matrix((new_data, P.indices.copy(), P.indptr.copy()),
-                      shape=P.shape, blocksize=P.blocksize)
     return Pnew
 
+def gauss_seidel_csr(A, b, x0, num_iter=1):
+    """
+    Perform Gauss-Seidel smoothing for Ax = b
+    A: csr_matrix (assumed square)
+    b: RHS vector
+    x0: initial guess
+    num_iter: number of smoothing iterations
+    Returns: updated solution x
+    """
+    x = x0.copy()
+    n = A.shape[0]
+    for _ in range(num_iter):
+        for i in range(n):
+            row_start = A.indptr[i]
+            row_end = A.indptr[i + 1]
+            Ai = A.indices[row_start:row_end]
+            Av = A.data[row_start:row_end]
+
+            sum_ = 0.0
+            diag = 0.0
+            for idx, j in enumerate(Ai):
+                if j == i:
+                    diag = Av[idx]
+                else:
+                    sum_ += Av[idx] * x[j]
+            x[i] = (b[i] - sum_) / diag
+    return x
+
+def block_gauss_seidel_6dof(A, b: np.ndarray, x0: np.ndarray, num_iter=1):
+    """
+    Perform Block Gauss-Seidel smoothing for 6 DOF per node.
+    A: csr_matrix of size (6*nnodes, 6*nnodes)
+    b: RHS vector (6*nnodes,)
+    x0: initial guess (6*nnodes,)
+    num_iter: number of smoothing iterations
+    Returns updated solution vector x
+    """
+    x = x0.copy()
+    ndof = 6
+    n = A.shape[0] // ndof
+
+    for it in range(num_iter):
+        for i in range(n):
+            row_block_start = i * ndof
+            row_block_end = (i + 1) * ndof
+
+            # Initialize block and RHS
+            Aii = np.zeros((ndof, ndof))
+            rhs = b[row_block_start:row_block_end].copy()
+
+            for row_local, row in enumerate(range(row_block_start, row_block_end)):
+                for idx in range(A.indptr[row], A.indptr[row + 1]):
+                    col = A.indices[idx]
+                    val = A.data[idx]
+
+                    j = col // ndof
+                    dof_j = col % ndof
+
+                    col_block_start = j * ndof
+                    col_block_end = (j + 1) * ndof
+
+                    if j == i:
+                        Aii[row_local, dof_j] = val  # Fill local diag block
+                    else:
+                        rhs[row_local] -= val * x[col]
+
+            # Check for singular or ill-conditioned diagonal block
+            try:
+                # import matplotlib.pyplot as plt
+                # plt.imshow(np.log(1 + Aii**2))
+                # plt.show()
+                # print(f"{Aii=}")
+                x[row_block_start:row_block_end] = np.linalg.solve(Aii, rhs)
+            except np.linalg.LinAlgError:
+                print(f"Warning: singular block at node {i}, skipping update.")
+                continue
+
+    return x
+
+def sort_vis_maps(nxe, xpts, free_dof):
+    """create dof maps from reordered red to unsorted full and reverse"""
+    # first is unsort_red to sort_free
+    nx = nxe + 1
+    N = nx**2
+    nred = len(free_dof)
+    nfree = 6 * N
+    x, y = xpts[0::3], xpts[1::3]
+    # node_sort_map = np.lexsort((y, x))  # lexsort uses last index first, so (y, x) gives x primary, y secondary
+    node_sort_map = np.lexsort((x, y))  # lexsort uses last index first, so (y, x) gives x primary, y secondary
+    # temp if don't want to resort basically
+    # node_sort_map = np.arange(node_sort_map.shape[0])
+    inv_node_sort_map = np.empty_like(node_sort_map)
+    inv_node_sort_map[node_sort_map] = np.arange(N)
+
+    sort_free_fw_map = np.zeros(nred, dtype=np.int32)
+    sort_free_bk_map = -np.ones(nfree, dtype=np.int32) # -1 if not free var
+    for ired in range(nred):
+        ifree = free_dof[ired]
+        inode = ifree // 6
+        idof = ifree % 6
+
+        inode_sort = inv_node_sort_map[inode]
+        ifree_sort = 6 * inode_sort + idof
+
+        sort_free_fw_map[ired] = ifree_sort
+        sort_free_bk_map[ifree_sort] = ired
+
+    return sort_free_fw_map, sort_free_bk_map
+
+def mg_coarse_fine_operators_v2(nxe_fine, sort_bk_fine, sort_bk_coarse, bcs_list=None):
+    """include a bit of reordering in the Ifc and Icf operators, also we first include then remove the bcs.."""
+    # uses the FEA Lagrange basis of quad elements (needs to match FEA basis to get disps coarse to fine with consistent loads)
+    # 1st order interp is not sufficient to give accurate 2nd derivs or forces for bending (ahh, maybe axial would be fine, but not bending..)
+
+    nxe_coarse = nxe_fine // 2
+    nxc = nxe_coarse + 1
+    nxf = nxe_fine + 1
+    Nc = nxc**2
+    Nf = nxf**2
+    # assumes it does have bcs here..
+    Nc_dof = Nc * 6
+    Nf_dof = Nf * 6
+
+    # first include all nodes, then we'll remove the 
+    I_cf = np.zeros((Nf_dof, Nc_dof)) # coarse to fine
+
+    for i_c in range(Nc_dof):
+        # coarse point
+        idof = i_c % 6
+        inode_c = i_c // 6
+        iyc = inode_c // nxc
+        ixc = inode_c % nxc
+
+        # corresponding fine point
+        ixf = 2 * ixc
+        iyf = 2 * iyc
+        inode_f = nxf * iyf + ixf
+        i_f = 6 * inode_f + idof
+
+        # lagrange interpolated basis
+
+        # fine and coarse node match
+        I_cf[i_f, i_c] = 1.0
+
+        if ixc < nxc - 1:
+            # fine node half-way to right
+            I_cf[i_f + 6, i_c] = 0.5
+            I_cf[i_f + 6, i_c + 6] = 0.5
+
+        if iyc < nxc - 1:
+            # fine node half-way up
+            I_cf[i_f + 6 * nxf, i_c] = 0.5
+            I_cf[i_f + 6 * nxf, i_c + 6 * nxc] = 0.5  
+
+        if ixc < nxc - 1 and iyc < nxc - 1:
+            # fine node half to right and half up
+            _if = i_f + 6 * nxf + 6
+            I_cf[_if, i_c] = 0.25
+            I_cf[_if, i_c + 6] = 0.25
+            I_cf[_if, i_c + 6 * nxc] = 0.25
+            I_cf[_if, i_c + 6 * nxc + 6] = 0.25  
+
+    # remove bcs and apply sorting (since the I_fc currently is perfectly sorted)
+    I_cf_0 = I_cf.copy() # fine to coarse mapping
+
+    nc_keep = np.sum(sort_bk_coarse != -1)
+    nf_keep = np.sum(sort_bk_fine != -1)
+    I_cf = np.zeros((nf_keep, nc_keep))
+
+    # print(f"{nf_keep=} {Nf_dof=}")
+
+    for i_c in range(Nc_dof):
+        i2_c = sort_bk_coarse[i_c]
+        if i2_c == -1: continue
+
+        for i_f in range(Nf_dof):
+            i2_f = sort_bk_fine[i_f]
+            if i2_f == -1: continue
+
+            # now copy from old mapping operator
+            I_cf[i2_f, i2_c] = I_cf_0[i_f, i_c]
+
+    # plt.imshow(I_fc)
+    # plt.show()
+
+    # remove bcs for case where we kept them
+    if bcs_list is not None:
+        bcs_fine = np.array(bcs_list[0])
+        bcs_coarse = np.array(bcs_list[1])
+        I_cf[bcs_fine,:] *= 0.0
+        I_cf[:,bcs_coarse] *= 0.0
+    
+    # coarse to fine is transpose operator
+    I_fc = I_cf.T
+
+    return I_cf, I_fc
 
 
 def orthog_nullspace_projector(P: csr_matrix, B:np.ndarray, bcs:np.ndarray):

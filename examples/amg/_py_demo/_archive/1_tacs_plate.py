@@ -7,9 +7,9 @@ sys.path.append("_src/")
 
 import numpy as np
 import matplotlib.pyplot as plt
-from __src import get_tacs_matrix, reduced_indices, plot_vec_compare_all, plot_plate_vec
-from __src import gauss_seidel_csr, block_gauss_seidel_6dof, mg_coarse_fine_operators_v2, sort_vis_maps
-from sa import get_rigid_body_modes, bgs_bsr_smoother, orthog_nullspace_projector
+from tacs_ref import get_tacs_matrix, reduced_indices, plot_vec_compare_all, plot_plate_vec, gen_plate_bdf
+from sa import gauss_seidel_csr, block_gauss_seidel_6dof, mg_coarse_fine_operators_v2, sort_vis_maps
+from sa import get_rigid_body_modes, orthog_nullspace_projector
 import scipy as sp
 from scipy.sparse import bsr_matrix
 from scipy.sparse.linalg import spsolve
@@ -42,7 +42,9 @@ thickness = 1.0 / args.SR
 nxe_list = [16, 8]
 
 for nxe in nxe_list:
-    _tacs_bsr_mat, _rhs, _xpts = get_tacs_matrix(f"_src/plate{nxe}.bdf", thickness=thickness)
+    gen_plate_bdf(nxe=nxe, apply_bcs=True)
+
+    _tacs_bsr_mat, _rhs, _xpts = get_tacs_matrix(f"plate{nxe}.bdf", thickness=thickness)
     # print(f"{_tacs_bsr_mat.shape=}") 
     # exit()
     _tacs_csr_mat = _tacs_bsr_mat.copy().tocsr().copy()

@@ -6,7 +6,7 @@ import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
 from _spai import *
 import sys
-sys.path.append("../milu/")
+sys.path.append("../../milu/")
 from __src import right_pgmres
 
 def poisson_2d_csr(nx, ny, hx=1.0, hy=1.0):

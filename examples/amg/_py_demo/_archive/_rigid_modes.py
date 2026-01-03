@@ -6,7 +6,7 @@ sys.path.append("_src/")
 
 import numpy as np
 import matplotlib.pyplot as plt
-from __src import get_tacs_matrix, delete_rows_and_columns, reduced_indices
+from tacs_ref import get_tacs_matrix, delete_rows_and_columns, reduced_indices
 import scipy as sp
 from scipy.sparse.linalg import spsolve
 from mpl_toolkits.mplot3d import Axes3D  # This import registers the 3D projection, even if not used directly.

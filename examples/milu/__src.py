@@ -285,6 +285,94 @@ def right_pgmres(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None):
     print(f"GMRES final resid {beta=}")
     return x
 
+def right_pcg(A, b, x0=None, tol=1e-8, max_iter=1000, M=None):
+    """
+    Right-preconditioned Conjugate Gradient method
+
+    Solves: A M^{-1} y = b, with x = M^{-1} y
+
+    Parameters
+    ----------
+    A : callable or sparse matrix
+        Linear operator A(x) or sparse matrix
+    b : ndarray
+        Right-hand side
+    x0 : ndarray, optional
+        Initial guess for x
+    tol : float
+        Convergence tolerance on ||r||
+    max_iter : int
+        Maximum iterations
+    M : object, optional
+        Preconditioner with method M.solve(x) ≈ M^{-1} x
+
+    Returns
+    -------
+    x : ndarray
+        Approximate solution
+    """
+
+    n = len(b)
+
+    if x0 is None:
+        x = np.zeros(n)
+    else:
+        x = x0.copy()
+
+    # Preconditioner application
+    if M is None:
+        Minv = lambda x: x
+    else:
+        Minv = lambda x: M.solve(x)
+
+    # Initial residual
+    r = b - (A @ x)
+    norm_r0 = np.linalg.norm(r)
+
+    if norm_r0 < tol:
+        return x
+
+    # Right-preconditioned variables
+    z = Minv(r)              # z = M^{-1} r
+    p = z.copy()
+
+    rz_old = np.dot(r, z)
+
+    print(f"PCG iter 0: ||r|| = {norm_r0:.3e}")
+
+    for k in range(1, max_iter + 1):
+
+        # Apply A M^{-1}
+        Ap = A @ p
+
+        alpha = rz_old / np.dot(p, Ap)
+
+        # Update y-space implicitly via x
+        x += alpha * p
+
+        # Residual in original space
+        r -= alpha * Ap
+        norm_r = np.linalg.norm(r)
+
+        if (k % 10 == 0) or norm_r < tol:
+            print(f"PCG iter {k}: ||r|| = {norm_r:.3e}")
+
+        if norm_r < tol:
+            break
+
+        # Apply preconditioner
+        z = Minv(r)
+        rz_new = np.dot(r, z)
+
+        beta = rz_new / rz_old
+        p = z + beta * p
+
+        rz_old = rz_new
+
+    print(f"PCG finished at iter {k}, ||r|| = {norm_r:.3e}")
+    return x
+
+
 
 def random_ordering(N):
     # give new nofill pattern for random ordering
