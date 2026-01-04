@@ -285,9 +285,9 @@ def right_pgmres(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None):
     print(f"GMRES final resid {beta=}")
     return x
 
-def right_pcg(A, b, x0=None, tol=1e-8, max_iter=1000, M=None):
+def right_pcg(A, b, x0=None, rtol=1e-8, atol=1e-7, max_iter=1000, M=None):
     """
-    Right-preconditioned Conjugate Gradient method
+    Right-preconditioned Conjugate Gradient method (version from my scitech paper)
 
     Solves: A M^{-1} y = b, with x = M^{-1} y
 
@@ -329,45 +329,39 @@ def right_pcg(A, b, x0=None, tol=1e-8, max_iter=1000, M=None):
     r = b - (A @ x)
     norm_r0 = np.linalg.norm(r)
 
-    if norm_r0 < tol:
+    if norm_r0 < atol:
         return x
-
-    # Right-preconditioned variables
-    z = Minv(r)              # z = M^{-1} r
-    p = z.copy()
-
-    rz_old = np.dot(r, z)
+    
+    rz_old = None
+    rz = None
 
     print(f"PCG iter 0: ||r|| = {norm_r0:.3e}")
 
     for k in range(1, max_iter + 1):
 
-        # Apply A M^{-1}
-        Ap = A @ p
+        z = Minv(r)
+        rz = np.dot(r, z)
 
-        alpha = rz_old / np.dot(p, Ap)
+        if k == 1:
+            p = z.copy()
+        else:
+            beta = rz / rz_old
+            p = z + beta * p_old
 
-        # Update y-space implicitly via x
+        p_old = p.copy()
+        rz_old = rz * 1.0
+
+        w = A @ p
+        alpha = rz / np.dot(w, p)
         x += alpha * p
-
-        # Residual in original space
-        r -= alpha * Ap
+        r -= alpha * w
         norm_r = np.linalg.norm(r)
 
-        if (k % 10 == 0) or norm_r < tol:
+        if (k % 10 == 0) or norm_r < (atol + rtol * norm_r):
             print(f"PCG iter {k}: ||r|| = {norm_r:.3e}")
 
-        if norm_r < tol:
+        if norm_r < (atol + rtol * norm_r):
             break
-
-        # Apply preconditioner
-        z = Minv(r)
-        rz_new = np.dot(r, z)
-
-        beta = rz_new / rz_old
-        p = z + beta * p
-
-        rz_old = rz_new
 
     print(f"PCG finished at iter {k}, ||r|| = {norm_r:.3e}")
     return x

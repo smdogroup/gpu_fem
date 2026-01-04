@@ -145,6 +145,37 @@ def gauss_seidel_csr(A, b, x0, num_iter=1):
             x[i] = (b[i] - sum_) / diag
     return x
 
+def gauss_seidel_csr_transpose(A, b, x0, num_iter=1):
+    """
+    Backward (transpose) Gauss-Seidel smoothing for Ax = b
+    A: csr_matrix (assumed square)
+    b: RHS vector
+    x0: initial guess
+    num_iter: number of smoothing iterations
+    Returns: updated solution x
+    """
+    x = x0.copy()
+    n = A.shape[0]
+
+    for _ in range(num_iter):
+        for i in range(n - 1, -1, -1):
+            row_start = A.indptr[i]
+            row_end = A.indptr[i + 1]
+            Ai = A.indices[row_start:row_end]
+            Av = A.data[row_start:row_end]
+
+            sum_ = 0.0
+            diag = 0.0
+            for idx, j in enumerate(Ai):
+                if j == i:
+                    diag = Av[idx]
+                else:
+                    sum_ += Av[idx] * x[j]
+
+            x[i] = (b[i] - sum_) / diag
+
+    return x
+
 def block_gauss_seidel_6dof(A, b: np.ndarray, x0: np.ndarray, num_iter=1):
     """
     Perform Block Gauss-Seidel smoothing for 6 DOF per node.

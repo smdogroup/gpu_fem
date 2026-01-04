@@ -6,20 +6,22 @@ import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
 import sys
 sys.path.append("../../milu/")
-from __src import right_pgmres
+# from __src import right_pgmres
 from __src import right_pcg
 sys.path.append("_src/")
 from poisson import poisson_2d_csr, plot_poisson_surface, poisson_apply_bcs
 from aggregation import greedy_serial_aggregation_csr, plot_plate_aggregation
-from aggregation import tentative_prolongator_csr, smooth_prolongator_csr, galerkin_coarse_grid_csr
-from aggregation import AMG2GridSolver
+from aggregation import tentative_prolongator_csr, smooth_prolongator_csr
+from aggregation import AMGSolver
 from sa import gauss_seidel_csr
 
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--nxe", type=int, default=50, help="num nodes each direction")
+parser.add_argument("--kernel", action=argparse.BooleanOptionalAction, default=False, help="enforce near kernel constr on prolong update")
 # parser.add_argument("--smoothP", type=int, default=1, help="whether to smooth prolongation or not")
 parser.add_argument("--debug", type=int, default=0, help="debug printouts")
+parser.add_argument("--justpc", action=argparse.BooleanOptionalAction, default=False, help="yes: just use pc one vec, default of no: solve with PCG")
 args = parser.parse_args()
 
 # ------------------------------------------------------------
@@ -47,7 +49,10 @@ A = poisson_apply_bcs(A_free, f, nx, ny)
 # ------------------------------------------------------------
 # 1) Direct Solve (for true soln)
 # ------------------------------------------------------------
+import time
+start_direct = time.time()
 u_truth = spla.spsolve(A.copy(), f)
+time_direct = time.time() - start_direct
 
 # ------------------------------------------------------------
 # 2) aggregation and tentative prolongator construction
@@ -79,7 +84,7 @@ if args.debug:
     R = P.T # sym matrix so restriction is transpose prolong
 
     # galerkin coarse grid construction
-    Ac = galerkin_coarse_grid_csr(R, A, P)
+    Ac = R @ (A @ P)
 
     print(f"{Ac.shape=}")
 
@@ -115,16 +120,24 @@ if args.debug:
 # GMRES Solve
 # ------------------------------------------------------------
 
+# A_free = A.copy() # if A was not BC version.. # makes it much slower, more memory and more DOF
+
 # precond = None
-precond = AMG2GridSolver(A_free, A, threshold=0.25, omega=0.7, pre_smooth=1, post_smooth=1)
+# threshold = 0.25 is default..
+# needed a lower threshold to get the coarsening to work right on one of the levels.. (would coarsen from 454 to 454 nodes... then next time would work better)
+precond = AMGSolver(A_free, A, threshold=0.1, omega=0.7, pre_smooth=1, post_smooth=1, near_kernel=args.kernel)
 
-# u2 = precond.solve(f)
-u2 = right_pgmres(A, b=f, x0=None, restart=500, max_iter=500, M=precond)
+if args.justpc:
+    u2 = precond.solve(f)
+else:
+    # needed to do M and then M^T pre and post smooths to make AMG precond symmetric for PCG..
+    # u2 = right_pcg_v0(A, b=f, x0=None, M=precond)
+    start_pcg = time.time()
+    u2 = right_pcg(A, b=f, x0=None, M=precond)
+    time_pcg = time.time() - start_pcg
+    print(f"{time_direct=:.4e} {time_pcg=:.4e}")
 
-# not quite transpose symmetric on post-smooth, hence PCG slowing down some?
-# and thus GMRES better at the moment
-# u2 = right_pcg(A, b=f, x0=None, M=precond)
-
+# u2 = right_pgmres(A, b=f, x0=None, restart=500, max_iter=500, M=precond)
 
 # ------------------------------------------------------------
 # Plot
