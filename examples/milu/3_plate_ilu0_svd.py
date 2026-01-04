@@ -33,7 +33,7 @@ if __name__ == "__main__":
     parser.add_argument("--fill", type=int, default=2) # ILU(k) fill level, 0 is also good to try sometimes
     args = parser.parse_args()
 
-    A0, rhs0, A, rhs, perm = make_plate_case(args, qorder_p=0.5)
+    A0, rhs0, A, rhs, perm, xpts0 = make_plate_case(args, qorder_p=0.5)
 
     N = A0.shape[0]
     nnodes = N // 6

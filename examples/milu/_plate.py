@@ -5,10 +5,10 @@ from __ilu import q_ordering
 from _fillin import ilu_k_pattern_bsr
 import numpy as np
 
-def make_plate_case(args, qorder_p:float=1.0, complex_load:bool=True):
+def make_plate_case(args, qorder_p:float=1.0, complex_load:bool=True, apply_bcs:bool=True):
     """make plate case helper function (to be used in this script for single-level ILU and the next script for multilevel ILU)"""
 
-    gen_plate_mesh(nxe=args.nxe, lx=1.0, ly=1.0)
+    gen_plate_mesh(nxe=args.nxe, lx=1.0, ly=1.0, apply_bcs=apply_bcs)
 
     # ====================================================
     # 1) create and assemble FEA problem
@@ -21,7 +21,12 @@ def make_plate_case(args, qorder_p:float=1.0, complex_load:bool=True):
     else: # simple load
         load_fcn = lambda _x, _y : 1.0
 
-    A00, rhs00, xpts = get_tacs_matrix(bdf_file="plate.bdf", thickness=thickness, load_fcn=load_fcn)
+    if apply_bcs:
+        bdf_file = "plate.bdf"
+    else:
+        bdf_file = "plate_nobc.bdf"
+
+    A00, rhs00, xpts = get_tacs_matrix(bdf_file=bdf_file, thickness=thickness, load_fcn=load_fcn)
 
     # doesn't quite work because the matrix values are not computed to higher precision first?
 
@@ -74,4 +79,4 @@ def make_plate_case(args, qorder_p:float=1.0, complex_load:bool=True):
     # add ILU(k) fillin to the matrix
     A = ilu_k_pattern_bsr(A, k_fill=args.fill)
 
-    return A0, rhs0, A, rhs, perm
+    return A0, rhs0, A, rhs, perm, xpts

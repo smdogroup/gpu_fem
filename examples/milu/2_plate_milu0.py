@@ -32,7 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--fill", type=int, default=2) # ILU(k) fill level, 0 is also good to try sometimes
     args = parser.parse_args()
 
-    A0, rhs0, A, rhs, perm = make_plate_case(args)
+    A0, rhs0, A, rhs, perm, xpts0 = make_plate_case(args)
 
     N = A0.shape[0]
     nnodes = N // 6
@@ -65,7 +65,7 @@ if __name__ == "__main__":
     # =======================================================
 
     # print(f"{type(A)=}")
-    precond = MILU_GJ_BlockPrecond(A, perm_xpts)
+    precond = MILU_GJ_BlockPrecond(A, perm, xpts0_xpts)
         
     x_perm2 = right_pgmres(A, b=rhs, x0=None, restart=500, max_iter=500, M=precond if not(args.noprec) else None)
     x2 = x_perm2.reshape(nnodes, 6)[perm].reshape(-1)

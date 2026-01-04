@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.sparse as sp
 import matplotlib.pyplot as plt
-from sa import gauss_seidel_csr, gauss_seidel_csr_transpose
+from smoothers import gauss_seidel_csr, gauss_seidel_csr_transpose
 
 def strength_matrix_csr(A:sp.csr_matrix, threshold:float=0.25):
     """
@@ -180,9 +180,6 @@ def smooth_prolongator_csr(T:sp.csr_matrix, A:sp.csr_matrix, bc_flags:np.ndarray
         AT = scalar_orthog_projector(AT, bc_flags)
         AT = AT.tocsr()
     DAT = AT.multiply(Dinv[:, None])
-
-
-
     newP = T - omega * DAT
     return newP
 

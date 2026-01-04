@@ -24,7 +24,7 @@ if __name__ == "__main__":
     parser.add_argument("--nxe", type=int, default=20) # 10
     args = parser.parse_args()
 
-    A0, rhs0, A, rhs, perm = make_plate_case(args)
+    A0, rhs0, A, rhs, perm, xpts0 = make_plate_case(args)
 
     N = A0.shape[0]
     nnodes = N // 6

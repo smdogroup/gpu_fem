@@ -429,7 +429,7 @@ def write_80(fout, line):
 
 import numpy
 
-def gen_plate_mesh(nxe:int=10, lx:float=1.0, ly:float=1.0, name="plate"):
+def gen_plate_mesh(nxe:int=10, lx:float=1.0, ly:float=1.0, name="plate", apply_bcs:bool=True):
     # Overall plate dimensions lx, ly
     # Number of components in each direction
     ncx = 1
@@ -458,7 +458,8 @@ def gen_plate_mesh(nxe:int=10, lx:float=1.0, ly:float=1.0, name="plate"):
         for j in range(nx):
             nid[j, i] = count
             if j == 0 or j == nx - 1 or i == 0 or i == (ny-1):
-                bcnodes.append(count)
+                if apply_bcs:
+                    bcnodes.append(count)
             count += 1
 
     # Connectivity
@@ -477,7 +478,10 @@ def gen_plate_mesh(nxe:int=10, lx:float=1.0, ly:float=1.0, name="plate"):
 
 
     # Write BDF
-    output_file = name + ".bdf"
+    if apply_bcs:
+        output_file = name + ".bdf"
+    else:
+        output_file = name + "_nobc.bdf"
 
     with open(output_file, "w") as fout:
         write_80(fout, "SOL 103")

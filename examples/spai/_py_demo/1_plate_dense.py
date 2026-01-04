@@ -6,7 +6,7 @@ import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
 from _spai import *
 import sys
-sys.path.append("../milu/")
+sys.path.append("../../milu/")
 from _plate import make_plate_case
 from __src import right_pgmres, plot_plate_vec
 
@@ -33,7 +33,7 @@ args = parser.parse_args()
 # complex_load = True
 complex_load = False
 
-A0, rhs0, A, rhs, perm = make_plate_case(args, complex_load=complex_load)
+A0, rhs0, A, rhs, perm, xpts0 = make_plate_case(args, complex_load=complex_load)
 
 N = A0.shape[0]
 nnodes = N // 6

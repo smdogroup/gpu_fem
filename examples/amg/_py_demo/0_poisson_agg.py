@@ -10,9 +10,9 @@ sys.path.append("../../milu/")
 from __src import right_pcg
 sys.path.append("_src/")
 from poisson import poisson_2d_csr, plot_poisson_surface, poisson_apply_bcs
-from aggregation import greedy_serial_aggregation_csr, plot_plate_aggregation
-from aggregation import tentative_prolongator_csr, smooth_prolongator_csr
-from aggregation import AMGSolver
+from csr_aggregation import greedy_serial_aggregation_csr, plot_plate_aggregation
+from csr_aggregation import tentative_prolongator_csr, smooth_prolongator_csr
+from csr_aggregation import AMGSolver
 from sa import gauss_seidel_csr
 
 import argparse
