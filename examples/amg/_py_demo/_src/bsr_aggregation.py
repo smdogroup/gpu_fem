@@ -138,7 +138,7 @@ def get_coarse_rigid_body_modes(B:np.ndarray, xpts:np.ndarray, aggregate_ind:np.
         xpts_c[iagg] = np.mean(xpts[agg_nodes], axis=0)
     return R, xpts_c
 
-def tentative_prolongator_bsr(B: np.ndarray, aggregate_ind: np.ndarray):
+def tentative_prolongator_bsr(B: np.ndarray, aggregate_ind: np.ndarray, bc_flags:np.ndarray):
     nnodes = aggregate_ind.shape[0]
     num_agg = np.max(aggregate_ind) + 1
 
@@ -172,6 +172,14 @@ def tentative_prolongator_bsr(B: np.ndarray, aggregate_ind: np.ndarray):
 
         # Store Rk if you need the coarse nullspace
         R[iagg] = Rk
+
+    # since tentative prolongator has only one block nonzero per fine node
+    # was missing this before, need this with AMG (otherwise will get NZ deflection in fine prolong)
+    for inode in range(nnodes):
+        for ii in range(6):
+            idof = 6 * inode + ii
+            if bc_flags[idof]: # apply dirichlet bcs
+                data[inode,ii,:] = 0.0
 
     P0 = sp.bsr_matrix((data, cols, rowp), blocksize=(6, 6))
     return P0, R
@@ -245,8 +253,8 @@ def orthog_nullspace_projector(P: sp.bsr_matrix, Bc: np.ndarray, bcs: np.ndarray
 
         # DEBUG : double check linear system..
         # new PU should be zero in this row
-        new_PU = sum(Pnew.data[P.indptr[brow]+j] @ U_list[j] for j in range(ncols))
-        new_PU_nrm = np.linalg.norm(new_PU)
+        # new_PU = sum(Pnew.data[P.indptr[brow]+j] @ U_list[j] for j in range(ncols))
+        # new_PU_nrm = np.linalg.norm(new_PU)
         # print(f'{brow=} : {new_PU_nrm=:.4e}')
 
     # exit()
@@ -343,28 +351,25 @@ def spectral_radius_block_DinvA_bsr(
 
     return np.abs(eigval[0])
 
-def smooth_prolongator_bsr(T: sp.bsr_matrix, A: sp.bsr_matrix, Bc: np.ndarray, bc_flags: np.ndarray = None,
-                           omega: float = None, near_kernel: bool = True):
+
+def smooth_prolongator_bsr(T: sp.bsr_matrix, A: sp.bsr_matrix, Bc: np.ndarray,
+                           bc_flags: np.ndarray = None, omega: float = None, near_kernel: bool = True):
     """
-    Single-step block Jacobi smoothing of tentative prolongator for BSR matrices (6x6 blocks)
-    
+    Energy-smoothing single-step for tentative prolongator (BSR)
     P = T - omega * Dinv * A * T
     Nullspace components removed from the update Dinv*AT before applying omega.
     """
     if A.blocksize != T.blocksize:
         raise ValueError("A and T must have the same blocksize")
-    b = A.blocksize[0]  # e.g., 6
+    b = A.blocksize[0]
     nblocks = A.shape[0] // b
 
-    # 0) compute omega if not given
+    # --- omega ---
     if omega is None:
         rho = spectral_radius_block_DinvA_bsr(A)
-        print(f"{rho=} spectral radius")
-        # omega = 4.0 / 3.0 / rho
-        omega = 2.0 / rho
-        omega *= 0.9  # safety damping
+        omega = 2.0 / rho * 0.9
 
-    # 1) Compute inverse of block diagonal
+    # --- block diagonal inverse ---
     Dinv_blocks = np.zeros((nblocks, b, b))
     for i in range(nblocks):
         start, end = A.indptr[i], A.indptr[i+1]
@@ -374,27 +379,30 @@ def smooth_prolongator_bsr(T: sp.bsr_matrix, A: sp.bsr_matrix, Bc: np.ndarray, b
         D_block = A.data[start + diag_idx[0]]
         Dinv_blocks[i] = np.linalg.inv(D_block)
 
-    # 2) Block multiply A @ T
-    AT = A @ T  # BSR multiplication
-
-    # 3) Multiply each block row of AT by Dinv -> this is dP
-    dP_data = np.zeros_like(T.data)
+    # --- compute update ---
+    AT = A @ T
+    dP = AT.copy()
     for i in range(nblocks):
-        start, end = T.indptr[i], T.indptr[i+1]
-        dP_data[start:end] = Dinv_blocks[i] @ AT.data[start:end]
+        start, end = dP.indptr[i], dP.indptr[i+1]
+        dP.data[start:end] = Dinv_blocks[i] @ dP.data[start:end]
 
-    dP = sp.bsr_matrix((dP_data, T.indices, T.indptr), shape=T.shape, blocksize=(b, b))
-
-    # 4) Remove nullspace components from the update if desired
+    # --- nullspace removal ---
     if near_kernel:
         dP = orthog_nullspace_projector(dP, Bc, bc_flags)
 
-    # 5) Apply Jacobi damping
-    smoothed_data = T.data - omega * dP.data
-    P = sp.bsr_matrix((smoothed_data, T.indices, T.indptr), shape=T.shape, blocksize=(b, b))
+    # --- zero Dirichlet DOFs in dP ---
+    if bc_flags is not None:
+        ndof = dP.blocksize[0]
+        for i in range(dP.shape[0] // ndof):
+            start, end = dP.indptr[i], dP.indptr[i+1]
+            for j in range(ndof):
+                if bc_flags[i*ndof + j]:
+                    dP.data[start:end, j, :] = 0.0
+
+    # --- final Jacobi update ---
+    P = T - omega * dP
 
     return P
-
 
 
 class DirectCSRSolver:
@@ -455,7 +463,7 @@ class AMG_BSRSolver:
         # print(f"{bc_flags=}")
 
         # create tentative prolongator then smooth it
-        self.T, self.Bc = tentative_prolongator_bsr(self.B, aggregate_ind)
+        self.T, self.Bc = tentative_prolongator_bsr(self.B, aggregate_ind, bc_flags)
         self.P = smooth_prolongator_bsr(self.T, A, self.Bc, bc_flags, omega=omega, near_kernel=near_kernel) # single damped jacobi step, so only one step of fillin
         # self.P = self.T # DEBUG
         self.R = self.P.T # sym matrix so restriction is transpose prolong

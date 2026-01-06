@@ -9,8 +9,8 @@ import matplotlib.pyplot as plt
 import sys
 # plate case imports from milu python cases
 sys.path.append("../../milu/")
-from _plate import make_plate_case
-from __src import right_pgmres, plot_plate_vec, sort_vis_maps, right_pcg
+from _cylinder import make_cylinder_case
+from __src import right_pgmres, plot_cylinder_vec, sort_vis_maps, right_pcg
 # AMG imports
 sys.path.append("_src/")
 from csr_aggregation import plot_plate_aggregation
@@ -42,8 +42,8 @@ args = parser.parse_args()
 complex_load = True
 # complex_load = False
 
-_, _, A, rhs, perm, xpts0 = make_plate_case(args, complex_load=complex_load, apply_bcs=True)
-_, _, A_free, _, _, _ = make_plate_case(args, complex_load=complex_load, apply_bcs=False)
+_, _, A, rhs, perm, xpts0 = make_cylinder_case(args, complex_load=complex_load, apply_bcs=True)
+_, _, A_free, _, _, _ = make_cylinder_case(args, complex_load=complex_load, apply_bcs=False)
 
 N = A.shape[0]
 nnodes = N // 6
@@ -191,11 +191,11 @@ if args.debug:
     sort_fw = np.arange(0, N)
     fig = plt.figure()
     ax = fig.add_subplot(121, projection='3d')
-    plot_plate_vec(nxe, x_direct.copy(), ax, sort_fw, nodal_dof=2)
+    plot_cylinder_vec(nxe, x_direct.copy(), ax, sort_fw, nodal_dof=2)
 
     # plot right-precond solution
     ax = fig.add_subplot(122, projection='3d')
-    plot_plate_vec(nxe, x_fine.copy(), ax, sort_fw, nodal_dof=2)
+    plot_cylinder_vec(nxe, x_fine.copy(), ax, sort_fw, nodal_dof=2)
     plt.show()
 
     print("END OF DEBUG, exiting before solve..")
@@ -237,13 +237,13 @@ if not args.noplot:
     print("plot fine soln using direct vs iterative solver")
 
     # for plotting
-    nxe = int(nnodes**0.5)-1
+    nxe = args.nxe
     sort_fw = np.arange(0, N)
     fig = plt.figure()
     ax = fig.add_subplot(121, projection='3d')
-    plot_plate_vec(nxe, x_direct.copy(), ax, sort_fw, nodal_dof=2)
+    plot_cylinder_vec(nxe, x_direct.copy(), ax, sort_fw, nodal_dof=2)
 
     # plot right-precond solution
     ax = fig.add_subplot(122, projection='3d')
-    plot_plate_vec(nxe, x2.copy(), ax, sort_fw, nodal_dof=2)
+    plot_cylinder_vec(nxe, x2.copy(), ax, sort_fw, nodal_dof=2)
     plt.show()

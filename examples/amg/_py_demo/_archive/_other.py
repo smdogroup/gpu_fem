@@ -378,3 +378,59 @@ def smooth_prolongator_bsr(T: sp.bsr_matrix, A: sp.bsr_matrix, Bc:np.ndarray, bc
 
     P = sp.bsr_matrix((smoothed_data, T.indices, T.indptr), shape=T.shape, blocksize=(b, b))
     return P
+
+
+
+def smooth_prolongator_bsr(T: sp.bsr_matrix, A: sp.bsr_matrix, Bc: np.ndarray, bc_flags: np.ndarray = None,
+                           omega: float = None, near_kernel: bool = True):
+    """
+    Single-step block Jacobi smoothing of tentative prolongator for BSR matrices (6x6 blocks)
+    
+    P = T - omega * Dinv * A * T
+    Nullspace components removed from the update Dinv*AT before applying omega.
+    """
+    if A.blocksize != T.blocksize:
+        raise ValueError("A and T must have the same blocksize")
+    b = A.blocksize[0]  # e.g., 6
+    nblocks = A.shape[0] // b
+
+    # 0) compute omega if not given
+    if omega is None:
+        rho = spectral_radius_block_DinvA_bsr(A)
+        print(f"{rho=} spectral radius")
+        # omega = 4.0 / 3.0 / rho
+        omega = 2.0 / rho
+        omega *= 0.9  # safety damping
+
+    # 1) Compute inverse of block diagonal
+    Dinv_blocks = np.zeros((nblocks, b, b))
+    for i in range(nblocks):
+        start, end = A.indptr[i], A.indptr[i+1]
+        diag_idx = np.where(A.indices[start:end] == i)[0]
+        if diag_idx.size == 0:
+            raise ValueError(f"No diagonal block for row {i}")
+        D_block = A.data[start + diag_idx[0]]
+        Dinv_blocks[i] = np.linalg.inv(D_block)
+
+    # 2) Block multiply A @ T
+    AT = A @ T  # BSR multiplication
+
+    # 3) Multiply each block row of AT by Dinv -> this is dP
+    dP_data = np.zeros_like(T.data)
+    for i in range(nblocks):
+        start, end = T.indptr[i], T.indptr[i+1]
+        dP_data[start:end] = Dinv_blocks[i] @ AT.data[start:end]
+
+    dP = sp.bsr_matrix((dP_data, T.indices, T.indptr), shape=T.shape, blocksize=(b, b))
+
+    # 4) Remove nullspace components from the update if desired
+    if near_kernel:
+        dP = orthog_nullspace_projector(dP, Bc, bc_flags)
+
+    # 5) zero out nodes for Dirichlet BCs.. in update / final matrix
+
+    # 6) Apply Jacobi damping
+    smoothed_data = T.data - omega * dP.data
+    P = sp.bsr_matrix((smoothed_data, T.indices, T.indptr), shape=T.shape, blocksize=(b, b))
+
+    return P
