@@ -26,7 +26,7 @@ def make_plate_case(args, qorder_p:float=1.0, complex_load:bool=True, apply_bcs:
     else:
         bdf_file = "plate_nobc.bdf"
 
-    A00, rhs00, xpts = get_tacs_matrix(bdf_file=bdf_file, thickness=thickness, load_fcn=load_fcn)
+    A00, rhs00, xpts00 = get_tacs_matrix(bdf_file=bdf_file, thickness=thickness, load_fcn=load_fcn)
 
     # doesn't quite work because the matrix values are not computed to higher precision first?
 
@@ -45,7 +45,7 @@ def make_plate_case(args, qorder_p:float=1.0, complex_load:bool=True, apply_bcs:
     # since TACS reads in a weird order
     # ====================================
     free_dof = [_ for _ in range(N)]
-    sort_fw, sort_bk = sort_vis_maps(args.nxe, xpts, free_dof)
+    sort_fw, sort_bk = sort_vis_maps(args.nxe, xpts00, free_dof)
     perm = np.zeros(nnodes, dtype=np.int32)
     iperm = np.zeros_like(perm)
     # print(f"{sort_fw=}")
@@ -56,6 +56,10 @@ def make_plate_case(args, qorder_p:float=1.0, complex_load:bool=True, apply_bcs:
     # print(f"{perm=}")
     A0 = reorder_bsr6_nofill(A00.copy(), perm, iperm)
     rhs0 = rhs00.reshape(nnodes, 6)[iperm].reshape(-1) 
+
+    xpts00_arr = xpts00.reshape((nnodes, 3))
+    xpts0_arr = xpts00_arr[iperm]
+    # xpts0 = xpts0_arr.reshape(-1)
 
     if args.random:
         print("doing random..")
@@ -75,6 +79,10 @@ def make_plate_case(args, qorder_p:float=1.0, complex_load:bool=True, apply_bcs:
         A = A0.copy()
         rhs = rhs0.copy()
         perm, iperm = np.arange(0, nnodes), np.arange(0, nnodes)
+
+    xpts_arr = xpts0_arr[iperm]
+    xpts = xpts_arr.reshape(-1)
+
 
     # add ILU(k) fillin to the matrix
     A = ilu_k_pattern_bsr(A, k_fill=args.fill)

@@ -1,5 +1,6 @@
 import numpy as np
 import scipy.sparse as sp
+import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
 from smoothers import gauss_seidel_csr, gauss_seidel_csr_transpose
 
@@ -149,6 +150,54 @@ def tentative_prolongator_csr(aggregate_ind:np.ndarray):
     data = np.ones(nnz, dtype=np.double)
     return sp.csr_matrix((data, cols, rowp), shape=(nnodes, num_agg))
 
+def spectral_radius_DinvA_csr(A: sp.spmatrix, maxiter=200, tol=1e-8):
+    """
+    Estimate spectral radius of D^{-1} A for a CSR matrix A.
+    Uses a matrix-free LinearOperator.
+
+    Parameters
+    ----------
+    A : scipy.sparse matrix (CSR preferred)
+    maxiter : int
+    tol : float
+
+    Returns
+    -------
+    rho : float
+        Estimated spectral radius
+    """
+    if not sp.sparse.isspmatrix_csr(A):
+        A = A.tocsr()
+
+    n = A.shape[0]
+
+    # Diagonal inverse
+    D = A.diagonal()
+    if np.any(D == 0.0):
+        raise ValueError("Zero diagonal entry in A")
+
+    Dinv = 1.0 / D
+
+    def matvec(x):
+        return Dinv * (A @ x)
+
+    M = spla.LinearOperator(
+        shape=(n, n),
+        matvec=matvec,
+        dtype=A.dtype
+    )
+
+    # Largest magnitude eigenvalue
+    eigval = spla.eigs(
+        M,
+        k=1,
+        which="LM",
+        maxiter=maxiter,
+        tol=tol,
+        return_eigenvectors=False
+    )
+
+    return np.abs(eigval[0])
 
 def get_bc_flags(A: sp.csr_matrix, tol=1e-14) -> np.ndarray:
     """Return True for constrained DOFs in CSR matrix A"""
@@ -169,6 +218,8 @@ def scalar_orthog_projector(dP:sp.csr_matrix, bc_flags):
         row_vals = dP.data[row_ips]
         dP.data[row_ips] -= np.mean(row_vals)
     return dP
+
+
 
 def smooth_prolongator_csr(T:sp.csr_matrix, A:sp.csr_matrix, bc_flags:np.ndarray, omega:float=0.7, near_kernel:bool=True):
     # single step jacobi smoothing of tentative prolongator

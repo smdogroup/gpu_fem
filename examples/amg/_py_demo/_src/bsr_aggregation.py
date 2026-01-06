@@ -1,5 +1,6 @@
 import numpy as np
 import scipy.sparse as sp
+import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
 from smoothers import block_gauss_seidel_6dof, block_gauss_seidel_6dof_transpose
 
@@ -118,121 +119,250 @@ def get_rigid_body_modes(xpts, th:float=1.0):
     Bpred[:, 2, 5] = -th * _x
     # and then need to adjust thy for dw/dx trv shear strain
     Bpred[:, 4, 5] = th
-
     return Bpred
 
-def tentative_prolongator_bsr(xpts: np.ndarray, aggregate_ind: np.ndarray):
-    nnodes = aggregate_ind.shape[0]
+def get_coarse_rigid_body_modes(B:np.ndarray, xpts:np.ndarray, aggregate_ind:np.ndarray):
+    """helper method for constructing tentative prolongator"""
+    # nnodes = aggregate_ind.shape[0]
     num_agg = np.max(aggregate_ind) + 1
-
-    # print(f"{nnodes=} {aggregate_ind.shape=} {xpts.shape=}")
-
-    # CSR-like column structure for BSR
-    rowp = np.arange(0, nnodes+1)
-    cols = np.zeros(nnodes, dtype=np.int32)
-    for iagg in range(num_agg):
-        cols[aggregate_ind == iagg] = iagg
-
-    # 1) get fine rigid body modes B
-    # B shape = (nnodes, 6)
-    B = get_rigid_body_modes(xpts.reshape((3 * nnodes)))
 
     # 2) compute coarse rigid body modes R for aggregates (average over nodes)
     R = np.zeros((num_agg, 6, 6))
     xpts_c = np.zeros((num_agg, 3))
     for iagg in range(num_agg):
         agg_nodes = aggregate_ind == iagg
-        Bk = B[agg_nodes].reshape(-1, 6)  # (num_nodes_in_agg * 6) x 6
+        Bk = B[agg_nodes] #.reshape(-1, 6)  # (num_nodes_in_agg * 6) x 6
+        # print(f"{Bk.shape=} {Bk=}")
         R[iagg] = np.mean(Bk, axis=0)
+        # print(f"{R[iagg]=}")
         xpts_c[iagg] = np.mean(xpts[agg_nodes], axis=0)
+    return R, xpts_c
 
-    # 3) QR decomposition for each aggregate
+def tentative_prolongator_bsr(B: np.ndarray, aggregate_ind: np.ndarray):
+    nnodes = aggregate_ind.shape[0]
+    num_agg = np.max(aggregate_ind) + 1
+
+    rowp = np.arange(0, nnodes + 1)
+    cols = np.zeros(nnodes, dtype=np.int32)
+    for iagg in range(num_agg):
+        cols[aggregate_ind == iagg] = iagg
+
+    # B = get_rigid_body_modes(xpts.reshape(3 * nnodes))  # (nnodes, 6, 6)
+    # R, xpts_c = get_coarse_rigid_body_modes(B, xpts, aggregate_ind)
+    # print(f"{R[0]=}")
+    R = np.zeros((num_agg, 6, 6))
+
+    print(f"{B.shape=}")
+
     data = np.zeros((nnodes, 6, 6))
+
+    # QR decomposition of B * Qk = Rk (which also discovers aggregate coarse rigid body modes)
     for iagg in range(num_agg):
         agg_mask = aggregate_ind == iagg
         nk = np.sum(agg_mask)
-        # stack the fine RBMs of this aggregate into (nk*6) x 6
-        Bk = B[agg_mask].reshape(nk*6, 6)
 
-        # QR decomposition
-        Qk, _ = np.linalg.qr(Bk)  # Qk: (nk*6) x 6
-        # assign back to data
+        # Stack rigid body modes for this aggregate
+        Bk = B[agg_mask].reshape(nk * 6, 6)
+
+        # Thin QR factorization
+        Qk, Rk = np.linalg.qr(Bk, mode="reduced")
+
+        # Qk^T Qk = I   → tentative prolongator
         data[agg_mask] = Qk.reshape(nk, 6, 6)
 
-    # 4) construct BSR matrix
-    P0 = sp.bsr_matrix((data, cols, rowp), blocksize=(6,6))
-    return P0, xpts_c
+        # Store Rk if you need the coarse nullspace
+        R[iagg] = Rk
 
+    P0 = sp.bsr_matrix((data, cols, rowp), blocksize=(6, 6))
+    return P0, R
 
-def orthog_nullspace_projector(P: sp.bsr_matrix, B:np.ndarray, bcs:np.ndarray):
-    """apply the orthogonal projector to prevent nullspace modes"""
+def get_bc_flags_bsr(A: sp.bsr_matrix, tol=1e-14) -> np.ndarray:
+    """Return True for constrained DOFs in a BSR matrix (diagonal≈I, off-diagonal≈0)"""
+    b = A.blocksize[0]
+    nblocks = A.shape[0] // b
+    flags = np.zeros(A.shape[0], dtype=bool)
 
-    # TODO : need to fix this method still
+    for i in range(nblocks):
+        start, end = A.indptr[i], A.indptr[i+1]
+        idx = A.indices[start:end]
+        blk = A.data[start:end]
 
-    # node_bcs = np.unique(bcs // 6)
-    # all nodes with bcs (exterior nodes will have zero update to that block-node of P, the whole row)
-    # so we can just skip that and zero out (then ignore F_i part, cause F_i = I in interior fine nodes)
+        diag = blk[idx == i]
+        off = blk[idx != i]
 
-    Pnew = sp.bsr_matrix((P.data.copy(), P.indices.copy(), P.indptr.copy()),
-                      shape=P.shape, blocksize=P.blocksize)
-    # don't need to zero it out actually
+        flags[i*b:(i+1)*b] = (
+            np.all(np.abs(diag - np.eye(b)) < tol) and
+            (off.size == 0 or np.all(np.abs(off) < tol))
+        )
 
-    ndof = 6
-    nblocks_row = P.shape[0] // ndof
-    nblocks_col = P.shape[1] // ndof
+    return flags
 
-    # loop over each fine node
+def orthog_nullspace_projector(P: sp.bsr_matrix, Bc: np.ndarray, bcs: np.ndarray):
+    """Apply the orthogonal projector to prevent nullspace modes (BSR version)"""
+
+    Pnew = sp.bsr_matrix(
+        (P.data.copy(), P.indices.copy(), P.indptr.copy()),
+        shape=P.shape,
+        blocksize=P.blocksize
+    )
+
+    block_dim = P.blocksize[0]
+    nblocks_row = P.shape[0] // block_dim
+
     for brow in range(nblocks_row):
-        # no actually don't skip F_i = 0 fully only in special case..
-        # if brow in node_bcs: continue # skip this block row then (keep it unchanged)
+        # construct Fi: mask constrained DOFs for this fine node
+        Fi_bcs = np.array([_ for _ in range(block_dim) if bcs[block_dim*brow + _]])
+        Fi = np.eye(block_dim)
+        if Fi_bcs.size > 0:
+            Fi[Fi_bcs, :] = 0.0
 
-        PU = np.zeros((6, 6))
-        UTU = np.zeros((6, 6))
+        # precompute U and store bcols for this block row
+        ncols = P.indptr[brow+1] - P.indptr[brow]
+        bcols = P.indices[P.indptr[brow]:P.indptr[brow+1]]
 
-        Fi_bcs = np.array([_ for _ in range(6) if (6*brow+_) in bcs])
-        Fi = np.eye(6)
-        if Fi_bcs.shape[0] > 0:
-            Fi[Fi_bcs,:] = 0.0
-            # print(f"{Fi=}")
+        # this method did not work
+        # U = np.hstack([Bc[bcols[j]] @ Fi for j in range(ncols)])  # shape (b, ncols*b)
+        # dP_row = np.hstack([P.data[P.indptr[brow]+j] for j in range(ncols)])  # shape (b, ncols*b)
+        # # orthogonal projector applied in one shot
+        # UTU_inv = np.linalg.pinv(U.T @ U)
+        # dP_row_proj = dP_row - dP_row @ U @ UTU_inv @ U.T
+        # # unstack back into BSR blocks
+        # for j in range(ncols):
+        #     Pnew.data[P.indptr[brow]+j] = dP_row_proj[:, j*block_dim:(j+1)*block_dim]
 
-        # looping through the sparsity to compute sums first
-        for jp in range(P.indptr[brow], P.indptr[brow+1]):
-            bcol = P.indices[jp] # coarse node index
-
-            U = B[bcol] @ Fi 
-            
-            PU += P.data[jp, :, :] @ U
-
-            UTU += U.T @ U
-
+        # this method doesn't quite work either..
+        U_list = []
+        for j in range(ncols):
+            U_list.append(Bc[bcols[j]] @ Fi)
+        # compute PU and UTU
+        PU = sum(P.data[P.indptr[brow]+j] @ U_list[j] for j in range(ncols))
+        UTU = sum(U_list[j].T @ U_list[j] for j in range(ncols))
         UTU_inv = np.linalg.pinv(UTU)
-        # if not(brow in node_bcs):
-            # print(f"{UTU_inv=}")
 
-        # now loop back through removing projector from each P block (to apply projector)
-        for jp in range(P.indptr[brow], P.indptr[brow+1]):
-            bcol = P.indices[jp] # coarse node index
+        # apply projector to each P block
+        for j in range(ncols):
+            Pnew.data[P.indptr[brow]+j] -= PU @ UTU_inv @ U_list[j].T
 
-            U = B[bcol] @ Fi
-            prev = Pnew.data[jp]
-            delta = PU @ UTU_inv @ U.T
-            final = prev - delta
-            # print(f"{PU=}\n{UTU_inv=}\n{U.T=}\n\n")
-            # print(f"{prev=} {-delta=} {final=}")
-            Pnew.data[jp] -= PU @ UTU_inv @ U.T
+        # DEBUG : double check linear system..
+        # new PU should be zero in this row
+        new_PU = sum(Pnew.data[P.indptr[brow]+j] @ U_list[j] for j in range(ncols))
+        new_PU_nrm = np.linalg.norm(new_PU)
+        # print(f'{brow=} : {new_PU_nrm=:.4e}')
+
+    # exit()
+
+    # -----------------------------
+    # Verification: check nullspace orthogonality
+    # -----------------------------
+    # unconstrained_dofs = np.where(bcs == 0)[0]
+    # print(f"{unconstrained_dofs=}")
+    # print(f"{bcs=}")
+    # exit()
+
+    # # form Uc = Bc * Fi
+    # Uc = Bc.copy()
+    # Uc[bcs // 6] = 0.0
+    # for i in range(6):
+    #     bc_vec = Uc[:,:,i].reshape(Pnew.shape[-1])
+    #     p_vec = Pnew.dot(bc_vec)
+    #     # print(f"mode {i=} : {p_vec=}")
+    #     p_uc_vec = p_vec[unconstrained_dofs]
+    #     # print(f"\t{p_uc_vec=}")
+    #     nrm = np.max(np.abs(p_vec))
+    #     nrm2 = np.max(np.abs(p_uc_vec))
+    #     print(f"{nrm=:.4e} {nrm2=:.4e}")
+    # exit()
 
     return Pnew
 
-def smooth_prolongator_bsr(T: sp.bsr_matrix, A: sp.bsr_matrix, bc_flags: np.ndarray=None, omega: float = 0.7, near_kernel: bool = True):
+def spectral_radius_block_DinvA_bsr(
+    A: sp.bsr_matrix,
+    maxiter=200,
+    tol=1e-8,
+):
+    """
+    Estimate spectral radius of block Jacobi operator D_b^{-1} A.
+
+    Parameters
+    ----------
+    A : scipy.sparse.bsr_matrix
+    maxiter : int
+    tol : float
+
+    Returns
+    -------
+    rho : float
+        Estimated spectral radius
+    """
+
+    if not sp.isspmatrix_bsr(A):
+        raise TypeError("A must be a BSR matrix")
+
+    b = A.blocksize[0]
+    nblocks = A.shape[0] // b
+    n = A.shape[0]
+
+    # --------------------------------------------------
+    # Precompute block diagonal inverses
+    # --------------------------------------------------
+    Dinv_blocks = np.zeros((nblocks, b, b))
+    for i in range(nblocks):
+        start, end = A.indptr[i], A.indptr[i + 1]
+        diag_idx = np.where(A.indices[start:end] == i)[0]
+        if diag_idx.size == 0:
+            raise ValueError(f"No diagonal block for row {i}")
+        Dblock = A.data[start + diag_idx[0]]
+        Dinv_blocks[i] = np.linalg.inv(Dblock)
+
+    # --------------------------------------------------
+    # Matrix-free operator y = D^{-1} A x
+    # --------------------------------------------------
+    def matvec(x):
+        y = A @ x
+        y = y.reshape(nblocks, b)
+
+        for i in range(nblocks):
+            y[i] = Dinv_blocks[i] @ y[i]
+
+        return y.reshape(n)
+
+    M = spla.LinearOperator(
+        shape=(n, n),
+        matvec=matvec,
+        dtype=A.dtype,
+    )
+
+    eigval = spla.eigs(
+        M,
+        k=1,
+        which="LM",
+        maxiter=maxiter,
+        tol=tol,
+        return_eigenvectors=False,
+    )
+
+    return np.abs(eigval[0])
+
+def smooth_prolongator_bsr(T: sp.bsr_matrix, A: sp.bsr_matrix, Bc: np.ndarray, bc_flags: np.ndarray = None,
+                           omega: float = None, near_kernel: bool = True):
     """
     Single-step block Jacobi smoothing of tentative prolongator for BSR matrices (6x6 blocks)
     
-    P = (I - omega * Dinv * A) * T
+    P = T - omega * Dinv * A * T
+    Nullspace components removed from the update Dinv*AT before applying omega.
     """
     if A.blocksize != T.blocksize:
         raise ValueError("A and T must have the same blocksize")
     b = A.blocksize[0]  # e.g., 6
     nblocks = A.shape[0] // b
+
+    # 0) compute omega if not given
+    if omega is None:
+        rho = spectral_radius_block_DinvA_bsr(A)
+        print(f"{rho=} spectral radius")
+        # omega = 4.0 / 3.0 / rho
+        omega = 2.0 / rho
+        omega *= 0.9  # safety damping
 
     # 1) Compute inverse of block diagonal
     Dinv_blocks = np.zeros((nblocks, b, b))
@@ -245,23 +375,24 @@ def smooth_prolongator_bsr(T: sp.bsr_matrix, A: sp.bsr_matrix, bc_flags: np.ndar
         Dinv_blocks[i] = np.linalg.inv(D_block)
 
     # 2) Block multiply A @ T
-    AT = A @ T  # BSR multiplication is block-aware
+    AT = A @ T  # BSR multiplication
 
-    # 3) Optional: enforce near-nullspace orthogonality (commented out)
-    # if near_kernel:
-    #     AT = scalar_orthog_projector_bsr(AT, bc_flags)  # implement block version if needed
-
-    # 4) Multiply each block row of AT by block diagonal inverse
-    # This is equivalent to block Jacobi step
-    new_data = np.zeros_like(T.data)
+    # 3) Multiply each block row of AT by Dinv -> this is dP
+    dP_data = np.zeros_like(T.data)
     for i in range(nblocks):
         start, end = T.indptr[i], T.indptr[i+1]
-        new_data[start:end] = Dinv_blocks[i] @ AT.data[start:end]
+        dP_data[start:end] = Dinv_blocks[i] @ AT.data[start:end]
 
-    # 5) P = T - omega * Dinv * AT
-    smoothed_data = T.data - omega * new_data
+    dP = sp.bsr_matrix((dP_data, T.indices, T.indptr), shape=T.shape, blocksize=(b, b))
 
+    # 4) Remove nullspace components from the update if desired
+    if near_kernel:
+        dP = orthog_nullspace_projector(dP, Bc, bc_flags)
+
+    # 5) Apply Jacobi damping
+    smoothed_data = T.data - omega * dP.data
     P = sp.bsr_matrix((smoothed_data, T.indices, T.indptr), shape=T.shape, blocksize=(b, b))
+
     return P
 
 
@@ -276,15 +407,30 @@ class DirectCSRSolver:
         x = sp.linalg.spsolve(self.A, rhs)
         return x
 
+# class DirectCSRSolver:
+#     def __init__(self, A_csr):
+#         # convert to dense numpy array
+#         self.A = A_csr.toarray()
+#         # ensure exact symmetry
+#         self.A = 0.5 * (self.A + self.A.T)
+#         # compute Cholesky factor
+#         self.L = np.linalg.cholesky(self.A)
+
+#     def solve(self, rhs):
+#         # solve A x = rhs via Cholesky
+#         y = np.linalg.solve(self.L, rhs)
+#         x = np.linalg.solve(self.L.T, y)
+#         return x
 
 
 class AMG_BSRSolver:
     """general multilevel AMG solver..."""
-    def __init__(self, A_free:sp.bsr_matrix, A:sp.bsr_matrix, xpts, threshold:float=0.25,
+    def __init__(self, A_free:sp.bsr_matrix, A:sp.bsr_matrix, B:np.ndarray, threshold:float=0.25,
                  omega:float=0.7, pre_smooth=1, post_smooth=1, level:int=0, near_kernel:bool=True):
         """
         A : fine-grid operator (CSR) without bcs
         A : fine-grid operator (CSR) with bcs
+        B : fine rigid body modes
         threshold: float for coarsening threshold
         """
         assert sp.isspmatrix_bsr(A_free)
@@ -295,7 +441,7 @@ class AMG_BSRSolver:
         self.near_kernel = near_kernel
         bs = self.A_free.data.shape[-1]
         nnodes = self.A_free.shape[0] // bs
-        self.xpts = xpts.reshape((nnodes, 3))
+        self.B = B
 
         # compute node aggregate sets
         # make sure to use unconstrained matrix for aggregation indicators originally
@@ -304,13 +450,14 @@ class AMG_BSRSolver:
 
         # print(f"{aggregate_ind=}")
         # TODO: do this
-        bc_flags = None
-        # bc_flags = get_bc_flags(A)
+        # bc_flags = None
+        bc_flags = get_bc_flags_bsr(A)
         # print(f"{bc_flags=}")
 
         # create tentative prolongator then smooth it
-        self.T, self.xpts_c = tentative_prolongator_bsr(self.xpts, aggregate_ind)
-        self.P = smooth_prolongator_bsr(self.T, A, bc_flags, omega=omega, near_kernel=near_kernel) # single damped jacobi step, so only one step of fillin
+        self.T, self.Bc = tentative_prolongator_bsr(self.B, aggregate_ind)
+        self.P = smooth_prolongator_bsr(self.T, A, self.Bc, bc_flags, omega=omega, near_kernel=near_kernel) # single damped jacobi step, so only one step of fillin
+        # self.P = self.T # DEBUG
         self.R = self.P.T # sym matrix so restriction is transpose prolong
 
         self.pre_smooth = pre_smooth
@@ -322,8 +469,8 @@ class AMG_BSRSolver:
         # on GPU would not do extra allocation for this
         self.Ac_free = self.R @ (A_free @ self.P)
 
-        self.Ac = self.Ac.tocsr()
-        self.Ac_free = self.Ac_free.tocsr()
+        self.Ac = self.Ac.tobsr()
+        self.Ac_free = self.Ac_free.tobsr()
         # print(f"{type(self.Ac)=}")
 
         # plt.spy(self.Ac_free)
@@ -335,19 +482,26 @@ class AMG_BSRSolver:
         self.fine_nnz = self.A.nnz
         self.coarse_nnz = self.Ac.nnz
         self.coarse_solver = None 
+
         if level == 0:
             print("level 0 is AMG solver..")
 
         # check fillin of coarse grid solver..
         coarse_nnodes = self.Ac.shape[0]
         max_coarse_nnz = coarse_nnodes**2
+
+        # print(f"{level=} {self.fine_nnz=} {self.coarse_nnz=} {max_coarse_nnz=}")
+        if self.fine_nnz == self.coarse_nnz:
+            raise RuntimeError(f"ERROR: {self.fine_nnz=} == {self.coarse_nnz=} : lower aggregation threshold from {threshold=} to lower value..\n")
+
         if self.coarse_nnz >= 0.4 * max_coarse_nnz or coarse_nnodes <= 100:
             # then do direct solver
             print(f"level {level+1} building direct solver")
             self.coarse_solver = DirectCSRSolver(self.Ac)
         else:
             print(f"level {level+1} building AMG solver")
-            self.coarse_solver = AMG_BSRSolver(self.Ac_free, self.Ac, self.xpts_c, threshold, omega, pre_smooth, post_smooth, level+1, near_kernel=near_kernel)
+            # print(f"{type(self.Ac_free)=} {type(self.Ac)=}")
+            self.coarse_solver = AMG_BSRSolver(self.Ac_free, self.Ac, self.Bc, threshold, omega, pre_smooth, post_smooth, level+1, near_kernel=near_kernel)
 
         if level == 0:
             print(f"Multilevel AMG with {self.num_levels=} and {self.operator_complexity=}")
@@ -382,41 +536,50 @@ class AMG_BSRSolver:
         else: # direct solver
             return f"{nnodes_f},{nnodes_c}"
 
+    # def solve(self, rhs):
+    #     """
+    #     Fully symmetric AMG V-cycle (SPD) for PCG
+    #     """
+    #     x = np.zeros_like(rhs)
+
+    #     # Pre-smoothing (forward GS)
+    #     if self.pre_smooth > 0:
+    #         x = block_gauss_seidel_6dof(self.A, rhs, x0=x,
+    #                                     num_iter=self.pre_smooth)
+
+    #     # Coarse-grid correction
+    #     r = rhs - self.A @ x
+    #     rc = self.R @ r
+    #     ec = self.coarse_solver.solve(rc)
+    #     x += self.P @ ec
+
+    #     # Post-smoothing (backward GS, applied to x!)
+    #     if self.post_smooth > 0:
+    #         x = block_gauss_seidel_6dof_transpose(self.A, rhs, x0=x,
+    #                                             num_iter=self.post_smooth)
+
+    #     return x
+
     def solve(self, rhs):
         """
-        One AMG V-cycle
+        Fully symmetric AMG V-cycle (SPD) for PCG
         """
-        # initial guess
         x = np.zeros_like(rhs)
 
-        # -------- pre-smoothing --------
+        # Pre-smoothing (forward GS)
         if self.pre_smooth > 0:
-            x = block_gauss_seidel_6dof(
-                self.A, rhs,
-                x0=x,
-                num_iter=self.pre_smooth
-            )
+            x = block_gauss_seidel_6dof(self.A, rhs, x0=x,
+                                        num_iter=self.pre_smooth)
 
-        # fine residual
-        r = rhs - self.A @ x
-
-        # restrict
-        rc = self.R @ r
-
-        # coarse solve
+        # # Coarse-grid correction
+        r = rhs - self.A.dot(x)
+        rc = self.R.dot(r)
         ec = self.coarse_solver.solve(rc)
+        x += self.P.dot(ec)
 
-        # prolong correction
-        x += self.P @ ec
-
-        # -------- post-smoothing --------
+        # Post-smoothing (backward GS, applied to x!)
         if self.post_smooth > 0:
-            r = rhs - self.A @ x
-            dx = block_gauss_seidel_6dof_transpose(
-                self.A, r,
-                x0=np.zeros_like(rhs),
-                num_iter=self.post_smooth
-            )
-            x += dx
+            x = block_gauss_seidel_6dof_transpose(self.A, rhs, x0=x,
+                                                num_iter=self.post_smooth)
 
         return x

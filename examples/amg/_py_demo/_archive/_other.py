@@ -328,3 +328,53 @@ def block_jacobi_smooth_operator_inplace(A, P, omega=1.0):
             Pnew.data[pidx] -= omega * (Dinv[i] @ accum)
 
     return Pnew
+
+
+
+def smooth_prolongator_bsr(T: sp.bsr_matrix, A: sp.bsr_matrix, Bc:np.ndarray, bc_flags: np.ndarray=None, omega: float = None, near_kernel: bool = True):
+    """
+    Single-step block Jacobi smoothing of tentative prolongator for BSR matrices (6x6 blocks)
+    
+    P = (I - omega * Dinv * A) * T
+    """
+    if A.blocksize != T.blocksize:
+        raise ValueError("A and T must have the same blocksize")
+    b = A.blocksize[0]  # e.g., 6
+    nblocks = A.shape[0] // b
+    
+    if omega is None:
+        rho = spectral_radius_block_DinvA_bsr(A)
+        print(f"{rho=} spectral radius")
+        omega = 4.0 / 3.0 / rho
+        omega *= 0.9  # safety damping (standard AMG practice)
+        # print(f"{omega=}")
+
+    # 1) Compute inverse of block diagonal
+    Dinv_blocks = np.zeros((nblocks, b, b))
+    for i in range(nblocks):
+        start, end = A.indptr[i], A.indptr[i+1]
+        diag_idx = np.where(A.indices[start:end] == i)[0]
+        if diag_idx.size == 0:
+            raise ValueError(f"No diagonal block for row {i}")
+        D_block = A.data[start + diag_idx[0]]
+        Dinv_blocks[i] = np.linalg.inv(D_block)
+
+    # 2) Block multiply A @ T
+    AT = A @ T  # BSR multiplication is block-aware
+
+    # 3) Optional: enforce near-nullspace orthogonality (commented out)
+    if near_kernel:
+        AT = orthog_nullspace_projector(AT, Bc, bc_flags)  # implement block version if needed
+
+    # 4) Multiply each block row of AT by block diagonal inverse
+    # This is equivalent to block Jacobi step
+    new_data = np.zeros_like(T.data)
+    for i in range(nblocks):
+        start, end = T.indptr[i], T.indptr[i+1]
+        new_data[start:end] = Dinv_blocks[i] @ AT.data[start:end]
+
+    # 5) P = T - omega * Dinv * AT
+    smoothed_data = T.data - omega * new_data
+
+    P = sp.bsr_matrix((smoothed_data, T.indices, T.indptr), shape=T.shape, blocksize=(b, b))
+    return P
