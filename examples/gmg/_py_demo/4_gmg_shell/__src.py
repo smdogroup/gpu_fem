@@ -64,8 +64,12 @@ def get_tacs_matrix(bdf_file, thickness:float=0.02):
         import math
         theta = math.atan2(_y, _x)
         r = np.sqrt(_x**2 + _y**2)
-        return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(4*theta)
-    # game of life polar load..
+        r2 = r/np.sqrt(2)
+        # game of life polar load..
+        # return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(4*theta) * r2 * (1 - r2)
+        return -100.0 * np.sin(4.0  * np.pi * r) * np.cos(2.4*theta-np.pi/4.0*2.4) * r2 * (1 - r2)
+        # return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(2*theta-np.pi/2.0)
+        # return 100.0 * np.sin(2.0 * np.pi * _x) * np.sin(np.pi * _y)
 
     force_array[2::6] = np.array([load_fcn(x[i], y[i]) for i in range(nnodes)])
     # force_array[2::6] += np.sin(2.0 * np.pi * x) * np.sin(np.pi * y)
@@ -145,27 +149,58 @@ def plot_init():
         'figure.titlesize': 20
     }) 
 
-def plot_plate_vec(nxe, vec, ax, sort_fw, nodal_dof:int=2, cmap='viridis'):
+# def plot_plate_vec(nxe, vec, ax, sort_fw, nodal_dof:int=2, cmap='viridis', smooth:bool=False):
+#     """assume vec is one DOF per node only here (and includes bcs)"""
+#     nx = nxe + 1
+#     N = nx**2
+
+#     plot_vec = np.zeros((6*N,))
+#     plot_vec[sort_fw] = vec[:]
+#     plot_vec = plot_vec[nodal_dof::6]
+
+#     # plot_vec[_free_dof] = vec[:]
+#     # # reordering of solution for plotting..
+#     # x, y = _xpts[0::3], _xpts[1::3]
+#     # sort_idx = np.lexsort((y, x))  # lexsort uses last index first, so (y, x) gives x primary, y secondary
+#     # # print(f"{sort_idx=}")
+#     # plot_vec = plot_vec[nodal_dof::6][sort_idx]
+
+#     x = np.linspace(0.0, 1.0, nx)
+#     y = x.copy()
+#     X, Y = np.meshgrid(x, y)
+#     VALS = np.reshape(plot_vec, (nx, nx))
+
+#     ax.plot_surface(X, Y, VALS, cmap=cmap, antialiased=True)
+
+
+def plot_plate_vec(nxe, vec, ax, sort_fw, nodal_dof: int = 2,
+                   cmap: str = 'viridis'):
     """assume vec is one DOF per node only here (and includes bcs)"""
     nx = nxe + 1
     N = nx**2
 
-    plot_vec = np.zeros((6*N,))
+    plot_vec = np.zeros((6 * N,))
     plot_vec[sort_fw] = vec[:]
     plot_vec = plot_vec[nodal_dof::6]
-
-    # plot_vec[_free_dof] = vec[:]
-    # # reordering of solution for plotting..
-    # x, y = _xpts[0::3], _xpts[1::3]
-    # sort_idx = np.lexsort((y, x))  # lexsort uses last index first, so (y, x) gives x primary, y secondary
-    # # print(f"{sort_idx=}")
-    # plot_vec = plot_vec[nodal_dof::6][sort_idx]
 
     x = np.linspace(0.0, 1.0, nx)
     y = x.copy()
     X, Y = np.meshgrid(x, y)
+
     VALS = np.reshape(plot_vec, (nx, nx))
-    ax.plot_surface(X, Y, VALS, cmap=cmap)
+    ax.plot_surface(X, Y, VALS, cmap=cmap, antialiased=True)
+
+
+    # --- remove all axes / grids / frames ---
+    ax.set_axis_off()
+    ax.grid(False)
+    # ax.set_frame_on(False)
+    ax.patch.set_visible(False)
+
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        axis.pane.set_visible(False)
+        axis._axinfo["grid"]["linewidth"] = 0.0
+
 
 def plot_vec_compare(nxe, old_defect, new_defect, sort_fw_map, filename=None, nodal_dof:int=2):
     from mpl_toolkits.mplot3d import Axes3D  # This import registers the 3D projection, even if not used directly.
