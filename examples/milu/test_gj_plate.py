@@ -1,5 +1,4 @@
-# adapt qordering and other codes from NASA FUN3D SFE + SLAT
-# for qordering ILU(0)-GMRES with 6x6 block pivots..
+# test gauss-jordan 6x6 block solves on plate
 
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -25,7 +24,7 @@ if __name__ == "__main__":
     parser.add_argument("--nxe", type=int, default=20) # 10
     args = parser.parse_args()
 
-    A0, rhs0, A, rhs, perm = make_plate_case(args)
+    A0, rhs0, A, rhs, perm, xpts0 = make_plate_case(args)
 
     N = A0.shape[0]
     nnodes = N // 6

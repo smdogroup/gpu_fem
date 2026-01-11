@@ -1,5 +1,4 @@
-# adapt qordering and other codes from NASA FUN3D SFE + SLAT
-# for qordering ILU(0)-GMRES with 6x6 block pivots..
+# test LU on plate with 64 nodes
 
 # now let's test this out and visualize it
 import numpy as np

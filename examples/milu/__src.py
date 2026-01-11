@@ -106,7 +106,7 @@ def plot_init():
     }) 
 
 def plot_plate_vec(nxe, vec, ax, sort_fw, nodal_dof:int=2, cmap='viridis'):
-    """assume vec is one DOF per node only here (and includes bcs)"""
+    """Plot plate displacement or field (assumes 1 DOF per node)"""
     nx = nxe + 1
     N = nx**2
 
@@ -114,25 +114,65 @@ def plot_plate_vec(nxe, vec, ax, sort_fw, nodal_dof:int=2, cmap='viridis'):
     plot_vec[sort_fw] = vec[:]
     plot_vec = plot_vec[nodal_dof::6]
 
-    # plot_vec[_free_dof] = vec[:]
-    # # reordering of solution for plotting..
-    # x, y = _xpts[0::3], _xpts[1::3]
-    # sort_idx = np.lexsort((y, x))  # lexsort uses last index first, so (y, x) gives x primary, y secondary
-    # # print(f"{sort_idx=}")
-    # plot_vec = plot_vec[nodal_dof::6][sort_idx]
-
     x = np.linspace(0.0, 1.0, nx)
     y = x.copy()
     X, Y = np.meshgrid(x, y)
     VALS = np.reshape(plot_vec, (nx, nx))
     ax.plot_surface(X, Y, VALS, cmap=cmap)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_title('Plate')
 
-def plot_vec_compare(nxe, old_defect, new_defect, sort_fw_map, filename=None, nodal_dof:int=2):
-    from mpl_toolkits.mplot3d import Axes3D  # This import registers the 3D projection, even if not used directly.
-    plot_init()
+def plot_cylinder_vec(nxe, vec, ax, sort_fw, nodal_dof:int=2, cmap='viridis'):
+    """Plot cylinder displacement or field (assumes 1 DOF per node)"""
+    ntheta = nxe
+    nz = nxe + 1
+    N = ntheta * nz
+
+    plot_vec = np.zeros((6*N,))
+    plot_vec[sort_fw] = vec[:]
+    plot_vec = plot_vec[nodal_dof::6]
+
+    # Build node coordinates
+    theta = np.linspace(0, 2*np.pi, ntheta+1)[:-1]
+    z = np.linspace(0, 1.0, nz)
+    X = np.zeros((nz, ntheta))
+    Y = np.zeros_like(X)
+    Z = np.zeros_like(X)
+    for iz, zi in enumerate(z):
+        for it, ti in enumerate(theta):
+            idx = iz*ntheta + it
+            X[iz,it] = np.cos(ti)
+            Y[iz,it] = np.sin(ti)
+            Z[iz,it] = zi
+    VALS = np.reshape(plot_vec, (nz, ntheta))
+    ax.plot_surface(X, Y, Z + VALS*0.0, facecolors=plt.cm.get_cmap(cmap)(VALS/np.max(np.abs(VALS)+1e-12)), rstride=1, cstride=1)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('Cylinder')
+
+def plot_vec_generic(nxe, vec, ax, sort_fw, nodal_dof:int=2, cmap='viridis'):
+    """
+    Outer plotting method that detects plate vs cylinder from number of nodes.
+    
+    Plates: (nxe+1)^2 nodes
+    Cylinders: nxe*(nxe+1) nodes
+    """
+    npts = len(vec) // 6
+    print(f"{npts=} {nxe=}")
+    if npts == (nxe+1)**2:
+        plot_plate_vec(nxe, vec, ax, sort_fw, nodal_dof, cmap)
+    elif npts == nxe*(nxe+1):
+        plot_cylinder_vec(nxe, vec, ax, sort_fw, nodal_dof, cmap)
+    else:
+        raise ValueError(f"Cannot detect geometry from {npts} nodes for nxe={nxe}.")
+
+def plot_vec_compare(nxe, old_defect, new_defect, sort_fw_map, nodal_dof:int=2, filename=None):
+    """Compare two vectors side-by-side, auto-detecting plate/cylinder"""
     fig, ax = plt.subplots(1, 2, figsize=(13, 7), subplot_kw={'projection': '3d'})
-    plot_plate_vec(nxe=nxe, vec=old_defect, ax=ax[0], sort_fw=sort_fw_map, nodal_dof=nodal_dof)
-    plot_plate_vec(nxe=nxe, vec=new_defect, ax=ax[1], sort_fw=sort_fw_map, nodal_dof=nodal_dof)
+    plot_vec_generic(nxe, old_defect, ax[0], sort_fw_map, nodal_dof)
+    plot_vec_generic(nxe, new_defect, ax[1], sort_fw_map, nodal_dof)
 
     if filename is None:
         plt.show()
@@ -140,23 +180,97 @@ def plot_vec_compare(nxe, old_defect, new_defect, sort_fw_map, filename=None, no
         plt.savefig(filename)
 
 
-def sort_vis_maps(nxe, xpts, free_dof):
-    """create dof maps from reordered red to unsorted full and reverse"""
-    # first is unsort_red to sort_free
-    nx = nxe + 1
-    N = nx**2
-    nred = len(free_dof)
-    nfree = 6 * N
-    x, y = xpts[0::3], xpts[1::3]
-    # node_sort_map = np.lexsort((y, x))  # lexsort uses last index first, so (y, x) gives x primary, y secondary
-    node_sort_map = np.lexsort((x, y))  # lexsort uses last index first, so (y, x) gives x primary, y secondary
-    # temp if don't want to resort basically
-    # node_sort_map = np.arange(node_sort_map.shape[0])
-    inv_node_sort_map = np.empty_like(node_sort_map)
-    inv_node_sort_map[node_sort_map] = np.arange(N)
+# def sort_vis_maps(nxe, xpts, free_dof):
+#     """create dof maps from reordered red to unsorted full and reverse"""
+#     # first is unsort_red to sort_free
+#     nx = nxe + 1
+#     N = nx**2
+#     nred = len(free_dof)
+#     nfree = 6 * N
+#     x, y = xpts[0::3], xpts[1::3]
+#     # node_sort_map = np.lexsort((y, x))  # lexsort uses last index first, so (y, x) gives x primary, y secondary
+#     node_sort_map = np.lexsort((x, y))  # lexsort uses last index first, so (y, x) gives x primary, y secondary
+#     # temp if don't want to resort basically
+#     # node_sort_map = np.arange(node_sort_map.shape[0])
+#     inv_node_sort_map = np.empty_like(node_sort_map)
+#     inv_node_sort_map[node_sort_map] = np.arange(N)
 
+#     sort_free_fw_map = np.zeros(nred, dtype=np.int32)
+#     sort_free_bk_map = -np.ones(nfree, dtype=np.int32) # -1 if not free var
+#     for ired in range(nred):
+#         ifree = free_dof[ired]
+#         inode = ifree // 6
+#         idof = ifree % 6
+
+#         inode_sort = inv_node_sort_map[inode]
+#         ifree_sort = 6 * inode_sort + idof
+
+#         sort_free_fw_map[ired] = ifree_sort
+#         sort_free_bk_map[ifree_sort] = ired
+
+#     return sort_free_fw_map, sort_free_bk_map
+
+import numpy as np
+
+def sort_vis_maps(nxe, xpts, free_dof):
+    """
+    Create forward/backward dof maps for visualization or reduced system reordering.
+    Automatically detects plate vs cylinder based on number of nodes:
+      - plate: (nxe+1)^2 nodes
+      - cylinder: nxe*(nxe+1) nodes (circumferential x axial)
+    
+    Parameters
+    ----------
+    nxe : int
+        Number of elements along x (circumference for cylinder, x for plate)
+    xpts : array_like
+        Flattened nodal coordinates [x0, y0, z0, x1, y1, z1, ...]
+    free_dof : array_like
+        Indices of free DOFs (flattened, 6 DOF per node)
+    
+    Returns
+    -------
+    sort_free_fw_map : np.ndarray
+        Mapping from reduced free DOFs to reordered DOFs
+    sort_free_bk_map : np.ndarray
+        Reverse map from reordered DOFs to reduced free DOFs (-1 if constrained)
+    """
+
+    # Determine number of nodes
+    npts = len(xpts) // 3
+    nx_plate = nxe + 1
+    nx_cyl = nxe
+
+    if npts == nx_plate**2:
+        # Plate
+        shape = "plate"
+        nx = nx_plate
+        x, y = xpts[0::3], xpts[1::3]
+        # sort primarily along x, then y
+        node_sort_map = np.lexsort((y, x))
+    elif npts == nx_cyl * (nxe + 1):
+        # Cylinder
+        shape = "cylinder"
+        ntheta = nx_cyl
+        nz = nxe + 1
+        x, y, z = xpts[0::3], xpts[1::3], xpts[2::3]
+        # Compute theta from x,y
+        theta = np.arctan2(y, x)
+        # sort primarily along z (axial), then theta
+        node_sort_map = np.lexsort((theta, z))
+    else:
+        raise ValueError(f"Cannot detect geometry from number of nodes: {npts}")
+
+    # Inverse mapping: sorted node index -> original node index
+    inv_node_sort_map = np.empty_like(node_sort_map)
+    inv_node_sort_map[node_sort_map] = np.arange(npts)
+
+    # Now map DOFs
+    nred = len(free_dof)
+    nfree = 6 * npts
     sort_free_fw_map = np.zeros(nred, dtype=np.int32)
-    sort_free_bk_map = -np.ones(nfree, dtype=np.int32) # -1 if not free var
+    sort_free_bk_map = -np.ones(nfree, dtype=np.int32)
+
     for ired in range(nred):
         ifree = free_dof[ired]
         inode = ifree // 6
@@ -167,6 +281,9 @@ def sort_vis_maps(nxe, xpts, free_dof):
 
         sort_free_fw_map[ired] = ifree_sort
         sort_free_bk_map[ifree_sort] = ired
+
+    # Debug info
+    # print(f"Detected geometry: {shape}, npts={npts}")
 
     return sort_free_fw_map, sort_free_bk_map
 
@@ -285,6 +402,88 @@ def right_pgmres(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None):
     print(f"GMRES final resid {beta=}")
     return x
 
+def right_pcg(A, b, x0=None, rtol=1e-8, atol=1e-7, max_iter=1000, M=None):
+    """
+    Right-preconditioned Conjugate Gradient method (version from my scitech paper)
+
+    Solves: A M^{-1} y = b, with x = M^{-1} y
+
+    Parameters
+    ----------
+    A : callable or sparse matrix
+        Linear operator A(x) or sparse matrix
+    b : ndarray
+        Right-hand side
+    x0 : ndarray, optional
+        Initial guess for x
+    tol : float
+        Convergence tolerance on ||r||
+    max_iter : int
+        Maximum iterations
+    M : object, optional
+        Preconditioner with method M.solve(x) ≈ M^{-1} x
+
+    Returns
+    -------
+    x : ndarray
+        Approximate solution
+    """
+
+    n = len(b)
+
+    if x0 is None:
+        x = np.zeros(n)
+    else:
+        x = x0.copy()
+
+    # Preconditioner application
+    if M is None:
+        Minv = lambda x: x
+    else:
+        Minv = lambda x: M.solve(x)
+
+    # Initial residual
+    r = b - (A @ x)
+    norm_r0 = np.linalg.norm(r)
+
+    if norm_r0 < atol:
+        return x
+    
+    rz_old = None
+    rz = None
+
+    print(f"PCG iter 0: ||r|| = {norm_r0:.3e}")
+
+    for k in range(1, max_iter + 1):
+
+        z = Minv(r)
+        rz = np.dot(r, z)
+
+        if k == 1:
+            p = z.copy()
+        else:
+            beta = rz / rz_old
+            p = z + beta * p_old
+
+        p_old = p.copy()
+        rz_old = rz * 1.0
+
+        w = A @ p
+        alpha = rz / np.dot(w, p)
+        x += alpha * p
+        r -= alpha * w
+        norm_r = np.linalg.norm(r)
+
+        if (k % 10 == 0) or norm_r < (atol + rtol * norm_r):
+            print(f"PCG iter {k}: ||r|| = {norm_r:.3e}")
+
+        if norm_r < (atol + rtol * norm_r):
+            break
+
+    print(f"PCG finished at iter {k}, ||r|| = {norm_r:.3e}")
+    return x
+
+
 
 def random_ordering(N):
     # give new nofill pattern for random ordering
@@ -347,7 +546,7 @@ def write_80(fout, line):
 
 import numpy
 
-def gen_plate_mesh(nxe:int=10, lx:float=1.0, ly:float=1.0, name="plate"):
+def gen_plate_mesh(nxe:int=10, lx:float=1.0, ly:float=1.0, name="plate", apply_bcs:bool=True):
     # Overall plate dimensions lx, ly
     # Number of components in each direction
     ncx = 1
@@ -376,7 +575,8 @@ def gen_plate_mesh(nxe:int=10, lx:float=1.0, ly:float=1.0, name="plate"):
         for j in range(nx):
             nid[j, i] = count
             if j == 0 or j == nx - 1 or i == 0 or i == (ny-1):
-                bcnodes.append(count)
+                if apply_bcs:
+                    bcnodes.append(count)
             count += 1
 
     # Connectivity
@@ -395,7 +595,10 @@ def gen_plate_mesh(nxe:int=10, lx:float=1.0, ly:float=1.0, name="plate"):
 
 
     # Write BDF
-    output_file = name + ".bdf"
+    if apply_bcs:
+        output_file = name + ".bdf"
+    else:
+        output_file = name + "_nobc.bdf"
 
     with open(output_file, "w") as fout:
         write_80(fout, "SOL 103")
@@ -453,3 +656,116 @@ def gen_plate_mesh(nxe:int=10, lx:float=1.0, ly:float=1.0, name="plate"):
             write_bulk_line("SPC", [1, node, "123456", 0.0])
 
         write_80(fout, "ENDDATA")
+
+def gen_cylinder_mesh(nel_circ:int=12, nel_axial:int=10, radius:float=1.0, length:float=2.0,
+                      name="cylinder", apply_bcs:bool=True):
+    """
+    Generate a cylinder mesh (quadrilateral shell) like gen_plate_mesh.
+    Last hoop wraps around to the first.
+    Ends fully clamped (all 6 DOFs = 0).
+    """
+
+    # Nodes
+    nnode_circ = nel_circ
+    nnode_axial = nel_axial + 1
+    theta = np.linspace(0, 2*np.pi, nnode_circ+1)[:-1]  # wrap last
+    z = np.linspace(0, length, nnode_axial)
+
+    nodes = []
+    nid = 1
+    nid_map = {}
+    for iz, zi in enumerate(z):
+        for it, ti in enumerate(theta):
+            x = radius * np.cos(ti)
+            y = radius * np.sin(ti)
+            nodes.append([x, y, zi])
+            nid_map[(iz,it)] = nid
+            nid += 1
+    nodes = np.array(nodes)
+    nnodes = nodes.shape[0]
+
+    # Connectivity
+    elements = []
+    ie = 1
+    for iz in range(nel_axial):
+        for it in range(nel_circ):
+            n1 = nid_map[(iz, it)]
+            n2 = nid_map[(iz, (it+1)%nel_circ)]
+            n3 = nid_map[(iz+1, (it+1)%nel_circ)]
+            n4 = nid_map[(iz+1, it)]
+            elements.append([ie, n1, n2, n3, n4])
+            ie += 1
+
+    # Components (1 per axial layer)
+    ncomp = nel_axial
+    conn = {i+1: [] for i in range(ncomp)}
+    for idx, elem in enumerate(elements):
+        compID = idx // nel_circ + 1
+        conn[compID].append(elem)
+
+    # BC nodes
+    bcnodes = []
+    if apply_bcs:
+        for it in range(nnode_circ):
+            bcnodes.append(nid_map[(0,it)])           # bottom
+            bcnodes.append(nid_map[(nel_axial-1,it)]) # top
+
+    # Write BDF
+    output_file = name + ".bdf" if apply_bcs else name + "_nobc.bdf"
+    with open(output_file, "w") as fout:
+        write_80(fout, "SOL 103")
+        write_80(fout, "CEND")
+        write_80(fout, "BEGIN BULK")
+
+        # Component names
+        compNames = {}
+        for compID in range(1, ncomp+1):
+            compNames[compID] = "CYLINDER.{:03d}".format(compID)
+
+        # Helper for bulk line writing
+        def write_bulk_line(key, items, format="small"):
+            if format == "small":
+                width = 8
+                writekey = key
+            elif format == "large":
+                width = 16
+                writekey = key + "*"
+            line = "{:8s}".format(writekey)
+            for item in items:
+                if isinstance(item, (int, np.integer)):
+                    line += "{:{width}d}".format(item, width=width)[:width]
+                elif isinstance(item, (float, np.floating)):
+                    line += "{: {width}f}".format(item, width=width)[:width]
+                elif isinstance(item, str):
+                    line += "{:{width}s}".format(item, width=width)[:width]
+                else:
+                    print(type(item), item)
+                if len(line) == 72:
+                    write_80(fout, line)
+                    line = " " * 8
+            if len(line) > 8:
+                write_80(fout, line)
+
+        # Write nodes
+        for i in range(nnodes):
+            write_bulk_line("GRID", [i+1, 0, nodes[i,0], nodes[i,1], nodes[i,2], 0,0,0])
+
+        # Write elements
+        for compID in conn:
+            famPrefix = "$       Shell element data for family    "
+            famString = "{}{:39s}".format(famPrefix, compNames[compID])
+            write_80(fout, famString)
+            for elem in conn[compID]:
+                # Insert component ID as in plate
+                elem_with_comp = [elem[0], compID] + elem[1:]
+                write_bulk_line("CQUAD4", elem_with_comp)
+
+        # Write BCs
+        if apply_bcs:
+            for node in bcnodes:
+                write_bulk_line("SPC", [1, node, "123456", 0.0])
+
+        write_80(fout, "ENDDATA")
+
+    print(f"Cylinder mesh written to {output_file} with {nnodes} nodes and {len(elements)} elements.")
+

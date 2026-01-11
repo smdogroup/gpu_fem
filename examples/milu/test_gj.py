@@ -1,4 +1,6 @@
-# now let's test this out and visualize it
+# test gauss-jordan 6x6 block solves
+
+
 import numpy as np
 import sys, scipy as sp
 from __ilu import gaussJordan

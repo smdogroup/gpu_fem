@@ -1,14 +1,16 @@
 
+import sys
+sys.path.append("../../milu")
 from __src import get_tacs_matrix, sort_vis_maps
-from __src import random_ordering, reorder_bsr6_nofill, gen_plate_mesh
+from __src import random_ordering, reorder_bsr6_nofill, gen_cylinder_mesh
 from __ilu import q_ordering
 from _fillin import ilu_k_pattern_bsr
 import numpy as np
 
-def make_plate_case(args, qorder_p:float=1.0, complex_load:bool=True, apply_bcs:bool=True):
+def make_cylinder_case(args, qorder_p:float=1.0, complex_load:bool=True, apply_bcs:bool=True):
     """make plate case helper function (to be used in this script for single-level ILU and the next script for multilevel ILU)"""
 
-    gen_plate_mesh(nxe=args.nxe, lx=1.0, ly=1.0, apply_bcs=apply_bcs)
+    gen_cylinder_mesh(nel_circ=args.nxe, nel_axial=args.nxe, radius=1.0, length=2.0, name="cylinder", apply_bcs=apply_bcs)
 
     # ====================================================
     # 1) create and assemble FEA problem
@@ -22,9 +24,9 @@ def make_plate_case(args, qorder_p:float=1.0, complex_load:bool=True, apply_bcs:
         load_fcn = lambda _x, _y : 1.0
 
     if apply_bcs:
-        bdf_file = "plate.bdf"
+        bdf_file = "cylinder.bdf"
     else:
-        bdf_file = "plate_nobc.bdf"
+        bdf_file = "cylinder_nobc.bdf"
 
     A00, rhs00, xpts00 = get_tacs_matrix(bdf_file=bdf_file, thickness=thickness, load_fcn=load_fcn)
 
