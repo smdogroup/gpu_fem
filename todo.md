@@ -1,7 +1,6 @@
 # Current Devel tasks
 
-## Smoothed aggregation AMG
-- [ ] demo SA-AMG on plate in python
+
 
 ## AIG Elements
 
@@ -19,9 +18,28 @@
     - [ ] devel + demo multigrid plate AIG on GPU
       - [x] fix and debug structured IGA prolongation and restriction => just ended up removing / penalizing line searches and it does much better..
     - [ ] verify asymptotic correctness of plateAIG
+
+   
 - [ ] AIG9 shell element
    - [ ] handle multiple matches with T-splines (with each patch one TACS component, use component maps and a new patch bndry array to identify nodes on patch boundaries)
    - [ ] demo T-splines on uCRM wing
+
+
+## schwarz and thin plate cohomology isogeom elements
+
+- [ ] implement schwarz smoother and isogeometric cohomology stuff here, https://grandmaster.colorado.edu/copper/2016/StudentCompetition/Benzaken_Isogeometric_Multigrid.pdf
+    * shows how isogeometric can be used to make thin plate friendly smoothers using cohomology
+   - [ ] show Kirchoff-like multigrid performance on Reissner-mindlin plate with this method
+   - [ ] extend to new cases
+   - [ ] writeup theory?
+
+
+## Smoothed aggregation AMG
+- [ ] demo SA-AMG on plate in python
+
+
+## maybe tasks - theory
+
 - [ ] investigate if weak form is actually correct for asymptotic plate elem
    * currently getting worse performance with higher slenderness, and not sure why..
    * should remove the relation to gamma for condition number or bending to trv shear stiffness disparities..
@@ -29,6 +47,7 @@
    - [ ] is the rotation transform done correctly now?
    - [ ] maybe try on beams..
    - [ ] compare to the direct weak form proposed in the original AIG plate element paper.. see if it matches that.. cause I kind of hacked it and it may not be the exact same..
+
 - [ ] lit review and/or devel AIG element for non-constant thickness
 - [ ] develop some theory on whether the condition number should improve for AIG elements vs CFI
    * seems like actually condition number is gonna be the same as before..
