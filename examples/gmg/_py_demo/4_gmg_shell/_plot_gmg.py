@@ -15,8 +15,10 @@ geometric multigrid for shells
 """
 import numpy as np
 import matplotlib.pyplot as plt
-from __src import get_tacs_matrix, delete_rows_and_columns, reduced_indices, plot_vec_compare_all, plot_plate_vec
-from __src import gauss_seidel_csr, block_gauss_seidel_6dof, mg_coarse_fine_operators_v2, sort_vis_maps
+from __src import get_tacs_matrix, delete_rows_and_columns, reduced_indices, plot_vec_compare, plot_vec_compare_all, plot_plate_vec
+from __src import gauss_seidel_csr, block_gauss_seidel_6dof, mg_coarse_fine_operators_v1, mg_coarse_fine_operators_v2, sort_vis_maps, zero_non_nodal_dof
+from __src import mg_coarse_fine_operators_v3, mg_coarse_fine_operators_v4, mg_coarse_fine_transv_shear_smooth
+# from __src import block_gauss_seidel_6dof_v2
 import scipy as sp
 from scipy.sparse.linalg import spsolve
 from mpl_toolkits.mplot3d import Axes3D  # This import registers the 3D projection, even if not used directly.
@@ -42,9 +44,27 @@ sort_fw_map_list = []
 sort_bk_map_list = []
 bcs_list = []
 
+# normally you remove dirichlet bcs in multigrid
+# but you don't have to if you're careful (and it will be tricky to remove bcs for block Gauss-seidel smoothing, TBD)
+# remove_bcs = True
 remove_bcs = False
+
+# set thickness of the shells to see if this is affecting smoothing..
+# thickness = 1.0
+# thickness = 0.1
+# thickness = 0.02 # still somewhat thick..
+# thickness = 0.001
 thickness = 1.0 / args.SR
+
+# yes the singularity is causing poor scaling and smoothing qualities
+# need to think about block / coupled smoothing steps..
+
+# nxe_list = [32, 16, 8, 4]
+# nxe_list = [16, 8, 4]
+# nxe_list = [8, 4]
 nxe_list = [32, 16]
+# nxe_list = [16, 8]
+# nxe_list = [4,2]
 
 for nxe in nxe_list:
     _tacs_bsr_mat, _rhs, _xpts = get_tacs_matrix(f"_archive/plate{nxe}.bdf", thickness=thickness)
@@ -52,13 +72,26 @@ for nxe in nxe_list:
 
     _nnodes = _xpts.shape[0] // 3
     _N = 6 * _nnodes
-    # zero forces on the boundary
-    _free_dof = reduced_indices(_tacs_csr_mat)
-    bcs = np.array([_ for _ in range(_tacs_csr_mat.shape[0]) if not(_ in _free_dof)])
-    _rhs[bcs] *= 0.0
-    bcs_list += [bcs]
 
-    _free_dof = [_ for _ in range(_N)]
+    # if nxe == 4:
+    #     plt.imshow(_tacs_csr_mat.todense())
+    #     plt.show()
+
+    # remove bcs..
+    if remove_bcs:
+        _free_dof = reduced_indices(_tacs_csr_mat)
+        bcs = [_ for _ in range(_tacs_csr_mat.shape[0]) if not(_ in _free_dof)]
+        _tacs_csr_mat = delete_rows_and_columns(_tacs_csr_mat, dof=_free_dof)
+        _rhs = _rhs[_free_dof]
+    
+    else: # not removing bcs
+        # zero forces on the boundary
+        _free_dof = reduced_indices(_tacs_csr_mat)
+        bcs = np.array([_ for _ in range(_tacs_csr_mat.shape[0]) if not(_ in _free_dof)])
+        _rhs[bcs] *= 0.0
+        bcs_list += [bcs]
+
+        _free_dof = [_ for _ in range(_N)]
     
     # get the sort maps (to undo any reordering)
     _sort_fw, _sort_bk = sort_vis_maps(nxe, _xpts, _free_dof)
@@ -69,6 +102,7 @@ for nxe in nxe_list:
     tacs_csr_mat_list += [_tacs_csr_mat.copy()]
     rhs_list += [_rhs.copy()]
 
+
 """plot and solve the original res error"""
 mat, rhs, sort_fw, sort_bk = tacs_csr_mat_list[0].copy(), rhs_list[0].copy(), sort_fw_map_list[0], sort_bk_map_list[0]
 nfree = sort_bk.shape[0]
@@ -76,45 +110,16 @@ nnodes = nfree // 6
 nxe, N = int(nnodes**0.5) - 1, rhs.shape[0] # here N is the # DOF after bc removal
 soln = spsolve(mat, rhs)
 
-# this shows we get the correct solution in the SS plate case
-# useful for debugging the solution as well..
-# plot_vec_compare_all(nxe, rhs, soln, sort_fw, filename=None)
-
-"""now we try error smoothing on fine grid first"""
-# let's work first on the fine grid, see if smoothing even works..
-x0, res = np.zeros(N), rhs.copy()
-x = x0.copy()
-x = gauss_seidel_csr(mat, rhs, x, num_iter=5)
-# x = block_gauss_seidel_6dof(mat, rhs, x, num_iter=5)
-res2 = res - mat.dot(x)
-
-# check if bcs are correct
-# res_zero = np.where(res == 0)
-# print(f"{res=}")
-# print(F"{bcs=}")
-
-# see whether residual smoothing happens or not?
-# plot_vec_compare(nxe, res, res2, sort_fw, filename=None)
 
 """compute and try coarse-fine operators (check error shape stays the same)"""
+# coarse_fine_method = mg_coarse_fine_operators_v1 # poisson stencil
 coarse_fine_method = mg_coarse_fine_operators_v2 # 1st order accurate lagrange (simple avging => this is fine.. even if high freq error, smoothing reduces that)
+# coarse_fine_method = mg_coarse_fine_operators_v3 # 2nd order accurate lagrange
+# coarse_fine_method = mg_coarse_fine_operators_v4 # 4th order accurate lagrange
 
 I_cf, I_fc = coarse_fine_method(nxe, sort_bk_map_list[0], sort_bk_map_list[1], 
                                       bcs_list=[bcs_list[0], bcs_list[1]] if not(remove_bcs) else None)
 # plt.imshow(I_fc)
-# plt.show()
-res_c = np.dot(I_fc, res)
-res2_c = np.dot(I_fc, res2)
-res_f = np.dot(I_cf, res_c)
-res2_f = np.dot(I_cf, res2_c)
-
-# it is working now
-
-# see whether residuals look similar on the coarse mesh
-# plot_vec_compare_all(nxe//2, res_c, res2_c, sort_fw_map_list[1], filename=None)
-
-# # # and then back to the fine mesh
-# plot_vec_compare_all(nxe, res_f, res2_f, sort_fw, filename=None)
 
 """now we'll compute the coarse-fine operators at each level"""
 Icf_list = []
@@ -162,10 +167,15 @@ defect_nrms = [init_res_norm]
 going through the smooth and fine-corase step by step
 """
 
-for v_cycle in range(300):
+for v_cycle in range(1): # only one step
 
     # don't do smoothing rn so that we can check coarse-fine operators better first (NOTE : don't do coarse-fine on loads, only disps, fine-coarse can be done on loads)
     defect_0_0 = defect.copy()
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 7), subplot_kw={'projection': '3d'})
+    print("plot original residual")
+    plot_plate_vec(nxe, defect_0_0, ax=ax, sort_fw=sort_fw_map_list[0])
+    plt.show()
 
     # level 0 - smooth
     lhs_0 = tacs_csr_mat_list[0]
@@ -182,21 +192,60 @@ for v_cycle in range(300):
         plot_vec_compare_all(nxe_list[0], defect_0_0, defect_0_1, sort_fw_map=sort_fw_map_list[0], 
                                 filename=None)
         
+    fig, ax = plt.subplots(1, 1, figsize=(10, 7), subplot_kw={'projection': '3d'})
+    print("plot pre-smooth")
+    plot_plate_vec(nxe, defect_0_1, ax=ax, sort_fw=sort_fw_map_list[0])
+    plt.show()
+        
     if args.debug: check_defect_err(x_1, defect_0_1)
 
     # level 0 to 1 - coarsen 
     defect_1_0 = np.dot(Ifc_list[0], defect_0_1)
 
+    fig, ax = plt.subplots(1, 1, figsize=(10, 7), subplot_kw={'projection': '3d'})
+    print("plot coarse restrict")
+    plot_plate_vec(nxe // 2, defect_1_0, ax=ax, sort_fw=sort_fw_map_list[1])
+    plt.show()
+
     # solve at level 1 (NOTE : we're just doing 2 grids for rn)
     lhs_1 = tacs_csr_mat_list[1]
     dx_1 = spsolve(lhs_1, defect_1_0)
 
+    fig, ax = plt.subplots(1, 1, figsize=(10, 7), subplot_kw={'projection': '3d'})
+    print("plot coarse soln")
+    plot_plate_vec(nxe // 2, dx_1, ax=ax, sort_fw=sort_fw_map_list[1])
+    plt.show()
+
     # coarse-fine the disps
     _dx_cf_0 = np.dot(Icf_list[0], dx_1)
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 7), subplot_kw={'projection': '3d'})
+    print("plot fine prolong")
+    plot_plate_vec(nxe, _dx_cf_0, ax=ax, sort_fw=sort_fw_map_list[0])
+    plt.show()
 
     # loads of coarse-fine update
     _df_cf_0 = lhs_0.dot(_dx_cf_0)
 
+    # coarse-fine transv shear correction
+    if args.trv_shear:
+        _dx_cf_0_2 = mg_coarse_fine_transv_shear_smooth(nxe, _dx_cf_0, h=1.0/nxe, sort_fw_arr=sort_fw_map_list[0])
+        _df_cf_0_2 = lhs_0.dot(_dx_cf_0_2)
+
+        if args.plot:
+            print(f"2.0.1 - coarse-fine transv shear correction disp")
+            plot_vec_compare_all(nxe_list[0], _dx_cf_0, _dx_cf_0_2, sort_fw_map=sort_fw_map_list[0], 
+                                    filename=None)
+            
+            print(f"2.0.2 - coarse-fine transv shear correction loads")
+            plot_vec_compare_all(nxe_list[0], defect_0_1, _df_cf_0_2, sort_fw_map=sort_fw_map_list[0], 
+                                    filename=None)
+        _dx_cf_0 = _dx_cf_0_2.copy()
+        _df_cf_0 = _df_cf_0_2.copy()
+        
+
+    # TODO : need smoothing of coarse-fine? (neg loads because we add neg loads to next defect)
+    # NOTE : this is prolong smoothing here..
     if args.cf_smooth: # NOTE : this is a good settin I think..
         # if args.LDblock:
         #     _dx_cf_update = block_gauss_seidel_6dof_v2(lhs_0, -1.0 * _df_cf_0, np.zeros(lhs_0.shape[0]), num_iter=gs_cf)
@@ -218,7 +267,9 @@ for v_cycle in range(300):
 
     # re-scale using one DOF min
     s = _dx_cf_1
-    omega = np.dot(defect_0_1, s) / np.dot(s, lhs_0.dot(s))
+    # omega = np.dot(defect_0_1, s) / np.dot(s, lhs_0.dot(s))
+    # omega = 0.8
+    omega = 1.0
     print(f"{omega=:.2e}")
     # compute equiv loads
 
@@ -248,14 +299,50 @@ for v_cycle in range(300):
                                 filename=None)
     if args.debug: check_defect_err(x_2, defect_0_2)
 
-    dx_2 = block_gauss_seidel_6dof(lhs_0, defect_0_2, np.zeros(lhs_0.shape[0]), num_iter=gs_post)
-    defect_0_3 = defect_0_2 - lhs_0.dot(dx_2)
-    x_3 = x_2 + dx_2
+    # post-smoothing
+    # if args.LDblock:
+    #     dx_2 = block_gauss_seidel_6dof_v2(lhs_0, defect_0_2, np.zeros(lhs_0.shape[0]), num_iter=gs_post)
+    # else:
+    defect_0_2_orig = defect_0_2.copy()
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 7), subplot_kw={'projection': '3d'})
+    print("plot fine defect #1")
+    plot_plate_vec(nxe, defect_0_2_orig, ax=ax, sort_fw=sort_fw_map_list[0])
+    plt.show()
+
+
+    # for i in range(4):
+    for i in range(10):
+        dx_2 = block_gauss_seidel_6dof(lhs_0, defect_0_2, np.zeros(lhs_0.shape[0]), num_iter=gs_post)
+
+        # omega_s = 0.85
+        # omega_s = 0.95
+        # omega_s = 1.1
+        # omega_s = 1.2
+        omega_s = 1.3
+        dx_2 *= omega_s
+
+        defect_0_3 = defect_0_2 - lhs_0.dot(dx_2)
+        x_3 = x_2 + dx_2
+        defect_0_2 = defect_0_3.copy()
+        x_2 = x_3.copy()
+
+        fig, ax = plt.subplots(1, 1, figsize=(10, 7), subplot_kw={'projection': '3d'})
+        print(f"plot fine defect post-smoothed {i=}")
+        plot_plate_vec(nxe, defect_0_3, ax=ax, sort_fw=sort_fw_map_list[0]) #, smooth=False)
+        plt.show()
+
     if args.plot:
         print(f"{v_cycle=} : 4 - post smooth")
         plot_vec_compare_all(nxe_list[0], defect_0_2, defect_0_3, sort_fw_map=sort_fw_map_list[0], 
                                 filename=None)
     if args.debug: check_defect_err(x_3, defect_0_3)
+    
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 7), subplot_kw={'projection': '3d'})
+    print("plot fine smoothed soln")
+    plot_plate_vec(nxe, x_3, ax=ax, sort_fw=sort_fw_map_list[0])
+    plt.show()
 
     defect, x = defect_0_3.copy(), x_3.copy()
 
@@ -265,53 +352,3 @@ for v_cycle in range(300):
     if c_norm < 1e-6 * init_res_norm:
         print(f"v-cycle converged in {v_cycle} steps")
         break
-
-"""show final solution.."""
-
-final_defect = rhs.copy() - lhs_0.dot(x)
-final_res_norm = np.linalg.norm(final_defect)
-nrm_ratio = init_res_norm / final_res_norm
-print(f"{init_res_norm=:.3e} {final_res_norm=:.3e} or {nrm_ratio=:.3e}, in {v_cycle=} steps")
-# TODO : check soln error also?
-err_nrm = np.linalg.norm(soln - x)
-print(f"{err_nrm=:.3e}")
-
-_n = 3 if args.cf_smooth else 2
-n_total_gs = args.n_gs * _n * v_cycle
-print(f"{n_total_gs=} (# total GS steps)")
-
-if args.plot:
-    plt.rcParams.update({
-        # 'font.family': 'Courier New',  # monospace font
-        'font.family' : 'monospace', # since Courier new not showing up?
-        'font.size': 20,
-        'axes.titlesize': 20,
-        'axes.labelsize': 20,
-        'xtick.labelsize': 20,
-        'ytick.labelsize': 20,
-        'legend.fontsize': 20,
-        'figure.titlesize': 20
-    }) 
-    fig, ax = plt.subplots(1, 3, figsize=(13, 7))
-    dof_strs = ['w', 'thx', 'thy']
-    for i, idof in enumerate([2, 3, 4]):
-        dof_str = dof_strs[i]
-        c_ax = fig.add_subplot(1, 3, i+1, projection='3d')
-        plot_plate_vec(nxe=nxe, vec=x.copy(), ax=c_ax, sort_fw=sort_fw_map_list[0], nodal_dof=idof, cmap='RdBu_r')
-    plt.tight_layout()
-    plt.show()
-
-    print(f"{init_res_norm=:.3e} {final_res_norm=:.3e} or {nrm_ratio=:.3e}, in {v_cycle=} steps")
-    print(f"{n_total_gs=} (# total GS steps)")
-
-    # v-cycle resids here
-    iters = [_ for _ in range(len(defect_nrms))]
-    plt.plot(iters, defect_nrms, 'ko-')
-    plt.xlabel("V-cycles")
-    plt.ylabel("Defect residual")
-    plt.yscale("log")
-    plt.tight_layout()
-    plt.show()
-
-    print(f"{init_res_norm=:.3e} {final_res_norm=:.3e} or {nrm_ratio=:.3e}, in {v_cycle=} steps")
-    print(f"{n_total_gs=} (# total GS steps)")

@@ -64,8 +64,12 @@ def get_tacs_matrix(bdf_file, thickness:float=0.02):
         import math
         theta = math.atan2(_y, _x)
         r = np.sqrt(_x**2 + _y**2)
-        return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(4*theta)
-    # game of life polar load..
+        r2 = r/np.sqrt(2)
+        # game of life polar load..
+        # return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(4*theta) * r2 * (1 - r2)
+        return -100.0 * np.sin(4.0  * np.pi * r) * np.cos(2.4*theta-np.pi/4.0*2.4) * r2 * (1 - r2)
+        # return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(2*theta-np.pi/2.0)
+        # return 100.0 * np.sin(2.0 * np.pi * _x) * np.sin(np.pi * _y)
 
     force_array[2::6] = np.array([load_fcn(x[i], y[i]) for i in range(nnodes)])
     # force_array[2::6] += np.sin(2.0 * np.pi * x) * np.sin(np.pi * y)
@@ -145,27 +149,58 @@ def plot_init():
         'figure.titlesize': 20
     }) 
 
-def plot_plate_vec(nxe, vec, ax, sort_fw, nodal_dof:int=2, cmap='viridis'):
+# def plot_plate_vec(nxe, vec, ax, sort_fw, nodal_dof:int=2, cmap='viridis', smooth:bool=False):
+#     """assume vec is one DOF per node only here (and includes bcs)"""
+#     nx = nxe + 1
+#     N = nx**2
+
+#     plot_vec = np.zeros((6*N,))
+#     plot_vec[sort_fw] = vec[:]
+#     plot_vec = plot_vec[nodal_dof::6]
+
+#     # plot_vec[_free_dof] = vec[:]
+#     # # reordering of solution for plotting..
+#     # x, y = _xpts[0::3], _xpts[1::3]
+#     # sort_idx = np.lexsort((y, x))  # lexsort uses last index first, so (y, x) gives x primary, y secondary
+#     # # print(f"{sort_idx=}")
+#     # plot_vec = plot_vec[nodal_dof::6][sort_idx]
+
+#     x = np.linspace(0.0, 1.0, nx)
+#     y = x.copy()
+#     X, Y = np.meshgrid(x, y)
+#     VALS = np.reshape(plot_vec, (nx, nx))
+
+#     ax.plot_surface(X, Y, VALS, cmap=cmap, antialiased=True)
+
+
+def plot_plate_vec(nxe, vec, ax, sort_fw, nodal_dof: int = 2,
+                   cmap: str = 'viridis'):
     """assume vec is one DOF per node only here (and includes bcs)"""
     nx = nxe + 1
     N = nx**2
 
-    plot_vec = np.zeros((6*N,))
+    plot_vec = np.zeros((6 * N,))
     plot_vec[sort_fw] = vec[:]
     plot_vec = plot_vec[nodal_dof::6]
-
-    # plot_vec[_free_dof] = vec[:]
-    # # reordering of solution for plotting..
-    # x, y = _xpts[0::3], _xpts[1::3]
-    # sort_idx = np.lexsort((y, x))  # lexsort uses last index first, so (y, x) gives x primary, y secondary
-    # # print(f"{sort_idx=}")
-    # plot_vec = plot_vec[nodal_dof::6][sort_idx]
 
     x = np.linspace(0.0, 1.0, nx)
     y = x.copy()
     X, Y = np.meshgrid(x, y)
+
     VALS = np.reshape(plot_vec, (nx, nx))
-    ax.plot_surface(X, Y, VALS, cmap=cmap)
+    ax.plot_surface(X, Y, VALS, cmap=cmap, antialiased=True)
+
+
+    # --- remove all axes / grids / frames ---
+    ax.set_axis_off()
+    ax.grid(False)
+    # ax.set_frame_on(False)
+    ax.patch.set_visible(False)
+
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        axis.pane.set_visible(False)
+        axis._axinfo["grid"]["linewidth"] = 0.0
+
 
 def plot_vec_compare(nxe, old_defect, new_defect, sort_fw_map, filename=None, nodal_dof:int=2):
     from mpl_toolkits.mplot3d import Axes3D  # This import registers the 3D projection, even if not used directly.
@@ -285,6 +320,56 @@ def block_gauss_seidel_6dof(A, b: np.ndarray, x0: np.ndarray, num_iter=1):
                 continue
 
     return x
+
+# def block_gauss_seidel_6dof_v2(A, b: np.ndarray, x0: np.ndarray, num_iter=1):
+#     """
+#     Perform Block Gauss-Seidel smoothing for 6 DOF per node.
+#     A: csr_matrix of size (6*nnodes, 6*nnodes)
+#     b: RHS vector (6*nnodes,)
+#     x0: initial guess (6*nnodes,)
+#     num_iter: number of smoothing iterations
+#     Returns updated solution vector x
+#     """
+#     x = x0.copy()
+#     ndof = 6
+#     n = A.shape[0] // ndof
+
+#     for it in range(num_iter):
+#         for i in range(n):
+#             row_block_start = i * ndof
+#             row_block_end = (i + 1) * ndof
+
+#             # Initialize block and RHS
+#             Aii = np.zeros((ndof, ndof))
+#             rhs = b[row_block_start:row_block_end].copy()
+
+#             for row_local, row in enumerate(range(row_block_start, row_block_end)):
+#                 for idx in range(A.indptr[row], A.indptr[row + 1]):
+#                     col = A.indices[idx]
+#                     val = A.data[idx]
+
+#                     j = col // ndof
+#                     dof_j = col % ndof
+
+#                     # col_block_start = j * ndof
+#                     # col_block_end = (j + 1) * ndof
+
+#                     if j == i and dof_j <= row_local:
+#                         # print(f"{Aii=}")
+#                         Aii[row_local, dof_j] = val  # Fill local diag block only in L + D parts
+#                     elif i > j: # below-diag get to keep the full coupling cause that's just updates.. and still in L part
+#                         rhs[row_local] -= val * x[col]
+
+#             # Check for singular or ill-conditioned diagonal block
+#             try:
+#                 # zero strict upper-triang part..
+#                 # print(f"{Aii=}")
+#                 x[row_block_start:row_block_end] = np.linalg.solve(Aii, rhs)
+#             except np.linalg.LinAlgError:
+#                 print(f"Warning: singular block at node {i}, skipping update.")
+#                 continue
+
+#     return x
 
 def sort_vis_maps(nxe, xpts, free_dof):
     """create dof maps from reordered red to unsorted full and reverse"""
