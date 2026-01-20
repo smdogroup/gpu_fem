@@ -45,7 +45,7 @@ public:
         d_kmat_cols = d_kmat_bsr_data.cols;
         kmat_nnzb = d_kmat_bsr_data.nnzb;
 
-        printf("omega = %.4e\n", omega);
+        // printf("omega = %.4e\n", omega);
         omega = omega_;
         iters = iters_;
 
@@ -67,18 +67,18 @@ public:
 
 
         // Allocate batched device memory for pointers and individual blocks.
-        printf("1 - allocate batched memory\n");
+        // printf("1 - allocate batched memory\n");
         _allocateBatchedMemory();
         // debugCheckPointerListOnly("after allocation (before fill kernel)");
-        printf("2 - compute Schwarz NZ patterns\n");
+        // printf("2 - compute Schwarz NZ patterns\n");
         _computeNZPatterns();
 
         // Compute the Schwarz factorization during construction.
-        printf("3 - initCuda\n");
+        // printf("3 - initCuda\n");
         _initCuda();
-        printf("4 - copy matrix values to batched memory\n");
+        // printf("4 - copy matrix values to batched memory\n");
         _copyMatrixValuesToBatched();
-        printf("5 - compute the local Schwarz matrix inverses\n");
+        // printf("5 - compute the local Schwarz matrix inverses\n");
         _schwarzFactorization();
     }
 

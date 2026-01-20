@@ -365,10 +365,10 @@ int main(int argc, char **argv) {
     // input ----------
     std::string solver_type = "asw";
     int nxe = 128; // default value (want to run higher like nxe = 128))
-    double SR = 50.0; // default, the less slender it is, solves much faster
+    double SR = 100.0; // default, the less slender it is, solves much faster
     double pressure = 8.0e6;
-    double omega = 0.35; // default omega
-    int n_smooth = 5; // 5, number of ASW smoothing steps
+    double omega = 0.2; // default omega
+    int n_smooth = 2; // 5, number of ASW smoothing steps
     int size = 2;
 
     // Parse arguments
