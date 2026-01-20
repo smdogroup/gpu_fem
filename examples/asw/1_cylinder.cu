@@ -60,7 +60,7 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 }
 
 template <typename T, class Assembler>
-void asw_solve(int nxe, double SR, T omega, int n_smooth, T pressure = 5.0e7) {
+void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure = 5.0e7) {
     /* SPAI-GMRES solve */
 
     using Basis = typename Assembler::Basis;
@@ -130,7 +130,7 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, T pressure = 5.0e7) {
     // build smoother and prolongations..
     // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
     printf("making ASW smoother\n");
-    int size = 2; // size x size coupled blocks of smoothing
+    // int size = 2; // size x size coupled blocks of smoothing
     auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, nxe + 1, nxe, 
         omega, n_smooth, size);
     printf("\tdone making ASW smoother\n");
@@ -353,22 +353,23 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(std::string solver_type, int nxe, double SR, T omega, int n_smooth, T load_mag = 5.0e7) {
+void gatekeeper_method(std::string solver_type, int nxe, double SR, T omega, int n_smooth, int size, T load_mag = 5.0e7) {
     if (solver_type == "direct") {
         solve_direct<T, Assembler>(nxe, SR, load_mag);
     } else if (solver_type == "asw") {
-        asw_solve<T, Assembler>(nxe, SR, omega, n_smooth, load_mag);
+        asw_solve<T, Assembler>(nxe, SR, omega, n_smooth, size, load_mag);
     }
 }
 
 int main(int argc, char **argv) {
     // input ----------
     std::string solver_type = "asw";
-    int nxe = 50; // default value (want to run higher like nxe = 128))
+    int nxe = 128; // default value (want to run higher like nxe = 128))
     double SR = 50.0; // default, the less slender it is, solves much faster
     double pressure = 8.0e6;
     double omega = 0.35; // default omega
     int n_smooth = 5; // 5, number of ASW smoothing steps
+    int size = 2;
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -417,6 +418,13 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --n_smooth\n";
                 return 1;
             }
+        } else if (strcmp(arg, "--size") == 0) {
+            if (i + 1 < argc) {
+                size = std::atoi(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --size\n";
+                return 1;
+            }
         } else {
             std::cerr << "Unknown argument: " << argv[i] << std::endl;
             std::cerr << "Usage: " << argv[0] << " [direct/krylov] [--nxe value] [--SR value] [--nsmooth int]" << std::endl;
@@ -436,7 +444,7 @@ int main(int argc, char **argv) {
     // have to use MITC4 shells cause this is before diff element types in paper
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-    gatekeeper_method<T, Assembler>(solver_type, nxe, SR, omega, n_smooth, pressure);
+    gatekeeper_method<T, Assembler>(solver_type, nxe, SR, omega, n_smooth, size, pressure);
     
 
     return 0;

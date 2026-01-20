@@ -27,7 +27,7 @@ parser.add_argument("--thick", type=float, default=1e-2) # 2e-3
 parser.add_argument("--justpc", action=argparse.BooleanOptionalAction, default=False, help="yes: just use pc one vec, no: solve with GMRES")
 # it can even do thin plate quite well! maybe even better than multigrid?
 parser.add_argument("--fill", type=int, default=0, help="ILU(k) fill level")
-parser.add_argument("--nxe", type=int, default=10, help="num elems each direction x and y")
+parser.add_argument("--nxe", type=int, default=30, help="num elems each direction x and y")
 parser.add_argument("--size", type=int, default=2, help="coupling size of schwarz smoother")
 parser.add_argument("--omega", type=float, default=0.25, help="additive coefficient for ASW")
 parser.add_argument("--iters", type=int, default=5, help="num schwarz smooths per krylov step (more than one allowed)")
