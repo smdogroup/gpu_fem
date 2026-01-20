@@ -7,7 +7,8 @@ warnings.simplefilter("ignore")
 from _plate import make_plate_case
 from _milu import BILU_SVD_Precond
 import scipy as sp
-from __src import right_pgmres, plot_plate_vec
+from __linalg import right_pgmres
+from __src import plot_plate_vec
 import matplotlib.pyplot as plt
 import numpy as np
 

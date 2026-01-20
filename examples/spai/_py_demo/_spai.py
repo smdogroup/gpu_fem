@@ -120,6 +120,12 @@ def compute_spai_dense_mr_self_precond(K_csr, iters:int=10):
     M = initial_guess(K) # from https://www.sciencedirect.com/science/article/pii/S0168927499000471?via%3Dihub
     # they used 1/one-norm(AA^T) * I_N as initial matrix (but that has wrong units, so I changed it for better results)
 
+    # import matplotlib.pyplot as plt
+    # plt.spy(M)
+    # plt.show()
+
+    # print(f"{M[1,1]=}")
+
     for j in range(N): # each column of M
         ej = np.zeros(N)
         ej[j] = 1.0
@@ -128,11 +134,16 @@ def compute_spai_dense_mr_self_precond(K_csr, iters:int=10):
             r = ej - np.dot(K, s)
             z = np.dot(M, r)
             q = np.dot(K, z)
+            # if j == 1:
+            #     print(f"{j=} : {s[:8]=}\n{r[:8]=}\n{z[:8]=}\n{q[:8]=}")
             alpha = np.dot(r, q) / (1e-12 + np.dot(q, q))
             s += alpha * z
+        M[:,j] = s * 1.0
 
-            M[:,j] = s * 1.0
-        # M[:,j] = s * 1.0
+    # import matplotlib.pyplot as plt
+    # plt.spy(M)
+    # plt.show()
+
     return M
 
 class SPAI_MR_SelfPrecond:

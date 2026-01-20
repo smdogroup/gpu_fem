@@ -8,7 +8,8 @@ from _spai import *
 import sys
 sys.path.append("../../milu/")
 from _plate import make_plate_case
-from __src import right_pgmres, plot_plate_vec
+from __linalg import right_pgmres
+from __src import plot_plate_vec
 
 
 

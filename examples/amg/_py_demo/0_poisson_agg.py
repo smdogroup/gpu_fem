@@ -7,13 +7,12 @@ import matplotlib.pyplot as plt
 import sys
 sys.path.append("../../milu/")
 # from __src import right_pgmres
-from __src import right_pcg
+from __linalg import right_pcg
 sys.path.append("_src/")
 from poisson import poisson_2d_csr, plot_poisson_surface, poisson_apply_bcs
 from csr_aggregation import greedy_serial_aggregation_csr, plot_plate_aggregation
 from csr_aggregation import tentative_prolongator_csr, smooth_prolongator_csr
-from csr_aggregation import AMGSolver
-from sa import gauss_seidel_csr
+from csr_aggregation import AMGSolver, gauss_seidel_csr
 
 import argparse
 parser = argparse.ArgumentParser()

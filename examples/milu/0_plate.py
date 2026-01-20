@@ -8,7 +8,7 @@ import numpy as np
 import sys, scipy as sp
 from _plate import make_plate_case
 from __src import plot_plate_vec
-from __src import right_pgmres
+from __linalg import right_pgmres
 from __ilu import GaussJordanBlockPrecond
 import matplotlib.pyplot as plt
 

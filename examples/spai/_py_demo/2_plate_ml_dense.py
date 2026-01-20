@@ -8,8 +8,8 @@ from _spai import *
 from _mlev_spai import MultilevelSPAI
 import sys
 sys.path.append("../../milu/")
-from _plate import make_plate_case
-from __src import right_pgmres, plot_plate_vec
+from __linalg import right_pgmres
+from __src import plot_plate_vec
 
 # algebraic multilevel method mostly based on these papers
 # I did add jacobi smoother for restrict + prolong, whereas they do not (cause they have much simpler problem with Poisson I guess)
