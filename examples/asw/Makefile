@@ -20,9 +20,6 @@ optim:
 
 
 
-%: %.cu
-	${GPU_CXX} -ccbin $(CXX) -w ${GPU_CC_FLAGS} -DUSE_GPU \
-	-Xcompiler ${CC_FLAGS} -DUSE_CUSPARSE ${INCLUDE_FLAGS} \
-	-std=c++17 $< -o $@.out ${LINK}
-
-#	${GPU_CXX} -w ${GPU_CC_FLAGS} -DUSE_GPU -Xcompiler ${CC_FLAGS} -DUSE_CUSPARSE ${INCLUDE_FLAGS} -std=c++17 $< -o $@.out ${LINK}
+ %: %.cu
+#	${GPU_CXX} -ccbin $(CXX) -w ${GPU_CC_FLAGS} -DUSE_GPU -Xcompiler ${CC_FLAGS} -DUSE_CUSPARSE ${INCLUDE_FLAGS} -std=c++17 $< -o $@.out ${LINK}
+	${GPU_CXX} -w ${GPU_CC_FLAGS} -DUSE_GPU -Xcompiler ${CC_FLAGS} -DUSE_CUSPARSE ${INCLUDE_FLAGS} -std=c++17 $< -o $@.out ${LINK}

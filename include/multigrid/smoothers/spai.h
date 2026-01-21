@@ -1,22 +1,24 @@
 #pragma once
 
-#include "linalg/vec.h"
-#include "multigrid/solvers/solve_utils.h"
-#include <vector>
 #include <algorithm>
 #include <cstdio>
+#include <vector>
+
+#include "linalg/vec.h"
+#include "multigrid/solvers/solve_utils.h"
 #include "spai.cuh"
+
 
 template <typename T, class Assembler>
 class SPAI : public BaseSolver {
-public:
+   public:
     // Constructor: fill specifies how many fill iterations to perform.
-    SPAI(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
-         Assembler &assembler_, BsrMat<DeviceVec<T>> kmat_,
-         int fill = 3, int optim = 2)
-         : cublasHandle(cublasHandle_), cusparseHandle(cusparseHandle_),
-           assembler(assembler_), kmat(kmat_)
-    {
+    SPAI(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_, Assembler &assembler_,
+         BsrMat<DeviceVec<T>> kmat_, int fill = 3, int optim = 2)
+        : cublasHandle(cublasHandle_),
+          cusparseHandle(cusparseHandle_),
+          assembler(assembler_),
+          kmat(kmat_) {
         block_dim = assembler_.getBsrData().block_dim;
         N = assembler_.get_num_vars();
         nnodes = N / block_dim;
@@ -31,7 +33,7 @@ public:
 
         // kmat_nnzb, d_kmat_rowp, d_kmat_cols, etc. are assumed to be set up already.
         printf("1: compute power fillin SPAI(%d)\n", fill);
-        _compute_power_fillin(fill); // one more in order to 
+        _compute_power_fillin(fill);  // one more in order to
         printf("2: compute initial preconditioner");
         _compute_initial_preconditioner();
         printf("3: compute temporary matrices\n");
@@ -42,10 +44,9 @@ public:
         _spai_optimization(optim);
     }
 
-    void update_after_assembly(DeviceVec<T> &vars) { 
-    // TODO 
+    void update_after_assembly(DeviceVec<T> &vars) {
+        // TODO
     }
-
     void set_abs_tol(T atol) {}
     void set_rel_tol(T atol) {}
     int get_num_iterations() { return 0; }
@@ -55,31 +56,30 @@ public:
     bool solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) {
         // compute M*rhs => temp
         T a = 1.0, b = 0.0;
-        CHECK_CUSPARSE(cusparseDbsrmv(
-                    cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                    nnodes, nnodes, M_nnzb, &a, descr_M, d_M_vals,
-                    d_M_rowp, d_M_cols, block_dim, rhs.getPtr(), &b, soln.getPtr()));
+        CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
+                                      CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes, nnodes, M_nnzb, &a,
+                                      descr_M, d_M_vals, d_M_rowp, d_M_cols, block_dim,
+                                      rhs.getPtr(), &b, soln.getPtr()));
 
         // // compute K*temp => soln
         // CHECK_CUSPARSE(cusparseDbsrmv(
         //             cusparseHandle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
         //             nnodes, nnodes, kmat_nnzb, &a, descr_M, d_kmat_vals,
         //             d_kmat_rowp, d_kmat_cols, block_dim, temp.getPtr(), &b, soln.getPtr()));
-    
+
         return false;
     }
 
-private:
-
+   private:
     void _compute_power_fillin(int fill) {
         // KEEP THESE EXACTLY AS IS:
         // Get host versions of kmat sparsity
         h_kmat_rowp = DeviceVec<int>(nnodes + 1, d_kmat_rowp).createHostVec().getPtr();
-        h_kmat_cols  = DeviceVec<int>(kmat_nnzb, d_kmat_cols).createHostVec().getPtr();
+        h_kmat_cols = DeviceVec<int>(kmat_nnzb, d_kmat_cols).createHostVec().getPtr();
 
         // initial M sparsity is nofill (same as K's pattern)
         int *h_M_rowp0 = DeviceVec<int>(nnodes + 1, d_kmat_rowp).createHostVec().getPtr();
-        int *h_M_cols0  = DeviceVec<int>(kmat_nnzb, d_kmat_cols).createHostVec().getPtr();
+        int *h_M_cols0 = DeviceVec<int>(kmat_nnzb, d_kmat_cols).createHostVec().getPtr();
 
         // ----------------------------------------------------------
         // Allocate host arrays for the current M sparsity pattern.
@@ -195,14 +195,14 @@ private:
         // printVec<int>(nnodes, h_M_diagp);
 
         // create M matrix with filled in sparsity on device
-        d_M_rowp = HostVec<int>(nnodes+1, M_rowp).createDeviceVec().getPtr();
+        d_M_rowp = HostVec<int>(nnodes + 1, M_rowp).createDeviceVec().getPtr();
         d_M_cols = HostVec<int>(M_nnzb, M_cols).createDeviceVec().getPtr();
         d_M_diagp = HostVec<int>(nnodes, h_M_diagp).createDeviceVec().getPtr();
         d_M_vals = DeviceVec<T>(block_dim * block_dim * M_nnzb).getPtr();
-        
-// #ifdef DEBUG
-//         printf("Final M sparsity: %d nonzeros\n", M_nnzb);
-// #endif
+
+        // #ifdef DEBUG
+        //         printf("Final M sparsity: %d nonzeros\n", M_nnzb);
+        // #endif
 
         // Free host memory allocated for the current pattern (if you no longer need them on host).
         // delete[] M_rowp;
@@ -216,7 +216,8 @@ private:
         int nkmat_vals = kmat_nnzb * block_dim * block_dim;
         dim3 grid((nkmat_vals + 31) / 32);
         dim3 block(32);
-        k_abs_value_col_sums<T><<<grid, block>>>(kmat_nnzb, block_dim, d_kmat_cols, d_kmat_vals, temp.getPtr());
+        k_abs_value_col_sums<T>
+            <<<grid, block>>>(kmat_nnzb, block_dim, d_kmat_cols, d_kmat_vals, temp.getPtr());
 
         // compute max across all row-sums
         T *norm1 = DeviceVec<T>(1).getPtr();
@@ -234,7 +235,7 @@ private:
         k_add_diag_matrix<T><<<grid3, block>>>(nnodes, block_dim, inorm1, d_M_diagp, d_M_vals);
 
         // T *h_M_vals = DeviceVec<T>(block_dim2 * nno
-        
+
         // CHECK_CUDA(cudaDeviceSynchronize());
         // printf("\tadded diag in initial preconditioner\n");
     }
@@ -244,7 +245,7 @@ private:
         _compute_block_product_pattern();
         printf("\tdone computing prod block pattern\n");
 
-        // R, Z, Q matrices with M sparsity        
+        // R, Z, Q matrices with M sparsity
         // printf("d_R_vals nnzb = %d\n", M_nnzb);
         d_R_vals = DeviceVec<T>(block_dim * block_dim * M_nnzb).getPtr();
         d_Z_vals = DeviceVec<T>(block_dim * block_dim * M_nnzb).getPtr();
@@ -261,8 +262,9 @@ private:
         // M uses M_rowp, M_cols, M_nnzb
 
         // took this code from grid.h which does K * P => PF sparsity
-        // want list of blocks and in each case the KM_blocks1, KM_blocks2, KM_blocks3 of mat1 = mat2 * mat3
-        // which gives block indices in each matrix.. also the number of block product terms
+        // want list of blocks and in each case the KM_blocks1, KM_blocks2, KM_blocks3 of mat1 =
+        // mat2 * mat3 which gives block indices in each matrix.. also the number of block product
+        // terms
         KM_nprod = 0;
         for (int i = 0; i < nnodes; i++) {
             for (int jp = M_rowp[i]; jp < M_rowp[i + 1]; jp++) {
@@ -406,9 +408,9 @@ private:
         for (int iter = 0; iter < fill; iter++) {
             // 1) compute R = -K * M (sparse mat-mat product)
             cudaMemset(d_R_vals, 0.0, block_dim2 * M_nnzb * sizeof(T));
-            k_compute_mat_mat_prod2<T><<<KM_nprod, 216>>>(KM_nprod, block_dim, 
-                -1.0, d_KM_prodBlocks2, d_KM_prodBlocks3, d_KM_prodBlocks1, 
-                d_kmat_vals, d_M_vals, d_R_vals);
+            k_compute_mat_mat_prod2<T>
+                <<<KM_nprod, 216>>>(KM_nprod, block_dim, -1.0, d_KM_prodBlocks2, d_KM_prodBlocks3,
+                                    d_KM_prodBlocks1, d_kmat_vals, d_M_vals, d_R_vals);
             // CHECK_CUDA(cudaDeviceSynchronize());
 
             // 2) add I to R so that R = I - K * M
@@ -418,48 +420,49 @@ private:
 
             // 3) compute Z = M * R
             cudaMemset(d_Z_vals, 0.0, block_dim2 * M_nnzb * sizeof(T));
-            k_compute_mat_mat_prod2<T><<<MM_nprod, 216>>>(MM_nprod, block_dim, 
-                1.0, d_MM_prodBlocks2, d_MM_prodBlocks3, d_MM_prodBlocks1, 
-                d_M_vals, d_R_vals, d_Z_vals);
+            k_compute_mat_mat_prod2<T>
+                <<<MM_nprod, 216>>>(MM_nprod, block_dim, 1.0, d_MM_prodBlocks2, d_MM_prodBlocks3,
+                                    d_MM_prodBlocks1, d_M_vals, d_R_vals, d_Z_vals);
 
             // 4) compute Q = K * Z
             cudaMemset(d_Q_vals, 0.0, block_dim2 * M_nnzb * sizeof(T));
-            k_compute_mat_mat_prod2<T><<<KM_nprod, 216>>>(KM_nprod, block_dim, 
-                1.0, d_KM_prodBlocks2, d_KM_prodBlocks3, d_KM_prodBlocks1, 
-                d_kmat_vals, d_Z_vals, d_Q_vals);
+            k_compute_mat_mat_prod2<T>
+                <<<KM_nprod, 216>>>(KM_nprod, block_dim, 1.0, d_KM_prodBlocks2, d_KM_prodBlocks3,
+                                    d_KM_prodBlocks1, d_kmat_vals, d_Z_vals, d_Q_vals);
 
             // 5) compute num = <R, Q>
             auto d_num = DeviceVec<T>(1);
             int num_M_vals = M_nnzb * block_dim2;
             CHECK_CUBLAS(
-                    cublasDdot(cublasHandle, num_M_vals, d_R_vals, 1, d_Q_vals, 1, d_num.getPtr()));
+                cublasDdot(cublasHandle, num_M_vals, d_R_vals, 1, d_Q_vals, 1, d_num.getPtr()));
             T num = d_num.createHostVec().getPtr()[0];
             // printf("compute num = %.4e\n", num);
 
             // 6) compute den = <Q, Q>
             auto d_den = DeviceVec<T>(1);
             CHECK_CUBLAS(
-                    cublasDdot(cublasHandle, num_M_vals, d_Q_vals, 1, d_Q_vals, 1, d_den.getPtr()));
+                cublasDdot(cublasHandle, num_M_vals, d_Q_vals, 1, d_Q_vals, 1, d_den.getPtr()));
             T den = d_den.createHostVec().getPtr()[0];
             // printf("compute den = %.4e\n", den);
 
             // 7) alpha = num / den
             T alpha = num / den;
             // printf("compute alpha = %.4e\n", alpha);
-        
+
             // 8) M += alpha * Z
-            k_add_colored_submat_PFP2<T><<<M_nnzb, 64>>>(M_nnzb, block_dim, alpha, 0, d_Z_vals, d_M_vals); 
+            k_add_colored_submat_PFP2<T>
+                <<<M_nnzb, 64>>>(M_nnzb, block_dim, alpha, 0, d_Z_vals, d_M_vals);
 
             // 9) compute objective as well.. obj = <R, R>
             auto d_obj = DeviceVec<T>(1);
             CHECK_CUBLAS(
-                    cublasDdot(cublasHandle, num_M_vals, d_R_vals, 1, d_R_vals, 1, d_obj.getPtr()));
+                cublasDdot(cublasHandle, num_M_vals, d_R_vals, 1, d_R_vals, 1, d_obj.getPtr()));
             T obj = d_obj.createHostVec().getPtr()[0];
             printf("SPAI opt step %d, obj = %.4e\n", iter, obj);
         }
     }
 
-// private data
+    // private data
     cublasHandle_t &cublasHandle;
     cusparseHandle_t &cusparseHandle;
     cusparseMatDescr_t descr_M = 0;
@@ -472,7 +475,7 @@ private:
     DeviceVec<T> temp;
 
     // Matrices
-    BsrMat<DeviceVec<T>> kmat; // original stiffness matrix in block CSR format
+    BsrMat<DeviceVec<T>> kmat;  // original stiffness matrix in block CSR format
 
     // Temporary matrices for preconditioners (not used in this snippet)
     T *d_R_vals, *d_Z_vals, *d_Q_vals;

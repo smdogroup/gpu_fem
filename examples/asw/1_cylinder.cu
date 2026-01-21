@@ -31,7 +31,7 @@
 #include <chrono>
 
 // smoother
-#include "_src/asw.h"
+#include "multigrid/smoothers/asw.h"
 
 // finalsolver
 #include "multigrid/solvers/direct/cusp_directLU.h"

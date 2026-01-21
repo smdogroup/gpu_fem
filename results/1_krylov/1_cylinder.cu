@@ -28,6 +28,8 @@
 #include "multigrid/smoothers/mc_smooth1.h"
 // #include "multigrid/smoothers/damped_jacobi.h"
 #include "multigrid/smoothers/cheb4_poly.h"
+#include "multigrid/smoothers/asw.h"
+#include "multigrid/smoothers/spai.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>
 #include <chrono>
@@ -138,7 +140,7 @@ void chebyshev_polynomial_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5
     auto pc = smoother; // turns out the smoother does work somewhat
     // BaseSolver *pc = nullptr; // if want to try no precond for comparison (TEMP DEBUG)
     auto options = SolverOptions();
-    options.ncycles = 200; // number of max PCG cycles
+    options.ncycles = 1000; // number of max PCG cycles
     options.print_freq = 10;
     auto pcg_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options);
     pcg_solver->set_rel_tol(1e-6);
@@ -181,6 +183,152 @@ void chebyshev_polynomial_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
     printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
+
+    if (fail) {
+        printf("\tPCG linear solver failed\n");
+        return;
+    }
+}
+
+
+template <typename T, class Assembler>
+void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure = 5.0e7) {
+    /* SPAI-GMRES solve */
+
+    using Basis = typename Assembler::Basis;
+    using Physics = typename Assembler::Phys;
+    const SCALER scaler  = LINE_SEARCH;
+    using Smoother = StructuredAdditiveSchwarzSmoother<T, Assembler, S_CYLINDER>;
+    using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
+
+    // for K-cycles
+    // linear solver
+    // using Precond = CusparseMGDirectLU<T, Assembler>;
+    using PCG = PCGSolver<T, GRID>;
+
+    // create cublas and cusparse handles (single one each)
+    // -----------------------------------------------------
+    cublasHandle_t cublasHandle = NULL;
+    CHECK_CUBLAS(cublasCreate(&cublasHandle));
+    cusparseHandle_t cusparseHandle = NULL;
+    CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start0 = std::chrono::high_resolution_clock::now();
+
+    double L = 1.0, R = 0.5, thick = L / SR;
+    double E = 70e9, nu = 0.3;
+    // double rho = 2500, ys = 350e6;
+    bool imperfection = false; // option for geom imperfection
+    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
+    auto assembler = createCylinderAssembler<Assembler>(nxe, nxe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
+    constexpr bool compressive = false;
+    const int load_case = 3; // petal and chirp load
+    double uniform_force = pressure * 1.0 * 1.0;
+    double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
+    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
+    double Q = 1.0; // load magnitude
+    T *my_loads = getCylinderLoads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
+    printf("making grid with nxe %d\n", nxe);
+
+    // perform multicolor reordering
+    auto &bsr_data = assembler.getBsrData();
+    bsr_data.compute_nofill_pattern();
+
+    // T *_color_rowp = new T[2];
+    auto h_color_rowp = HostVec<int>(2);
+    assembler.moveBsrDataToDevice();
+
+    // create the loads and kmat
+    auto loads = assembler.createVarsVec(my_loads);
+    assembler.apply_bcs(loads);
+    auto kmat = createBsrMat<Assembler, VecType<T>>(assembler);
+    auto res = assembler.createVarsVec();
+    auto lin_soln = assembler.createVarsVec();
+    auto vars = assembler.createVarsVec();
+    auto loads2 = assembler.createVarsVec();
+    int N = res.getSize();
+
+    // assemble the kmat
+    auto startkmat = std::chrono::high_resolution_clock::now();
+    assembler.add_jacobian_fast(kmat);
+    assembler.apply_bcs(kmat);
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto endkmat = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> assembly_time = endkmat - startkmat;
+    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+
+    // build smoother and prolongations..
+    // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
+    printf("making ASW smoother\n");
+    // int size = 2; // size x size coupled blocks of smoothing
+    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, nxe + 1, nxe, 
+        omega, n_smooth, size);
+    printf("\tdone making ASW smoother\n");
+    auto prolongation = new Prolongation(assembler);
+    auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
+    auto pc = smoother;
+
+    // create the preconditioner and GMRES solver now
+    auto options = SolverOptions();
+    options.ncycles = 1000; // number of max PCG cycles
+    options.print_freq = 10;
+
+    // PCG solver
+    auto linear_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options);
+
+    // // can maybe use BiCGStab if need be..
+    // // only use GMRES if SR > 100
+    // const int N_SUBSPACE = 200; // 100
+    // using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
+    // int MAX_ITER = N_SUBSPACE;
+    // auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
+
+    // out settings
+    linear_solver->set_rel_tol(1e-6);
+    linear_solver->set_abs_tol(1e-6);
+    linear_solver->set_print(true);
+
+    auto endstartup = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> startup_time = endstartup - start0;
+
+    // run the linear solver
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start_solve = std::chrono::high_resolution_clock::now();
+
+    // get initial residual
+    T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
+
+    // linear solve
+    bool fail = linear_solver->solve(grid->d_defect, lin_soln, true);
+    // bool fail = smoother->solve(grid->d_defect, lin_soln); // just preconditioner solve
+    
+    // final residual
+    T final_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end_solve = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> solve_time = end_solve - start_solve;
+
+    // compute log residual reduction per unit time
+    T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
+    printf("\nSPAI-GMRES on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
+
+    // // print to VTK (permuting from solve to vis order)
+    int *d_perm = linear_solver->grid->d_perm;
+    auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
+    T lin_max_disp = get_max_disp(lin_soln);
+
+    int nx = nxe + 1;
+    int ndof = nx * nx * 6;
+    double total = startup_time.count() + solve_time.count();
+    size_t bytes_per_double = sizeof(double);
+    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
+    printf("ASW-PCG memory in MB %.4e with NDOF %d\n", mem_mb, ndof);
+
 
     if (fail) {
         printf("\tPCG linear solver failed\n");
@@ -269,7 +417,7 @@ void gsmc_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressure = 5
     auto pc = smoother; // turns out the smoother does work somewhat
     // BaseSolver *pc = nullptr; // if want to try no precond for comparison (TEMP DEBUG)
     auto options = SolverOptions();
-    options.ncycles = 200; // number of max PCG cycles
+    options.ncycles = 1000; // number of max PCG cycles
     options.print_freq = 10;
     auto pcg_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options);
     pcg_solver->set_rel_tol(1e-6);
@@ -399,7 +547,7 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, T pressure = 5.0e7)
 
     // create the preconditioner and GMRES solver now
     auto options = SolverOptions();
-    options.ncycles = 800; // number of max PCG cycles
+    options.ncycles = 1000; // number of max PCG cycles
     options.print_freq = 10;
 
     // PCG solver
@@ -455,6 +603,152 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, T pressure = 5.0e7)
     size_t bytes_per_double = sizeof(double);
     double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
     printf("ILU(%d)-memory in MB %.4e with NDOF %d\n", fill_level, mem_mb, ndof);
+
+
+    if (fail) {
+        printf("\tPCG linear solver failed\n");
+        return;
+    }
+}
+
+template <typename T, class Assembler>
+void spai_solve(int nxe, double SR, int fill_level, int optim, T pressure = 5.0e7) {
+    /* SPAI-GMRES solve */
+
+    using Basis = typename Assembler::Basis;
+    using Physics = typename Assembler::Phys;
+    const SCALER scaler  = LINE_SEARCH;
+    using Smoother = SPAI<T, Assembler>;
+    using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
+
+    // for K-cycles
+    // linear solver
+    // using Precond = CusparseMGDirectLU<T, Assembler>;
+    using PCG = PCGSolver<T, GRID>;
+
+    // create cublas and cusparse handles (single one each)
+    // -----------------------------------------------------
+    cublasHandle_t cublasHandle = NULL;
+    CHECK_CUBLAS(cublasCreate(&cublasHandle));
+    cusparseHandle_t cusparseHandle = NULL;
+    CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start0 = std::chrono::high_resolution_clock::now();
+
+    double L = 1.0, R = 0.5, thick = L / SR;
+    double E = 70e9, nu = 0.3;
+    // double rho = 2500, ys = 350e6;
+    bool imperfection = false; // option for geom imperfection
+    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
+    auto assembler = createCylinderAssembler<Assembler>(nxe, nxe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
+    constexpr bool compressive = false;
+    const int load_case = 3; // petal and chirp load
+    double uniform_force = pressure * 1.0 * 1.0;
+    double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
+    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
+    double Q = 1.0; // load magnitude
+    T *my_loads = getCylinderLoads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
+    printf("making grid with nxe %d\n", nxe);
+
+    // perform multicolor reordering
+    auto &bsr_data = assembler.getBsrData();
+    bsr_data.compute_nofill_pattern();
+
+    // T *_color_rowp = new T[2];
+    auto h_color_rowp = HostVec<int>(2);
+    assembler.moveBsrDataToDevice();
+
+    // create the loads and kmat
+    auto loads = assembler.createVarsVec(my_loads);
+    assembler.apply_bcs(loads);
+    auto kmat = createBsrMat<Assembler, VecType<T>>(assembler);
+    auto res = assembler.createVarsVec();
+    auto lin_soln = assembler.createVarsVec();
+    auto vars = assembler.createVarsVec();
+    auto loads2 = assembler.createVarsVec();
+    int N = res.getSize();
+
+    // assemble the kmat
+    auto startkmat = std::chrono::high_resolution_clock::now();
+    assembler.add_jacobian_fast(kmat);
+    assembler.apply_bcs(kmat);
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto endkmat = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> assembly_time = endkmat - startkmat;
+    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+
+    // build smoother and prolongations..
+    // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
+    printf("making SPAI smoother\n");
+    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, fill_level, optim);
+    printf("\tdone making SPAI smoother\n");
+    auto prolongation = new Prolongation(assembler);
+    auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
+
+    // the ILU preconditioner
+    // auto pc = new Precond(cublasHandle, cusparseHandle, assembler, kmat); // turns out the smoother does work somewhat
+    auto pc = smoother;
+
+    // create the preconditioner and GMRES solver now
+    auto options = SolverOptions();
+    options.ncycles = 800; // number of max PCG cycles
+    options.print_freq = 10;
+
+    // PCG solver
+    // auto linear_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options);
+
+    // can maybe use BiCGStab if need be..
+    // only use GMRES if SR > 100
+    // const int N_SUBSPACE = 200; // 100
+    const int N_SUBSPACE = 800;
+    using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
+    int MAX_ITER = N_SUBSPACE;
+    auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
+
+    // out settings
+    linear_solver->set_rel_tol(1e-6);
+    linear_solver->set_abs_tol(1e-6);
+    linear_solver->set_print(true);
+
+    auto endstartup = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> startup_time = endstartup - start0;
+
+    // run the linear solver
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start_solve = std::chrono::high_resolution_clock::now();
+
+    // get initial residual
+    T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
+
+    // linear solve
+    bool fail = linear_solver->solve(grid->d_defect, lin_soln, true);
+    
+    // final residual
+    T final_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end_solve = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> solve_time = end_solve - start_solve;
+
+    // compute log residual reduction per unit time
+    T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
+    printf("\nSPAI-GMRES on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
+
+    // // print to VTK (permuting from solve to vis order)
+    int *d_perm = linear_solver->grid->d_perm;
+    auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
+    T lin_max_disp = get_max_disp(lin_soln);
+
+    int nx = nxe + 1;
+    int ndof = nx * nx * 6;
+    double total = startup_time.count() + solve_time.count();
+    size_t bytes_per_double = sizeof(double);
+    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
+    printf("SPAI(%d)-memory in MB %.4e with NDOF %d\n", fill_level, mem_mb, ndof);
 
 
     if (fail) {
@@ -547,7 +841,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 
     // create the preconditioner and GMRES solver now
     auto options = SolverOptions();
-    options.ncycles = 800; // number of max PCG cycles
+    options.ncycles = 1000; // number of max PCG cycles
     options.print_freq = 10;
 
     // PCG solver
@@ -633,6 +927,15 @@ void gatekeeper_method(std::string solver_type, int nxe, double SR, int nsmooth,
         ilu_solve<T, Assembler>(nxe, SR, qorder, 1, load_mag);
     } else if (solver_type == "ilu2") {
         ilu_solve<T, Assembler>(nxe, SR, qorder, 2, load_mag);
+    } else if (solver_type == "asw") {
+        omega = 0.2;
+        printf("ASW : setting omega = 0.2 and size to 2, comment this out to change it\n");
+        int size = 2; // recommend omega = 0.2 here, nsmooth = 2
+        asw_solve<T, Assembler>(nxe, SR, omega, nsmooth, size, load_mag);
+    } else if (solver_type == "spai") {
+        int fill_level = 1;
+        int optim = 10;
+        spai_solve<T, Assembler>(nxe, SR, fill_level, optim, load_mag);
     }
 }
 
@@ -645,7 +948,6 @@ int main(int argc, char **argv) {
     double omega = 0.35; // default omega
     int ORDER = 8; // for chebyshev polynomial
     double qorder = 1.0;
-
     int nsmooth = 2; 
 
     // Parse arguments

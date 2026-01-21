@@ -31,7 +31,7 @@
 #include <chrono>
 
 // smoother
-#include "_src/spai.h"
+#include "multigrid/smoothers/spai.h"
 
 // finalsolver
 #include "multigrid/solvers/direct/cusp_directLU.h"
@@ -149,7 +149,8 @@ void spai_solve(int nxe, double SR, int fill_level, int optim, T pressure = 5.0e
 
     // can maybe use BiCGStab if need be..
     // only use GMRES if SR > 100
-    const int N_SUBSPACE = 200; // 100
+    // const int N_SUBSPACE = 200; // 100
+    const int N_SUBSPACE = 800;
     using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
     int MAX_ITER = N_SUBSPACE;
     auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
@@ -171,6 +172,7 @@ void spai_solve(int nxe, double SR, int fill_level, int optim, T pressure = 5.0e
 
     // linear solve
     bool fail = linear_solver->solve(grid->d_defect, lin_soln, true);
+    // bool fail = pc->solve(grid->d_defect, lin_soln, true);
     
     // final residual
     T final_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
@@ -364,12 +366,15 @@ void gatekeeper_method(std::string solver_type, int nxe, double SR, int optim, T
 int main(int argc, char **argv) {
     // input ----------
     std::string solver_type = "spai";
-    int nxe = 20; // default value (want to run higher like nxe = 128))
-    double SR = 50.0; // default, the less slender it is, solves much faster
+    int nxe = 128; // default value (want to run higher like nxe = 128))
+    double SR = 10.0; // default, the less slender it is, solves much faster
     double pressure = 8.0e6;
     double omega = 0.35; // default omega
-    int fill = 2; // for SPAI pattern (memory fill level)
+    int fill = 1; // for SPAI pattern (memory fill level)
     int optim = 10; // 5, number of SPAI opt steps 
+
+    // NOTE : for better convergence, may need higher fill level (but then needs to be coarser problem to work well)
+    // sometimes fill = 0 is better also..
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
