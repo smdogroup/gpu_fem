@@ -1,7 +1,8 @@
 #pragma once
 #include "cuda_utils.h"
-#include "multigrid/smoothers/_smoother.cuh"
+#include "multigrid/smoothers/_smoothers.cuh"
 
+template <typename T>
 __global__ void k_get_diag_norms(const int nnodes, const int *diagp, const int block_dim, 
     const T *mat_vals, T *diag_norms) {
     int inode = blockIdx.x;
@@ -10,9 +11,11 @@ __global__ void k_get_diag_norms(const int nnodes, const int *diagp, const int b
 
     int tid = threadIdx.x;
     int block_dim2 = block_dim * block_dim;
-    T *block_vals = &mat_vals[block_dim2 * diag_block_ind];
+    const T *block_vals = &mat_vals[block_dim2 * diag_block_ind];
     
-    T __shared__ shared_nrm2[1] = {0};
+    T __shared__ shared_nrm2[1];
+    if (threadIdx.x == 0) shared_nrm2[0] = 0.0;
+    __syncthreads();
 
     // compute frobenius norm
     for (int i = threadIdx.x; i < block_dim2; i += blockDim.x) {
@@ -24,6 +27,7 @@ __global__ void k_get_diag_norms(const int nnodes, const int *diagp, const int b
     }
 }
 
+template <typename T>
 __global__ void k_compute_strength_bools(const int nnzb, const int block_dim, const T *d_diag_norms, 
     const int *d_rows, const int *d_cols, const T *mat_vals, const T threshold, bool *d_strength_indicator) {
     
@@ -34,11 +38,14 @@ __global__ void k_compute_strength_bools(const int nnzb, const int block_dim, co
     T diag_row = d_diag_norms[block_row];
     T diag_col = d_diag_norms[block_col];
     T lb = threshold * sqrt(diag_row * diag_col);
-
-    T *block_vals = &mat_vals[block_dim2 * block_ind];
-
-    T __shared__ shared_nrm2[1] = {0};
     int block_dim2 = block_dim * block_dim;
+
+    const T *block_vals = &mat_vals[block_dim2 * block_ind];
+
+    T __shared__ shared_nrm2[1];
+    if (threadIdx.x == 0) shared_nrm2[0] = 0.0;
+    __syncthreads();
+    
     for (int i = threadIdx.x; i < block_dim2; i += blockDim.x) {
         shared_nrm2[0] += block_vals[i] * block_vals[i];
     }
@@ -53,7 +60,7 @@ __global__ void k_compute_strength_bools(const int nnzb, const int block_dim, co
 template <typename T>
 __global__ void k_compute_PTAP_product6(const int PTAP_nnzb_prod, const int block_dim, 
     const int *Kc_blocks, const int *PL_blocks, const int *K_blocks, const int *PR_blocks, 
-    const T *prolong_vals, const T *kmat_vals, const T *galerkin_vals) {
+    const T *prolong_vals, const T *kmat_vals, T *galerkin_vals) {
     
     int prod_block_ind = blockIdx.x;
     if (prod_block_ind >= PTAP_nnzb_prod) return;
@@ -62,9 +69,9 @@ __global__ void k_compute_PTAP_product6(const int PTAP_nnzb_prod, const int bloc
     T __shared__ AP_vals[36];
     memset(AP_vals, 0.0, 36 * sizeof(T));
 
-    T *PL_vals = &prolong_vals[block_dim2 * PL_blocks[prod_block_ind]];
-    T *K_vals = &kmat_vals[block_dim2 * K_blocks[prod_block_ind]];
-    T *PR_vals = &prolong_vals[block_dim2 * PR_blocks[prod_block_ind]];
+    const T *PL_vals = &prolong_vals[block_dim2 * PL_blocks[prod_block_ind]];
+    const T *K_vals = &kmat_vals[block_dim2 * K_blocks[prod_block_ind]];
+    const T *PR_vals = &prolong_vals[block_dim2 * PR_blocks[prod_block_ind]];
     T *Kc_vals = &galerkin_vals[block_dim2 * Kc_blocks[prod_block_ind]];
 
     // computes one 6x6 * 6x6 * 6x6 matrix into 6x6 out of P^T * A *P
@@ -181,12 +188,12 @@ __global__ void k_remove_GS_projector_mode(const int imode, const int jmode, con
     int coarse_node = d_aggregate_ind[fine_node];
     int P_block_ind = d_tentative_block_map[fine_node];
     int block_dim2 = block_dim * block_dim;
-    const T *P_block = &prolong_vals[block_dim2 * P_block_ind];
-    T *Bc_block = &rigid_coarse_modes[block_dim2 * coarse_node];
+    T *P_block = &prolong_vals[block_dim2 * P_block_ind];
+    const T *Bc_block = &rigid_coarse_modes[block_dim2 * coarse_node];
 
     
     // upper-triangular storage in Bc here as it should be
     T ij_dot = Bc_block[block_dim * imode + jmode];
     int inn_row = ind % block_dim;
-    P_block[block_dim * inn_row + imode] -= ij_dot * P_block[block_dim * inn-row + jmode];
+    P_block[block_dim * inn_row + imode] -= ij_dot * P_block[block_dim * inn_row + jmode];
 }
