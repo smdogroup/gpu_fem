@@ -88,6 +88,40 @@ def greedy_serial_aggregation_bsr(A:sp.bsr_matrix, threshold:float=0.25):
     return aggregate_ind
 
 
+# def get_rigid_body_modes(xpts, th:float=1.0):
+#     """get rigid body modes of particular mesh"""
+
+#     _x = xpts[0::3]; _y = xpts[1::3]; _z = xpts[2::3]
+#     nnodes = _x.shape[0]
+
+#     Bpred = np.zeros((nnodes, 6, 6))
+
+#     # first three modes just as translation
+#     for imode in range(3):
+#         Bpred[:, imode, imode] = 1.0
+
+#     # u then v disp (yeah this one doesn't work cause of drill strain penalty)
+#     # so are there really only five modes?
+#     Bpred[:, 0, 3] = th * _y
+#     Bpred[:, 1, 3] = -th * _x
+#     # ahh => correction from drill strain = 2 * thz - (du/dy - dv/dx) = 2 * thz - omega
+#     # is to compute constant thz everywhere equal to the rotation magnitude => thz = th prescribed
+#     Bpred[:, 5, 3] = -th
+
+#     # v and w disp
+#     Bpred[:, 1, 4] = -th * _z
+#     Bpred[:, 2, 4] = th * _y
+#     # ah but then need to adjust thx or thy disp grads for trv shear error
+#     Bpred[:, 3, 4] = th
+
+#     # u and w disp
+#     Bpred[:, 0, 5] = th * _z
+#     Bpred[:, 2, 5] = -th * _x
+#     # and then need to adjust thy for dw/dx trv shear strain
+#     Bpred[:, 4, 5] = th
+#     return Bpred
+
+
 def get_rigid_body_modes(xpts, th:float=1.0):
     """get rigid body modes of particular mesh"""
 
@@ -100,25 +134,21 @@ def get_rigid_body_modes(xpts, th:float=1.0):
     for imode in range(3):
         Bpred[:, imode, imode] = 1.0
 
-    # u then v disp (yeah this one doesn't work cause of drill strain penalty)
-    # so are there really only five modes?
-    Bpred[:, 0, 3] = th * _y
-    Bpred[:, 1, 3] = -th * _x
-    # ahh => correction from drill strain = 2 * thz - (du/dy - dv/dx) = 2 * thz - omega
-    # is to compute constant thz everywhere equal to the rotation magnitude => thz = th prescribed
-    Bpred[:, 5, 3] = -th
+    # vw mode 3
+    Bpred[:, 1, 3] = -th * _z
+    Bpred[:, 2, 3] = th * _y
+    Bpred[:, 3, 3] = th
 
-    # v and w disp
-    Bpred[:, 1, 4] = -th * _z
-    Bpred[:, 2, 4] = th * _y
-    # ah but then need to adjust thx or thy disp grads for trv shear error
-    Bpred[:, 3, 4] = th
+    # uw mode 4
+    Bpred[:, 0, 4] = th * _z
+    Bpred[:, 2, 4] = -th * _x
+    Bpred[:, 4, 4] = th
 
-    # u and w disp
-    Bpred[:, 0, 5] = th * _z
-    Bpred[:, 2, 5] = -th * _x
-    # and then need to adjust thy for dw/dx trv shear strain
-    Bpred[:, 4, 5] = th
+    # uv mode 5
+    Bpred[:, 0, 5] = -th * _y
+    Bpred[:, 1, 5] = th * _x
+    Bpred[:, 5, 5] = th
+    
     return Bpred
 
 def get_coarse_rigid_body_modes(B:np.ndarray, xpts:np.ndarray, aggregate_ind:np.ndarray):

@@ -161,7 +161,7 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDE
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\tSA-MAG-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\tSA-AMG-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // print some of the data of host residual
