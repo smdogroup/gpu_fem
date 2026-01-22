@@ -20,6 +20,14 @@ __HOST_DEVICE__ void printVec<int>(const int N, const int *vec) {
 }
 
 template <>
+__HOST_DEVICE__ void printVec<bool>(const int N, const bool *vec) {
+    for (int i = 0; i < N; i++) {
+        printf("%d,", vec[i]);
+    }
+    printf("\n");
+}
+
+template <>
 __HOST_DEVICE__ void printVec<float>(const int N, const float *vec) {
     for (int i = 0; i < N; i++) {
         printf("%.5e,", vec[i]);

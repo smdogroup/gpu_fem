@@ -18,8 +18,11 @@ __global__ void k_get_diag_norms(const int nnodes, const int *diagp, const int b
     __syncthreads();
 
     // compute frobenius norm
+    // if (inode == 0) {
+    //     printf("inode 0 : block_val %d = %.4e\n", tid, block_vals[tid]);
+    // }
     for (int i = threadIdx.x; i < block_dim2; i += blockDim.x) {
-        shared_nrm2[0] += block_vals[i] * block_vals[i];
+        atomicAdd(&shared_nrm2[0], block_vals[i] * block_vals[i]);
     }
     __syncthreads();
     if (threadIdx.x == 0) {
@@ -47,11 +50,14 @@ __global__ void k_compute_strength_bools(const int nnzb, const int block_dim, co
     __syncthreads();
     
     for (int i = threadIdx.x; i < block_dim2; i += blockDim.x) {
-        shared_nrm2[0] += block_vals[i] * block_vals[i];
+        atomicAdd(&shared_nrm2[0], block_vals[i] * block_vals[i]);
     }
     __syncthreads();
     if (threadIdx.x == 0) {
         T norm = sqrt(shared_nrm2[0]);
+        // if (block_row == 0) {
+        //     printf("norm %.4e, lb %.4e\n", norm, lb);
+        // }
         d_strength_indicator[block_ind] = (norm >= lb ? 1 : 0);
     }
 }
@@ -74,40 +80,71 @@ __global__ void k_compute_PTAP_product6(const int PTAP_nnzb_prod, const int bloc
     const T *PR_vals = &prolong_vals[block_dim2 * PR_blocks[prod_block_ind]];
     T *Kc_vals = &galerkin_vals[block_dim2 * Kc_blocks[prod_block_ind]];
 
+    int Kc_ind = Kc_blocks[prod_block_ind];
+    // if (threadIdx.x == 0) {
+    //     printf("block %d, Kc_ind %d\n", prod_block_ind, Kc_ind);
+    // }
+
     // computes one 6x6 * 6x6 * 6x6 matrix into 6x6 out of P^T * A *P
     // intermediate A*P product stored in shared memory (since not storing matrix values for AP)
 
     // first compute AP product (216 sum-prod terms)
     for (int ip = threadIdx.x; ip < 216; ip += blockDim.x) {
         int ij = ip % 36, k = ip / 36;
-        int i = ip / 6, j = ip % 6;
+        int i = ij / 6, j = ij % 6;
 
+        // (AP)_{ik} = K_{ij} * P_{jk} (where second index is col and col is ind % 6 while row is ind / 6)
         atomicAdd(&AP_vals[6 * i + k], K_vals[6 * i + j] * PR_vals[6 * j + k]);
     }
+    __syncthreads();
 
     // then compute P^T * AP (216 sum-prod terms) into P^T * A * P => Kc matrix
     for (int ip = threadIdx.x; ip < 216; ip += blockDim.x) {
         int ij = ip % 36, k = ip / 36;
-        int i = ip / 6, j = ip % 6;
+        int i = ij / 6, j = ij % 6;
 
         // PL_vals we need to read in transposed here (i,j) => (j,i)
-        atomicAdd(&galerkin_vals[6 * i + k], PL_vals[6 * j + i] * AP_vals[6 * j + k]);
+        // (Kc)_{ik} = (P^T)_{ij} * (AP)_{jk} = P_{ji} * (AP)_{jk}
+        atomicAdd(&Kc_vals[6 * i + k], PL_vals[6 * j + i] * AP_vals[6 * j + k]);
     }
 }
 
 template <typename T>
+__global__ void k_copy_rbm_into_tentative_prolongator(const int nnodes,  
+    const int block_dim, const int *d_tentative_block_map, 
+    const T *rigid_modes, T *prolong_vals) {
+    // copy rigid body modes into tentative prolongator (with fill-in pattern)
+    int ind = threadIdx.x + blockIdx.x * blockDim.x;
+    int block_dim2 = block_dim * block_dim;
+    int nvals = block_dim2 * nnodes;
+    if (ind >= nvals) return;
+
+    int fine_node = ind / block_dim2;
+    const T *B_block = &rigid_modes[block_dim2 * fine_node];
+    int P_block_ind = d_tentative_block_map[fine_node];
+    T *P_block = &prolong_vals[block_dim2 * P_block_ind];
+
+    int inn_ind = ind % block_dim2;
+    P_block[inn_ind] = B_block[inn_ind];
+}
+
+template <typename T>
 __global__ void k_compute_aggregate_norms2(const int imode, const int nnodes,  
-    const int block_dim, const int *d_aggregate_ind,  
-    const T *rigid_modes, T *d_agg_norms2) {
+    const int block_dim, const int *d_aggregate_ind, const int *d_tentative_block_map, 
+    const T *prolong_vals, T *d_agg_norms2) {
     // compute the aggregate norms of imode
     int ind = threadIdx.x + blockIdx.x * blockDim.x;
     int N = block_dim * nnodes;
     if (ind >= N) return;
 
     int fine_node = ind / block_dim;
+    int idof = ind % block_dim;
     int coarse_node = d_aggregate_ind[fine_node];
     // get norms of imode column in rigid_modes B [N x 6] matrix
-    T val = rigid_modes[ind];
+    int block_dim2 = block_dim * block_dim;
+    int P_block_ind = d_tentative_block_map[fine_node];
+    const T *P_block_vals = &prolong_vals[block_dim2 * P_block_ind];
+    T val = P_block_vals[block_dim * idof + imode];
     atomicAdd(&d_agg_norms2[coarse_node], val * val);
 }
 
@@ -120,14 +157,15 @@ __global__ void k_compute_sqrt_norms(const int imode, const int num_aggregates, 
 
     T sqrt_norm = sqrt(d_norms2[tid]);
     int block_dim2 = block_dim * block_dim;
-    T *coarse_block = &coarse_rigid_modes[block_dim2 * tid];
+    int coarse_agg = tid;
+    T *coarse_block = &coarse_rigid_modes[block_dim2 * coarse_agg];
     coarse_block[imode * block_dim + imode] = sqrt_norm;
 }
 
 template <typename T>
 __global__ void k_normalize_tentative_modes(const int imode, const int nnodes,  
     const int block_dim, const int *d_aggregate_ind, const int *d_tentative_block_map, 
-    const T *rigid_modes, const T *rigid_coarse_modes, T *prolong_vals) {
+    const T *rigid_coarse_modes, T *prolong_vals) {
     // normalize tentative mode (imode) from B into T tentative prolongator
     int ind = threadIdx.x + blockIdx.x * blockDim.x;
     int N = block_dim * nnodes;
@@ -138,12 +176,11 @@ __global__ void k_normalize_tentative_modes(const int imode, const int nnodes,
     int P_block_ind = d_tentative_block_map[fine_node];
     int block_dim2 = block_dim * block_dim;
     T *P_block = &prolong_vals[block_dim2 * P_block_ind];
-    const T *B_block = &rigid_modes[block_dim2 * fine_node];
     const T *Bc_block = &rigid_coarse_modes[block_dim2 * coarse_node];
     T sqrt_norm = Bc_block[imode * block_dim + imode]; // read diagonal entry
 
     int irow = ind % block_dim;
-    P_block[block_dim * irow + imode] = B_block[block_dim * irow + imode] / sqrt_norm;
+    P_block[block_dim * irow + imode] /= sqrt_norm;
 }
 
 
@@ -168,7 +205,7 @@ __global__ void k_compute_GS_inner_product(const int imode, const int jmode, con
     int inn_row = ind % block_dim;
     T val_i = P_block[block_dim * inn_row + imode];
     T val_j = P_block[block_dim * inn_row + jmode];
-    atomicAdd(&Bc_block[block_dim * imode + jmode], val_i * val_j);
+    atomicAdd(&Bc_block[block_dim * jmode + imode], val_i * val_j);
 }
 
 
@@ -193,7 +230,7 @@ __global__ void k_remove_GS_projector_mode(const int imode, const int jmode, con
 
     
     // upper-triangular storage in Bc here as it should be
-    T ij_dot = Bc_block[block_dim * imode + jmode];
+    T ij_dot = Bc_block[block_dim * jmode + imode];
     int inn_row = ind % block_dim;
     P_block[block_dim * inn_row + imode] -= ij_dot * P_block[block_dim * inn_row + jmode];
 }

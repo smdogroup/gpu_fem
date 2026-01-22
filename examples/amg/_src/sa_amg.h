@@ -1,42 +1,46 @@
 #pragma once
 
-#include <cstdlib>      // For rand()
+#include <cstdlib>   // For rand()
+#include <cstring>   // For memset
+#include <iterator>  // For std::advance
 #include <set>
-#include <iterator>     // For std::advance
-#include <cstring>      // For memset
 #include <vector>
 
 // basic utils
-#include "multigrid/solvers/solve_utils.h"
 #include "cuda_utils.h"
-#include "linalg/vec.h"
 #include "lapacke.h"
+#include "linalg/vec.h"
+#include "multigrid/solvers/solve_utils.h"
 
 // include from GMG multigrid sections
+#include "multigrid/prolongation/_unstructured.cuh"  // for transpose mat-vec product
 #include "multigrid/solvers/direct/cusp_directLU.h"
-#include "multigrid/prolongation/_unstructured.cuh" // for transpose mat-vec product
 
 // local sa amg imports
+#include "_rigid_modes.cuh"
 #include "fake_assembler.h"
 #include "sa_amg.cuh"
-#include "_rigid_modes.cuh"
 
-template <typename T, class Smoother>
+template <typename T, class Smoother, bool ORTHOG_PROJECTOR = true>
 class SmoothAggregationAMG : public BaseSolver {
     /* based on python code in _py_demo/_src/bsr_aggregation.py */
-public:
-
+   public:
     using Assembler = FakeAssembler<T>;
-    using CoarseMG = SmoothAggregationAMG<T, Smoother>;
+    using CoarseMG = SmoothAggregationAMG<T, Smoother, ORTHOG_PROJECTOR>;
     using CoarseDirect = CusparseMGDirectLU<T, Assembler>;
 
-    SmoothAggregationAMG(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_, Smoother *smoother_,
-        int nnodes_, BsrMat<DeviceVec<T>> kmat_, DeviceVec<T> rigid_body_modes_, 
-        int coarse_dof_threshold_ = 6000, T sparse_threshold_ = 0.25, T omegaJac_ = 0.5) : 
-        cublasHandle(cublasHandle_), cusparseHandle(cusparseHandle_), 
-        smoother(smoother_), kmat(kmat_), nnodes(nnodes_), rigid_body_modes(rigid_body_modes_), 
-        coarse_dof_threshold(coarse_dof_threshold_), sparse_threshold(sparse_threshold_) {
-        
+    SmoothAggregationAMG(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
+                         Smoother *smoother_, int nnodes_, BsrMat<DeviceVec<T>> kmat_,
+                         DeviceVec<T> rigid_body_modes_, int coarse_dof_threshold_ = 6000,
+                         T sparse_threshold_ = 0.15, T omegaJac_ = 0.3)
+        : cublasHandle(cublasHandle_),
+          cusparseHandle(cusparseHandle_),
+          smoother(smoother_),
+          kmat(kmat_),
+          nnodes(nnodes_),
+          rigid_body_modes(rigid_body_modes_),
+          coarse_dof_threshold(coarse_dof_threshold_),
+          sparse_threshold(sparse_threshold_) {
         // get data out of kmat
         auto d_kmat_bsr_data = kmat.getBsrData();
         d_kmat_vals = kmat.getVec().getPtr();
@@ -50,18 +54,33 @@ public:
         omegaJac = omegaJac_;
 
         // setup phase (first version)
+        printf("1 - AMG initCuda() with nnodes = %d\n", nnodes);
         initCuda();
+        printf("2 - AMG form node aggregates\n");
         form_node_aggregates();
+        printf("3 - AMG get prolong nz pattern\n");
         compute_prolongation_nz_pattern();
-        compute_prolongator_values();
+        printf("4 - AMG compute coarse grid nz pattern\n");
         compute_coarse_grid_nz_pattern();
-        compute_coarse_grid_values();
+        printf("\tdone with AMG init\n");
+        _done_post_apply_bcs = false;
 
         is_coarse_mg = num_aggregates > coarse_dof_threshold;
     }
 
-    void update_after_assembly(DeviceVec<T> &vars) { 
-    // TODO 
+    void post_apply_bcs() {
+        // after applying BCs on kmat now compute the tentative prolongator and other values
+        // meaning kmat no bcs used for aggregate formation
+        printf("\nPOST_APPLY_BCS\n");
+        printf("1 - AMG compute prolong values\n");
+        compute_prolongator_values();
+        printf("2 - AMG compute coarse grid values\n");
+        compute_coarse_grid_values();
+        _done_post_apply_bcs = true;
+    }
+
+    void update_after_assembly(DeviceVec<T> &vars) {
+        // TODO
     }
     void set_abs_tol(T atol) {}
     void set_rel_tol(T atol) {}
@@ -72,14 +91,20 @@ public:
     void build_coarse_system(Assembler coarse_assembler, Smoother *coarse_smoother) {
         // need to build the coarse smoother from coarse_kmat and then pass that in here..
 
+        assert(_done_post_apply_bcs);  // make sure you call post_apply_bcs method after doing bcs
+        printf("build coarse grid system with num_aggregates %d\n", num_aggregates);
         // pointer for either solver and store bool of which one we use
         if (!is_coarse_mg) {
             // then instead build coarse direct solver
-            coarse_direct = new CoarseDirect(cublasHandle, cusparseHandle, coarse_assembler, coarse_kmat);
+            printf("\tbuild coarse direct solver\n");
+            coarse_direct =
+                new CoarseDirect(cublasHandle, cusparseHandle, coarse_assembler, coarse_kmat);
         } else {
             // then build coarse AMG solver and new coarse smoother
-            coarse_mg = new CoarseMG(cublasHandle, cusparseHandle, coarse_smoother, 
-                num_aggregates, coarse_kmat, d_Bc_vec, coarse_dof_threshold, sparse_threshold);
+            printf("\tbuild coarse AMG solver\n");
+            coarse_mg = new CoarseMG(cublasHandle, cusparseHandle, coarse_smoother, num_aggregates,
+                                     coarse_kmat, d_Bc_vec, coarse_dof_threshold, sparse_threshold,
+                                     omegaJac);
         }
     }
 
@@ -87,39 +112,53 @@ public:
         // solve this multigrid level (V-cycle)
 
         // setup rhs and soln with init guess of 0
+        // CHECK_CUDA(cudaDeviceSynchronize());
+        // printf("1 - start AMG solve\n");
         cudaMemcpy(d_rhs, rhs.getPtr(), N * sizeof(T), cudaMemcpyDeviceToDevice);
         cudaMemset(d_inner_soln, 0.0, N * sizeof(T));  // re-zero the solution
 
         // pre-smooth defect
+        // CHECK_CUDA(cudaDeviceSynchronize());
+        // printf("2 - AMG pre-smoothing\n");
         this->smoother->solve(d_rhs_vec, d_inner_soln_vec);
 
         // restrict
+        // CHECK_CUDA(cudaDeviceSynchronize());
+        // printf("3 - AMG restriction\n");
         d_coarse_rhs_vec.zeroValues();  // zero before add new result
-        int nprods = PTAP_nnzb_prod * block_dim2;
+        int nprods = P_nnzb * block_dim2;
         dim3 block0(32), grid0((nprods + 31) / 32);
-        k_bsrmv_transpose<T><<<grid0, block0>>>(PTAP_nnzb_prod, block_dim, d_prolong_rowp, 
-            d_prolong_cols, d_prolong_vals,
-            d_rhs_vec.getPtr(), d_coarse_rhs_vec.getPtr());
-        
+        k_bsrmv_transpose<T><<<grid0, block0>>>(P_nnzb, block_dim, d_prolong_rows, d_prolong_cols,
+                                                d_prolong_vals, d_rhs_vec.getPtr(),
+                                                d_coarse_rhs_vec.getPtr());
+
         // coarse solve
-        if (!is_coarse_mg) { // direct solve
+        if (!is_coarse_mg) {  // direct solve
+            // CHECK_CUDA(cudaDeviceSynchronize());
+            // printf("4 - AMG coarse direct solve\n");
             this->coarse_direct->solve(d_coarse_rhs_vec, d_coarse_soln_vec);
         } else {
+            // CHECK_CUDA(cudaDeviceSynchronize());
+            // printf("4 - AMG pass to coarser AMG solver\n");
             this->coarse_mg->solve(d_coarse_rhs_vec, d_coarse_soln_vec);
         }
 
         // prolongation
+        // CHECK_CUDA(cudaDeviceSynchronize());
+        // printf("5 - AMG prolongate coarse to fine\n");
         T a = 1.0, b = 0.0;
         int mb = nnodes, nb = num_aggregates;
         CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
-                                      CUSPARSE_OPERATION_NON_TRANSPOSE, mb, nb, P_nnzb, &a, descrKmat,
-                                      d_prolong_vals, d_prolong_rowp, d_prolong_cols, block_dim,
-                                      d_coarse_soln_vec.getPtr(), &b, d_temp));
+                                      CUSPARSE_OPERATION_NON_TRANSPOSE, mb, nb, P_nnzb, &a,
+                                      descrKmat, d_prolong_vals, d_prolong_rowp, d_prolong_cols,
+                                      block_dim, d_coarse_soln_vec.getPtr(), &b, d_temp));
         // add to previous inner soln (see bsr_aggregation.py)
         a = 1.0;
         CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_temp, 1, d_inner_soln, 1));
-        
+
         // post-smooth
+        // CHECK_CUDA(cudaDeviceSynchronize());
+        // printf("6 - AMG post-smooth\n");
         this->smoother->solve(d_rhs_vec, d_inner_soln_vec);
 
         // copy internal soln to external solution of the solve method
@@ -139,7 +178,7 @@ public:
     CoarseMG *coarse_mg;
     CoarseDirect *coarse_direct;
 
-private:
+   private:
     void initCuda() {
         // make mat handles for SpMV
         CHECK_CUSPARSE(cusparseCreateMatDescr(&descrKmat));
@@ -148,7 +187,7 @@ private:
 
         // get some host pointers
         h_kmat_rowp = DeviceVec<int>(nnodes + 1, d_kmat_rowp).createHostVec().getPtr();
-        h_kmat_cols  = DeviceVec<int>(kmat_nnzb, d_kmat_cols).createHostVec().getPtr();
+        h_kmat_cols = DeviceVec<int>(kmat_nnzb, d_kmat_cols).createHostVec().getPtr();
         // compute the host kmat diagonal pointer
         int *h_kmat_diagp = new int[nnodes];
         for (int block_row = 0; block_row < nnodes; block_row++) {
@@ -171,28 +210,26 @@ private:
         d_temp = d_temp_vec.getPtr();
         d_temp2 = DeviceVec<T>(N).getPtr();
         d_z = DeviceVec<T>(N).getPtr();
+        d_resid = DeviceVec<T>(N).getPtr();
 
         // for linear solver / precond use
         d_rhs_vec = DeviceVec<T>(N);
         d_rhs = d_rhs_vec.getPtr();
         d_inner_soln_vec = DeviceVec<T>(N);
         d_inner_soln = d_inner_soln_vec.getPtr();
-
-        Nc = num_aggregates * block_dim;
-        d_coarse_rhs_vec = DeviceVec<T>(Nc);
-        d_coarse_rhs = d_coarse_rhs_vec.getPtr();
-        d_coarse_soln_vec = DeviceVec<T>(Nc);
-        d_coarse_soln = d_coarse_soln_vec.getPtr();
     }
 
     void form_node_aggregates() {
         // 1) compute strength pattern on GPU
-        k_get_diag_norms<T><<<nnodes, 32>>>(nnodes, d_kmat_diagp, block_dim, d_kmat_vals, d_diag_norms);
-        k_compute_strength_bools<T><<<kmat_nnzb, 32>>>(kmat_nnzb, block_dim, d_diag_norms, d_kmat_rows, 
-            d_kmat_cols, d_kmat_vals, sparse_threshold, d_strength_indicator);
-        
+        k_get_diag_norms<T>
+            <<<nnodes, 32>>>(nnodes, d_kmat_diagp, block_dim, d_kmat_vals, d_diag_norms);
+        k_compute_strength_bools<T><<<kmat_nnzb, 32>>>(kmat_nnzb, block_dim, d_diag_norms,
+                                                       d_kmat_rows, d_kmat_cols, d_kmat_vals,
+                                                       sparse_threshold, d_strength_indicator);
+
         // 2) compute strength indices to host
-        h_strength_indicator = DeviceVec<bool>(kmat_nnzb, d_strength_indicator).createHostVec().getPtr();
+        h_strength_indicator =
+            DeviceVec<bool>(kmat_nnzb, d_strength_indicator).createHostVec().getPtr();
         int strength_nnz = 0;
         for (int iblock = 0; iblock < kmat_nnzb; iblock++) {
             if (h_strength_indicator[iblock]) strength_nnz++;
@@ -200,15 +237,33 @@ private:
         h_strength_rowp = HostVec<int>(nnodes + 1).getPtr();
         h_strength_cols = HostVec<int>(strength_nnz).getPtr();
         for (int i = 0; i < nnodes; i++) {
-            h_strength_rowp[i+1] = h_strength_rowp[i]; // update from sum of last one..
-            for (int jp = h_kmat_rowp[i]; jp < h_kmat_rowp[i+1]; jp++) {
+            h_strength_rowp[i + 1] = h_strength_rowp[i];  // update from sum of last one..
+            for (int jp = h_kmat_rowp[i]; jp < h_kmat_rowp[i + 1]; jp++) {
                 int j = h_kmat_cols[jp];
-                if (h_strength_indicator[jp]) h_strength_rowp[i+1]++;
+                if (h_strength_indicator[jp]) {
+                    h_strength_cols[h_strength_rowp[i + 1]] = j;
+                    h_strength_rowp[i + 1]++;
+                }
             }
         }
 
+        // printf("strength conn:");
+        // for (int i = 0; i < nnodes; i++) {
+        //     printf("node %d: ", i);
+        //     int start = h_strength_rowp[i];
+        //     int end = h_strength_rowp[i + 1];
+        //     printVec<int>(end - start, &h_strength_cols[start]);
+        // }
+
         // 3) do greedy serial aggregation pattern on host
         _greedy_serial_aggregation();
+
+        // then init coarse level cuda
+        Nc = num_aggregates * block_dim;
+        d_coarse_rhs_vec = DeviceVec<T>(Nc);
+        d_coarse_rhs = d_coarse_rhs_vec.getPtr();
+        d_coarse_soln_vec = DeviceVec<T>(Nc);
+        d_coarse_soln = d_coarse_soln_vec.getPtr();
     }
 
     void _greedy_serial_aggregation() {
@@ -238,17 +293,19 @@ private:
                 num_aggregates++;
             }
         }
+        // printf("phase 1 - h_aggregate_ind: ");
+        // printVec<int>(nnodes, h_aggregate_ind);
+        // printf("num_aggregates %d\n", num_aggregates);
 
         // Second phase: assign all remaining nodes to a nearby aggregate
         for (int i = 0; i < nnodes; i++) {
-            if (h_aggregate_ind[i] != -1)
-                continue; // Node already assigned, skip it
+            if (h_aggregate_ind[i] != -1) continue;  // Node already assigned, skip it
 
             // Collect aggregates from strong neighbors
             std::set<int> nearby_aggregates;
             for (int jp = h_strength_rowp[i]; jp < h_strength_rowp[i + 1]; jp++) {
                 int j = h_strength_cols[jp];
-                if (h_aggregate_ind[j] != -1) {
+                if (h_aggregate_ind[j] != -1) {  // is picked
                     // Insert the aggregate index of neighbor j
                     nearby_aggregates.insert(h_aggregate_ind[j]);
                 }
@@ -257,7 +314,9 @@ private:
             if (!nearby_aggregates.empty()) {
                 // Randomly choose one aggregate from the set
                 int set_size = nearby_aggregates.size();
-                int random_index = rand() % set_size;  // using rand() for simplicity; consider C++11 random generators for production code
+                int random_index =
+                    rand() % set_size;  // using rand() for simplicity; consider C++11 random
+                                        // generators for production code
                 auto it = nearby_aggregates.begin();
                 std::advance(it, random_index);
                 int chosen_aggregate = *it;
@@ -267,8 +326,10 @@ private:
                 h_aggregate_ind[i] = num_aggregates++;
             }
         }
+        // printf("phase 2 - h_aggregate_ind: ");
+        // printVec<int>(nnodes, h_aggregate_ind);
 
-        d_aggregate_ind = HostVec<int>(nnodes, d_aggregate_ind).createDeviceVec().getPtr();
+        d_aggregate_ind = HostVec<int>(nnodes, h_aggregate_ind).createDeviceVec().getPtr();
     }
 
     void compute_prolongation_nz_pattern() {
@@ -278,12 +339,17 @@ private:
         //--------------------------------------------------------------------------
         h_tentative_rowp = HostVec<int>(nnodes + 1).getPtr();
         h_tentative_cols = HostVec<int>(nnodes).getPtr();
-        
+
         h_tentative_rowp[0] = 0;
         for (int i = 0; i < nnodes; i++) {
             h_tentative_cols[i] = h_aggregate_ind[i];
-            h_tentative_rowp[i+1] = i + 1;
+            h_tentative_rowp[i + 1] = i + 1;
         }
+
+        // printf("h_tentative_rowp: ");
+        // printVec<int>(nnodes + 1, h_tentative_rowp);
+        // printf("h_tentative_cols: ");
+        // printVec<int>(nnodes, h_tentative_cols);
 
         //--------------------------------------------------------------------------
         // Step 2: Compute the smoothed A*P prolongation pattern.
@@ -293,56 +359,71 @@ private:
         // We use an std::set<int> to guarantee uniqueness.
         //--------------------------------------------------------------------------
         std::vector<int> prolong_rowp(nnodes + 1, 0);  // row pointer array for P
-        std::vector<int> prolong_cols;                   // column indices for P
+        std::vector<int> prolong_cols;                 // column indices for P
 
         for (int i = 0; i < nnodes; i++) {
             // Use a set to gather unique column indices.
             std::set<int> uniqueIndices;
-            
+
             // Add the tentative prolongation pattern of row i (usually the "diagonal" entry).
-            for (int kp = h_tentative_rowp[i]; kp < h_tentative_rowp[i+1]; kp++) {
+            for (int kp = h_tentative_rowp[i]; kp < h_tentative_rowp[i + 1]; kp++) {
                 uniqueIndices.insert(h_tentative_cols[kp]);
             }
-            
+
             // For every neighbor j of i (from the kmat data), add j's tentative pattern.
-            for (int jp = h_kmat_rowp[i]; jp < h_kmat_rowp[i+1]; jp++) {
+            for (int jp = h_kmat_rowp[i]; jp < h_kmat_rowp[i + 1]; jp++) {
                 int j = h_kmat_cols[jp];
-                // For row j in the tentative pattern, add all its entries (for the identity, that is j).
-                for (int kp = h_tentative_rowp[j]; kp < h_tentative_rowp[j+1]; kp++) {
+                // For row j in the tentative pattern, add all its entries (for the identity, that
+                // is j).
+                for (int kp = h_tentative_rowp[j]; kp < h_tentative_rowp[j + 1]; kp++) {
                     uniqueIndices.insert(h_tentative_cols[kp]);
                 }
             }
-            
+
             // The number of entries for row i is the size of the set.
-            prolong_rowp[i+1] = prolong_rowp[i] + uniqueIndices.size();
-            
+            prolong_rowp[i + 1] = prolong_rowp[i] + uniqueIndices.size();
+
             // Append the sorted (unique) entries to the prolongator's column array.
             // (std::set iterates in sorted order by default.)
             for (int col : uniqueIndices) {
                 prolong_cols.push_back(col);
             }
         }
-        
+
         //--------------------------------------------------------------------------
         // Step 3: Finalize the prolongator pattern.
         // P_nnzb is the total number of nonzeros in the prolongation operator.
         //--------------------------------------------------------------------------
         P_nnzb = prolong_cols.size();
-        
+
         // Allocate and copy the final CSR arrays for the prolongator.
         h_prolong_rowp = HostVec<int>(nnodes + 1).getPtr();
         h_prolong_rows = HostVec<int>(P_nnzb).getPtr();
-        h_prolong_cols  = HostVec<int>(P_nnzb).getPtr();
-        
+        h_prolong_cols = HostVec<int>(P_nnzb).getPtr();
+
         memcpy(h_prolong_rowp, prolong_rowp.data(), (nnodes + 1) * sizeof(int));
         memcpy(h_prolong_cols, prolong_cols.data(), P_nnzb * sizeof(int));
-        
+
         for (int i = 0; i < nnodes; i++) {
-            for (int jp = h_prolong_rowp[i]; jp < h_prolong_rowp[i+1]; jp++) {
+            for (int jp = h_prolong_rowp[i]; jp < h_prolong_rowp[i + 1]; jp++) {
                 int j = h_prolong_cols[jp];
                 h_prolong_rows[jp] = i;
             }
         }
+
+        // printf("prolong fillin from nnodes %d to nnzb %d\n", nnodes, P_nnzb);
+        // for (int i = 0; i < nnodes; i++) {
+        //     int tstart = h_tentative_rowp[i], tend = h_tentative_rowp[i + 1];
+        //     printf("\nT node %d: ", i);
+        //     printVec<int>(tend - tstart, &h_tentative_cols[tstart]);
+        //     int pstart = h_prolong_rowp[i], pend = h_prolong_rowp[i + 1];
+        //     printf("P node %d: ", i);
+        //     printVec<int>(pend - pstart, &h_prolong_cols[pstart]);
+        // }
+        // printf("h_prolong_rowp: ");
+        // printVec<int>(nnodes + 1, h_prolong_rowp);
+        // printf("h_prolong_cols: ");
+        // printVec<int>(P_nnzb, h_prolong_cols);
 
         d_prolong_rowp = HostVec<int>(nnodes + 1, h_prolong_rowp).createDeviceVec().getPtr();
         d_prolong_rows = HostVec<int>(P_nnzb, h_prolong_rows).createDeviceVec().getPtr();
@@ -353,14 +434,15 @@ private:
         // 4) compute the block locations of each part of tentative prolongator
         h_tentative_block_map = HostVec<int>(nnodes).getPtr();
         for (int i = 0; i < nnodes; i++) {
-            for (int jp = h_prolong_rowp[i]; jp < h_prolong_rowp[i+1]; jp++) {
+            for (int jp = h_prolong_rowp[i]; jp < h_prolong_rowp[i + 1]; jp++) {
                 int j = h_prolong_cols[jp];
                 if (j == h_aggregate_ind[i]) {
                     h_tentative_block_map[i] = jp;
                 }
             }
         }
-        d_tentative_block_map = HostVec<int>(nnodes, h_tentative_block_map).createDeviceVec().getPtr();
+        d_tentative_block_map =
+            HostVec<int>(nnodes, h_tentative_block_map).createDeviceVec().getPtr();
     }
 
     template <bool startup = true>
@@ -369,6 +451,7 @@ private:
 
         // startup section
         int ndiag_vals = block_dim * block_dim * nnodes;
+        // printf("diag vals part 1: startup\n");
         if constexpr (startup) {
             int *h_diag_rowp = new int[nnodes + 1];
             diag_inv_nnzb = nnodes;
@@ -393,16 +476,20 @@ private:
             // now allocate DeviceVec for the values
             d_diag_vec = DeviceVec<T>(ndiag_vals);
             d_diag_LU_vals = d_diag_vec.getPtr();  // just copy these pointers..
-        }  // end of startup
+        }                                          // end of startup
+        // CHECK_CUDA(cudaDeviceSynchronize());
 
         // regular jacobi preconditioner
+        // printf("diag vals part 2: copy diag values from kmat\n");
         //  zero previous values (to get new Dinv, in case optimization or nonlinear problem)
         d_diag_vec.zeroValues();  // this is vector for the opinter d_diag_LU_vals (confusing, can
-                                   // fix later
+                                  // fix later
         k_copyBlockDiagFromBsrMat<T><<<(ndiag_vals + 31) / 32, 32>>>(
             nnodes, block_dim, d_kmat_diagp, d_kmat_vals, d_diag_LU_vals);
+        // CHECK_CUDA(cudaDeviceSynchronize());
 
         // ilu0 factoriation
+        // printf("diag vals part 3: perform ILU0 startup\n");
         if constexpr (startup) {
             // create M matrix object (for full numeric factorization)
             cusparseCreateMatDescr(&descr_M);
@@ -461,12 +548,14 @@ private:
                 d_diag_rowp, d_diag_cols, block_dim, info_U, policy_U, pBuffer));
             CHECK_CUDA(cudaDeviceSynchronize());
         }
+        // CHECK_CUDA(cudaDeviceSynchronize());
 
+        // printf("diag vals part 4 : ILU0 numeric factorization\n");
         // perform ILU numeric factorization (with M policy)
         CHECK_CUSPARSE(cusparseDbsrilu02(cusparseHandle, dir, nnodes, diag_inv_nnzb, descr_M,
                                          d_diag_LU_vals, d_diag_rowp, d_diag_cols, block_dim,
                                          info_M, policy_M, pBuffer));
-        CHECK_CUDA(cudaDeviceSynchronize());
+        // CHECK_CUDA(cudaDeviceSynchronize());
         status = cusparseXbsrilu02_zeroPivot(cusparseHandle, info_M, &numerical_zero);
         if (CUSPARSE_STATUS_ZERO_PIVOT == status) {
             printf("block U(%d,%d) is not invertible\n", numerical_zero, numerical_zero);
@@ -480,6 +569,7 @@ private:
 
         // apply e1 through e6 (each dof per node for shell if 6 dof per node case)
         // to get effective matrix.. need six temp vectors..
+        // printf("diag vals part 5: compute Dinv by applying triang solves 6 times\n");
         for (int i = 0; i < block_dim; i++) {
             // set d_temp to ei (one of e1 through e6 per block)
             cudaMemset(d_temp, 0.0, N * sizeof(T));
@@ -503,6 +593,7 @@ private:
             k_setLUinv_operator<T>
                 <<<grid2, block>>>(nnodes, block_dim, i, d_temp2, d_dinv_vec.getPtr());
         }  // this works!
+        // CHECK_CUDA(cudaDeviceSynchronize());
     }
 
     /* CG-lanczos spectral radius section */
@@ -527,8 +618,8 @@ private:
             T a = 1.0, b = 0.0;
             CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
                                           CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes, nnodes,
-                                          diag_inv_nnzb, &a, descrKmat, d_dinv_vals,
-                                          d_diag_rowp, d_diag_cols, block_dim, d_resid, &b, d_z));
+                                          diag_inv_nnzb, &a, descrKmat, d_dinv_vals, d_diag_rowp,
+                                          d_diag_cols, block_dim, d_resid, &b, d_z));
             // compute dot products, rho = <r, z>
             CHECK_CUBLAS(cublasDdot(cublasHandle, N, d_resid, 1, d_z, 1, &rho));
             if (j == 0) {
@@ -566,8 +657,8 @@ private:
         T a = 1.0, b = 0.0;
         CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
                                       CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes, nnodes,
-                                      diag_inv_nnzb, &a, descrKmat, d_dinv_vals,
-                                      d_diag_rowp, d_diag_cols, block_dim, d_resid, &b, d_z));
+                                      diag_inv_nnzb, &a, descrKmat, d_dinv_vals, d_diag_rowp,
+                                      d_diag_cols, block_dim, d_resid, &b, d_z));
         // compute rho = <r, z>
         CHECK_CUBLAS(cublasDdot(cublasHandle, N, d_resid, 1, d_z, 1, &rho));
         // compute last beta
@@ -602,14 +693,20 @@ private:
 
     void compute_prolongator_values() {
         // 1) compute tentative prolongator with QR factorization for each aggregate
+        printf("4.1 - compute prolongator: QR factorization\n");
         _graham_schmidt_QR_factorization();
+        CHECK_CUDA(cudaDeviceSynchronize());
 
         // 2) compute spectral radius of fine grid matrix
+        printf("4.2 - compute prolongator: compute diag values\n");
         _compute_diag_vals();
+        CHECK_CUDA(cudaDeviceSynchronize());
         // _compute_spectral_radius(); // don't do this for now..
- 
+
         // 2) compute smoothed prolongator
         // compute -omega/rho(Dinv*A) * beta_k * A*P into Z first (scaled prolong defect matrix)
+        printf("4.3 - compute prolongator: smooth prolongator\n");
+        compute_matmat_prod_nz_pattern();
         _smooth_prolongator();
     }
 
@@ -619,29 +716,95 @@ private:
         // where B is known and the rigid body modes of fine grid
 
         d_Bc_vec = DeviceVec<T>(block_dim2 * num_aggregates);
-        d_aggregate_norms2 = DeviceVec<T>(block_dim * num_aggregates).getPtr();
+        d_aggregate_norms2 = DeviceVec<T>(num_aggregates).getPtr();
 
-        // perform block-norm of each 
+        // copy fine grid rigid body modes into tentative prolongator (with fillin pattern)
+        int nvals_rbm = block_dim2 * nnodes;  // nvals in tentative prolong + rigid_body_modes array
+        k_copy_rbm_into_tentative_prolongator<T><<<(nvals_rbm + 31) / 32, 32>>>(
+            nnodes, block_dim, d_tentative_block_map, rigid_body_modes.getPtr(), d_prolong_vals);
+
+        // T *h_prolong_vals0 = DeviceVec<T>(P_nnzb * 36, d_prolong_vals).createHostVec().getPtr();
+        // // printf("tentative prolongator: ");
+        // // printVec<T>(36 * P_nnzb, h_prolong_vals);
+        // for (int inode = 0; inode < nnodes; inode++) {
+        //     for (int jp = h_prolong_rowp[inode]; jp < h_prolong_rowp[inode + 1]; jp++) {
+        //         int iagg = h_prolong_cols[jp];
+        //         printf("tentative prolong on (node %d, agg %d): \n", inode, iagg);
+        //         for (int irow = 0; irow < 6; irow++) {
+        //             printVec<T>(6, &h_prolong_vals0[36 * jp + 6 * irow]);
+        //         }
+        //     }
+        // }
+
+        // perform block-norm of each
         for (int imode = 0; imode < block_dim; imode++) {
             // compute orthogonalization against previous modes
+            // CHECK_CUDA(cudaDeviceSynchronize());
+            // printf("QR mode %d / 6\n", imode);
             for (int jmode = 0; jmode < imode; jmode++) {
-                // compute inner products with previous modes and store in d_Bc_vec (imode, jmode) row and col of that aggregate
-                k_compute_GS_inner_product<T><<<(N + 31) / 32, 32>>>(imode, jmode, nnodes, block_dim, 
-                    d_aggregate_ind, d_tentative_block_map, d_prolong_vals, d_Bc_vec.getPtr());
-            
-                // subtract inner product multiple of previous mode in Graham-Schmidt (to orthogonalize against previous modes)
-                k_remove_GS_projector_mode<T><<<(N + 31) / 32, 32>>>(imode, jmode, nnodes, block_dim, 
-                    d_aggregate_ind, d_tentative_block_map, d_Bc_vec.getPtr(), d_prolong_vals);
+                // compute inner products with previous modes and store in d_Bc_vec (imode, jmode)
+                // row and col of that aggregate
+                // printf("\tQR inner prod (%d,%d)\n", imode, jmode);
+                k_compute_GS_inner_product<T><<<(N + 31) / 32, 32>>>(
+                    imode, jmode, nnodes, block_dim, d_aggregate_ind, d_tentative_block_map,
+                    d_prolong_vals, d_Bc_vec.getPtr());
+
+                // subtract inner product multiple of previous mode in Graham-Schmidt (to
+                // orthogonalize against previous modes)
+                // CHECK_CUDA(cudaDeviceSynchronize());
+                // printf("\tQR subtract projector (%d,%d)\n", imode, jmode);
+                k_remove_GS_projector_mode<T><<<(N + 31) / 32, 32>>>(
+                    imode, jmode, nnodes, block_dim, d_aggregate_ind, d_tentative_block_map,
+                    d_Bc_vec.getPtr(), d_prolong_vals);
             }
-            
+
             // compute norms in each aggregate and then normalize P
-            k_compute_aggregate_norms2<T><<<(N + 31) / 32, 32>>>(imode, nnodes, block_dim, 
-                d_aggregate_ind, rigid_body_modes.getPtr(), d_aggregate_norms2);
-            k_compute_sqrt_norms<T><<<(num_aggregates + 31) / 32, 32>>>(imode,num_aggregates, 
-                block_dim, d_aggregate_norms2, d_Bc_vec.getPtr()); // and store norm2 in Bc norm
-            k_normalize_tentative_modes<T><<<(N + 31) / 32, 32>>>(imode, nnodes, block_dim, d_aggregate_ind,
-                d_tentative_block_map, rigid_body_modes.getPtr(), d_Bc_vec.getPtr(), d_prolong_vals);
+            // CHECK_CUDA(cudaDeviceSynchronize());
+            cudaMemset(d_aggregate_norms2, 0.0,
+                       num_aggregates * sizeof(T));  // re-zero d_aggregate_norms2
+            // printf("\tQR ||mode %d||^2 with N = %d\n", imode, N);
+            k_compute_aggregate_norms2<T>
+                <<<(N + 31) / 32, 32>>>(imode, nnodes, block_dim, d_aggregate_ind,
+                                        d_tentative_block_map, d_prolong_vals, d_aggregate_norms2);
+            // CHECK_CUDA(cudaDeviceSynchronize());
+            // T *h_aggregate_norms2 =
+            //     DeviceVec<T>(num_aggregates, d_aggregate_norms2).createHostVec().getPtr();
+            // printf("h_aggregate_norms2: ");
+            // printVec<T>(num_aggregates, h_aggregate_norms2);
+
+            // printf("\tQR get sqrt norm %d with num agg %d\n", imode, num_aggregates);
+            k_compute_sqrt_norms<T><<<(num_aggregates + 31) / 32, 32>>>(
+                imode, num_aggregates, block_dim, d_aggregate_norms2,
+                d_Bc_vec.getPtr());  // and store norm2 in Bc norm
+            // CHECK_CUDA(cudaDeviceSynchronize());
+            // printf("\tQR normalize mode %d in P\n", imode);
+            k_normalize_tentative_modes<T>
+                <<<(N + 31) / 32, 32>>>(imode, nnodes, block_dim, d_aggregate_ind,
+                                        d_tentative_block_map, d_Bc_vec.getPtr(), d_prolong_vals);
         }
+
+        // check the computed values..
+        // T *h_Bc_vals = d_Bc_vec.createHostVec().getPtr();
+        // // printf("coarse rigid body modes: ");
+        // // printVec<T>(36 * num_aggregates, h_Bc_vals);
+        // for (int iagg = 0; iagg < num_aggregates; iagg++) {
+        //     printf("Bc agg %d: \n", iagg);
+        //     for (int irow = 0; irow < 6; irow++) {
+        //         printVec<T>(6, &h_Bc_vals[36 * iagg + 6 * irow]);
+        //     }
+        // }
+        // T *h_prolong_vals = DeviceVec<T>(P_nnzb * 36, d_prolong_vals).createHostVec().getPtr();
+        // // printf("tentative prolongator: ");
+        // // printVec<T>(36 * P_nnzb, h_prolong_vals);
+        // for (int inode = 0; inode < nnodes; inode++) {
+        //     for (int jp = h_prolong_rowp[inode]; jp < h_prolong_rowp[inode + 1]; jp++) {
+        //         int iagg = h_prolong_cols[jp];
+        //         printf("tentative prolong on (node %d, agg %d): \n", inode, iagg);
+        //         for (int irow = 0; irow < 6; irow++) {
+        //             printVec<T>(6, &h_prolong_vals[36 * jp + 6 * irow]);
+        //         }
+        //     }
+        // }
     }
 
     void _smooth_prolongator() {
@@ -650,78 +813,113 @@ private:
         dim3 PKP_block(216), PKP_grid(nnzb_prod);
         T a = -omegaJac;
         // T a = -omega / spectral_radius; // if just jacobi
-        k_compute_mat_mat_prod<T><<<PKP_grid, PKP_block>>>(
-            nnzb_prod, block_dim, a, d_K_prodBlocks, d_P_prodBlocks, d_Z_prodBlocks,
-            d_kmat_vals, d_prolong_vals, d_Z_vals);
+        // printf("4.3.1 - smoothprolong: K*P => Z\n");
+        k_compute_mat_mat_prod<T><<<PKP_grid, PKP_block>>>(nnzb_prod, block_dim, a, d_K_prodBlocks,
+                                                           d_P_prodBlocks, d_Z_prodBlocks,
+                                                           d_kmat_vals, d_prolong_vals, d_Z_vals);
+        // CHECK_CUDA(cudaDeviceSynchronize());
 
         // compute Dinv*Z into Z in-place (equiv to Dinv*scale*A*P => Z)
         dim3 DP_block(216), DP_grid(P_nnzb);
-        k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(
-            P_nnzb, block_dim, d_dinv_vals, d_prolong_rows, d_Z_vals);
+        // printf("4.3.2 - smoothprolong: Dinv*Z => Z\n");
+        k_compute_Dinv_P_mmprod<T>
+            <<<DP_grid, DP_block>>>(P_nnzb, block_dim, d_dinv_vals, d_prolong_rows, d_Z_vals);
+        // CHECK_CUDA(cudaDeviceSynchronize());
 
         // compute free variables
         auto free_var_vec = DeviceVec<bool>(N);
-        free_var_vec.setFullVecToConstValue(true); // set all to default true meaning free var
+        free_var_vec.setFullVecToConstValue(true);  // set all to default true meaning free var
         d_free_dof = free_var_vec.getPtr();
 
         // do orthogonal projector on Z (only really needed for coarse-grid galerkin AMG,
-        // not smooth GMG) 
-        // if constexpr (do_orthog_projector) {
-        dim3 OP_block(32), OP_grid(nnodes);
-        // d_SU_vals.zeroValues();
-        int ndiag_vals = block_dim * block_dim * nnodes;
-        d_SU_vals = DeviceVec<T>(ndiag_vals);
-        // compute SU matrix
-        k_orthog_projector_computeSU<T><<<OP_grid, OP_block>>>(nnodes,
-            block_dim, d_Bc_vec.getPtr(), d_free_dof, d_prolong_rowp, d_prolong_cols, d_prolong_vals, d_SU_vals.getPtr());
+        // not smooth GMG)
+        if constexpr (ORTHOG_PROJECTOR) {
+            dim3 OP_block(32), OP_grid(nnodes);
+            // d_SU_vals.zeroValues();
+            int ndiag_vals = block_dim * block_dim * nnodes;
+            d_SU_vals = DeviceVec<T>(ndiag_vals);
+            // compute SU matrix
+            // printf("4.3.3 - smoothprolong: compute SU vals\n");
+            k_orthog_projector_computeSU<T><<<OP_grid, OP_block>>>(
+                nnodes, block_dim, d_Bc_vec.getPtr(), d_free_dof, d_prolong_rowp, d_prolong_cols,
+                d_prolong_vals, d_SU_vals.getPtr());
+            // CHECK_CUDA(cudaDeviceSynchronize());
 
-        d_UTU_vals = DeviceVec<T>(ndiag_vals);
-        k_orthog_projector_computeUTU<T><<<OP_grid, OP_block>>>(nnodes, block_dim, d_Bc_vec.getPtr(), 
-            d_free_dof, d_prolong_rowp, d_prolong_cols, d_UTU_vals.getPtr());
-        
-        // now compute the LU factor and inverse matrix UTUinv for each fine node (same size and like Dinv matrix)
-        // reuse same pointers and nnzb sizes as Dinv cause same dimensions
-        CUSPARSE::perform_ilu0_factorization(cusparseHandle, descr_L, descr_U, info_L, info_U,
-                                            &pBuffer, nnodes, diag_inv_nnzb, block_dim,
-                                            d_UTU_vals.getPtr(), d_diag_rowp, d_diag_cols, trans_L,
-                                            trans_U, policy_L, policy_U, dir);
-        // now compute UTUinv linear operator like I did for the Dinv
-        d_UTUinv_vals = DeviceVec<T>(ndiag_vals); // inv linear operator of UTU
-        for (int i = 0; i < block_dim; i++) {
-            // set d_temp to ei (one of e1 through e6 per block)
-            cudaMemset(d_temp, 0.0, N * sizeof(T));
-            dim3 block(32);
-            dim3 grid((nnodes + 31) / 32);
-            k_setBlockUnitVec<T><<<grid, block>>>(nnodes, block_dim, i, d_temp);
+            d_UTU_vals = DeviceVec<T>(ndiag_vals);
+            // printf("4.3.4 - smoothprolong: compute UTU vals\n");
+            k_orthog_projector_computeUTU<T>
+                <<<OP_grid, OP_block>>>(nnodes, block_dim, d_Bc_vec.getPtr(), d_free_dof,
+                                        d_prolong_rowp, d_prolong_cols, d_UTU_vals.getPtr());
+            // CHECK_CUDA(cudaDeviceSynchronize());
 
-            // now compute D^-1 through U^-1 L^-1 triang solves and copy result into d_temp2
-            const double alpha = 1.0;
-            CHECK_CUSPARSE(cusparseDbsrsv2_solve(
-                cusparseHandle, dir, trans_L, nnodes, nnodes, &alpha, descr_L, d_UTU_vals.getPtr(),
-                d_diag_rowp, d_diag_cols, block_dim, info_L, d_temp, d_resid, policy_L,
-                pBuffer));  // prob only need U^-1 part for block diag.. TBD
+            // now compute the LU factor and inverse matrix UTUinv for each fine node (same size and
+            // like Dinv matrix) reuse same pointers and nnzb sizes as Dinv cause same dimensions
+            // printf("4.3.5 - smoothprolong: perform ILU0 factorization of UTU\n");
+            CUSPARSE::perform_ilu0_factorization(cusparseHandle, descr_L, descr_U, info_L, info_U,
+                                                 &pBuffer, nnodes, diag_inv_nnzb, block_dim,
+                                                 d_UTU_vals.getPtr(), d_diag_rowp, d_diag_cols,
+                                                 trans_L, trans_U, policy_L, policy_U, dir);
+            // CHECK_CUDA(cudaDeviceSynchronize());
 
-            CHECK_CUSPARSE(cusparseDbsrsv2_solve(
-                cusparseHandle, dir, trans_U, nnodes, nnodes, &alpha, descr_U, d_UTU_vals.getPtr(),
-                d_diag_rowp, d_diag_cols, block_dim, info_U, d_resid, d_temp2, policy_U, pBuffer));
+            // now compute UTUinv linear operator like I did for the Dinv
+            d_UTUinv_vals = DeviceVec<T>(ndiag_vals);  // inv linear operator of UTU
+            // printf("4.3.6 - smoothprolong: compute UTU_inv from 6 LU solves each\n");
+            for (int i = 0; i < block_dim; i++) {
+                // set d_temp to ei (one of e1 through e6 per block)
+                cudaMemset(d_temp, 0.0, N * sizeof(T));
+                dim3 block(32);
+                dim3 grid((nnodes + 31) / 32);
+                k_setBlockUnitVec<T><<<grid, block>>>(nnodes, block_dim, i, d_temp);
 
-            // now copy temp2 into columns of new operator
-            dim3 grid2((N + 31) / 32);
-            k_setLUinv_operator<T>
-                <<<grid2, block>>>(nnodes, block_dim, i, d_temp2, d_UTUinv_vals.getPtr());
+                // now compute D^-1 through U^-1 L^-1 triang solves and copy result into d_temp2
+                const double alpha = 1.0;
+                CHECK_CUSPARSE(cusparseDbsrsv2_solve(
+                    cusparseHandle, dir, trans_L, nnodes, nnodes, &alpha, descr_L,
+                    d_UTU_vals.getPtr(), d_diag_rowp, d_diag_cols, block_dim, info_L, d_temp,
+                    d_resid, policy_L,
+                    pBuffer));  // prob only need U^-1 part for block diag.. TBD
+
+                CHECK_CUSPARSE(cusparseDbsrsv2_solve(cusparseHandle, dir, trans_U, nnodes, nnodes,
+                                                     &alpha, descr_U, d_UTU_vals.getPtr(),
+                                                     d_diag_rowp, d_diag_cols, block_dim, info_U,
+                                                     d_resid, d_temp2, policy_U, pBuffer));
+
+                // now copy temp2 into columns of new operator
+                dim3 grid2((N + 31) / 32);
+                k_setLUinv_operator<T>
+                    <<<grid2, block>>>(nnodes, block_dim, i, d_temp2, d_UTUinv_vals.getPtr());
+
+                // remove rigid-body row-sums
+                // printf("4.3.7 - smoothprolong: apply orthog projector with SU and UTUinv\n");
+                k_orthog_projector_removeRowSums<T><<<OP_grid, OP_block>>>(
+                    nnodes, block_dim, d_Bc_vec.getPtr(), d_free_dof, d_prolong_rowp,
+                    d_prolong_cols, d_SU_vals.getPtr(), d_UTUinv_vals.getPtr(), d_prolong_vals);
+            }
+            // CHECK_CUDA(cudaDeviceSynchronize());
         }
-
-        // remove rigid-body row-sums
-        k_orthog_projector_removeRowSums<T><<<OP_grid, OP_block>>>(nnodes,
-            block_dim, d_Bc_vec.getPtr(), d_free_dof, d_prolong_rowp, d_prolong_cols, d_SU_vals.getPtr(),
-            d_UTUinv_vals.getPtr(), d_prolong_vals);
-        // }
+        // CHECK_CUDA(cudaDeviceSynchronize());
 
         // add Z into P (the prolongation update)
         dim3 add_block(64);
         T scale = 1.0;
+        // printf("4.3.8 - smoothprolong: add colored submat update P += Z\n");
         k_add_colored_submat_PFP<T>
             <<<DP_grid, add_block>>>(P_nnzb, block_dim, scale, 0, d_Z_vals, d_prolong_vals);
+        // CHECK_CUDA(cudaDeviceSynchronize());
+
+        // printf("CHECK SMOOTH PROLONG VALUES\n");
+        // T *h_prolong_vals = DeviceVec<T>(P_nnzb * 36, d_prolong_vals).createHostVec().getPtr();
+        // // printf("tentative prolongator: ");
+        // // printVec<T>(36 * P_nnzb, h_prolong_vals);
+        // for (int inode = 0; inode < nnodes; inode++) {
+        //     for (int jp = h_prolong_rowp[inode]; jp < h_prolong_rowp[inode + 1]; jp++) {
+        //         int iagg = h_prolong_cols[jp];
+        //         printf("tentative prolong on (node %d, agg %d): \n", inode, iagg);
+        //         for (int irow = 0; irow < 6; irow++) {
+        //             printVec<T>(6, &h_prolong_vals[36 * jp + 6 * irow]);
+        //         }
+        //     }
+        // }
     }
 
     void compute_matmat_prod_nz_pattern() {
@@ -750,6 +948,7 @@ private:
                 }
             }
         }
+        // printf("nnzb_prod = %d\n", nnzb_prod);
         // now allocate the block indices of the product
         int *h_PF_blocks = new int[nnzb_prod];
         int *h_K_blocks = new int[nnzb_prod];
@@ -795,29 +994,31 @@ private:
     void compute_coarse_grid_nz_pattern() {
         // 1) compute P^T nonzero pattern (restriction)
         std::vector<int> prolong_tr_rowp(nnodes + 1, 0);  // row pointer array for P
-        std::vector<int> prolong_tr_cols;                   // column indices for P
+        std::vector<int> prolong_tr_cols;                 // column indices for P
 
         h_prolong_tr_row_cts = HostVec<int>(nnodes).getPtr();
         h_prolong_tr_rowp = HostVec<int>(nnodes + 1).getPtr();
         h_prolong_tr_cols = HostVec<int>(P_nnzb).getPtr();
 
+        // printf("coarse_grid_nz 1 - get P^T pattern\n");
+
         for (int i = 0; i < nnodes; i++) {
             // loop through cols
-            for (int jp = h_prolong_rowp[i]; jp < h_prolong_rowp[i+1]; jp++) {
+            for (int jp = h_prolong_rowp[i]; jp < h_prolong_rowp[i + 1]; jp++) {
                 int j = h_prolong_cols[jp];
                 h_prolong_tr_row_cts[j]++;
             }
         }
 
         for (int i = 0; i < nnodes; i++) {
-            h_prolong_tr_rowp[i+1] = h_prolong_tr_rowp[i] + h_prolong_tr_row_cts[i];
+            h_prolong_tr_rowp[i + 1] = h_prolong_tr_rowp[i] + h_prolong_tr_row_cts[i];
         }
 
         // reset to zero
         memset(h_prolong_tr_row_cts, 0, nnodes * sizeof(int));
         for (int i = 0; i < nnodes; i++) {
             // loop through cols
-            for (int jp = h_prolong_rowp[i]; jp < h_prolong_rowp[i+1]; jp++) {
+            for (int jp = h_prolong_rowp[i]; jp < h_prolong_rowp[i + 1]; jp++) {
                 int j = h_prolong_cols[jp];
                 int ip = h_prolong_tr_rowp[j] + h_prolong_tr_row_cts[j];
                 h_prolong_tr_cols[ip] = i;
@@ -825,28 +1026,30 @@ private:
             }
         }
 
-        // 2) compute A*P nonzero pattern (extra fillin from A*T => P needed for coarse grid Galerkin)
+        // 2) compute A*P nonzero pattern
+        // printf("coarse_grid_nz 2 - compute A*P pattern\n");
         std::vector<int> AP_rowp(nnodes + 1, 0);  // row pointer array for P
-        std::vector<int> AP_cols;                   // column indices for P
+        std::vector<int> AP_cols;                 // column indices for P
         for (int i = 0; i < nnodes; i++) {
             // Use a set to gather unique column indices.
             std::set<int> uniqueIndices;
             // Add the tentative prolongation pattern of row i (usually the "diagonal" entry).
-            for (int kp = h_prolong_rowp[i]; kp < h_prolong_rowp[i+1]; kp++) {
-                uniqueIndices.insert(h_tentative_cols[kp]);
+            for (int kp = h_prolong_rowp[i]; kp < h_prolong_rowp[i + 1]; kp++) {
+                uniqueIndices.insert(h_prolong_cols[kp]);
             }
             // For every neighbor j of i (from the kmat data), add j's tentative pattern.
-            for (int jp = h_kmat_rowp[i]; jp < h_kmat_rowp[i+1]; jp++) {
+            for (int jp = h_kmat_rowp[i]; jp < h_kmat_rowp[i + 1]; jp++) {
                 int j = h_kmat_cols[jp];
-                // For row j in the tentative pattern, add all its entries (for the identity, that is j).
-                for (int kp = h_prolong_rowp[j]; kp < h_prolong_rowp[j+1]; kp++) {
+                // For row j in the tentative pattern, add all its entries (for the identity, that
+                // is j).
+                for (int kp = h_prolong_rowp[j]; kp < h_prolong_rowp[j + 1]; kp++) {
                     uniqueIndices.insert(h_prolong_cols[kp]);
                 }
             }
-            
+
             // The number of entries for row i is the size of the set.
-            AP_rowp[i+1] = AP_rowp[i] + uniqueIndices.size();
-            
+            AP_rowp[i + 1] = AP_rowp[i] + uniqueIndices.size();
+
             // Append the sorted (unique) entries to the prolongator's column array.
             // (std::set iterates in sorted order by default.)
             for (int col : uniqueIndices) {
@@ -855,24 +1058,27 @@ private:
         }
 
         // 3) compute P^T * (AP) nz pattern now
+        // printf("coarse_grid_nz 3 - compute P^T * A * P pattern\n");
+        // printf("\tnum agg = %d\n", num_aggregates);
         int num_coarse = num_aggregates;
         std::vector<int> PTAP_rowp(num_coarse + 1, 0);
         std::vector<int> PTAP_cols;
-        for (int i = 0; i < nnodes; i++) {
+        for (int i = 0; i < num_coarse; i++) {
             // Use a set to gather unique column indices.
             std::set<int> uniqueIndices;
             // For every neighbor j of i (from the kmat data), add j's tentative pattern.
-            for (int jp = h_prolong_tr_rowp[i]; jp < h_prolong_tr_rowp[i+1]; jp++) {
+            for (int jp = h_prolong_tr_rowp[i]; jp < h_prolong_tr_rowp[i + 1]; jp++) {
                 int j = h_prolong_tr_cols[jp];
-                // For row j in the tentative pattern, add all its entries (for the identity, that is j).
-                for (int kp = AP_rowp[j]; kp < AP_rowp[j+1]; kp++) {
+                // For row j in the tentative pattern, add all its entries (for the identity, that
+                // is j).
+                for (int kp = AP_rowp[j]; kp < AP_rowp[j + 1]; kp++) {
                     uniqueIndices.insert(AP_cols[kp]);
                 }
             }
-            
+
             // The number of entries for row i is the size of the set.
-            PTAP_rowp[i+1] = PTAP_rowp[i] + uniqueIndices.size();
-            
+            PTAP_rowp[i + 1] = PTAP_rowp[i] + uniqueIndices.size();
+
             // Append the sorted (unique) entries to the prolongator's column array.
             // (std::set iterates in sorted order by default.)
             for (int col : uniqueIndices) {
@@ -880,7 +1086,7 @@ private:
             }
         }
 
-        PTAP_nnzb = PTAP_rowp[num_coarse];
+        PTAP_nnzb = PTAP_rowp[num_coarse] * 1;
         h_PTAP_rowp = HostVec<int>(num_coarse + 1).getPtr();
         h_PTAP_cols = HostVec<int>(PTAP_nnzb).getPtr();
         memcpy(h_PTAP_rowp, PTAP_rowp.data(), (num_coarse + 1) * sizeof(int));
@@ -888,27 +1094,19 @@ private:
         d_PTAP_rowp = HostVec<int>(num_coarse + 1, h_PTAP_rowp).createDeviceVec().getPtr();
         d_PTAP_cols = HostVec<int>(PTAP_nnzb, h_PTAP_cols).createDeviceVec().getPtr();
         // assign Kc or PTAP coarse grid matrix values
-        d_PTAP_vec = DeviceVec<T>(PTAP_nnzb);
+        d_PTAP_vec = DeviceVec<T>(block_dim2 * PTAP_nnzb);
         d_PTAP_vals = d_PTAP_vec.getPtr();
 
-        // 3) compute nonzero product block pattern..
+        // 4) compute nonzero product block pattern..
+        // printf("coarse_grid_nz 4 - compute P^T * A * P 6x6 block triple-mat prod patterns\n");
         PTAP_nnzb_prod = 0;
         for (int i = 0; i < nnodes; i++) {
-            for (int jp = h_prolong_tr_rowp[i]; jp < h_prolong_tr_rowp[i+1]; jp++) {
+            for (int jp = h_prolong_tr_rowp[i]; jp < h_prolong_tr_rowp[i + 1]; jp++) {
                 int j = h_prolong_tr_cols[jp];
 
-                // find block in non-transposed pattern
-                int _ip = -1;
-                for (int ip = h_prolong_rowp[j]; ip < h_prolong_rowp[j+1]; ip++) {
-                    int i2 = h_prolong_cols[ip];
-                    if (i2 == i) {
-                        _ip = ip; break;
-                    }
-                }
-
-                for (int kp = h_kmat_rowp[j]; kp < h_kmat_rowp[j+1]; kp++) {
+                for (int kp = h_kmat_rowp[j]; kp < h_kmat_rowp[j + 1]; kp++) {
                     int k = h_kmat_cols[kp];
-                    for (int lp = h_prolong_rowp[k]; lp < h_prolong_rowp[k+1]; lp++) {
+                    for (int lp = h_prolong_rowp[k]; lp < h_prolong_rowp[k + 1]; lp++) {
                         int l = h_prolong_cols[lp];
                         PTAP_nnzb_prod++;
                     }
@@ -920,59 +1118,82 @@ private:
         h_PTAP_K_blocks = HostVec<int>(PTAP_nnzb_prod).getPtr();
         h_PTAP_P2_blocks = HostVec<int>(PTAP_nnzb_prod).getPtr();
 
-        PTAP_nnzb_prod = 0;
+        int inzb_prod = 0;
         for (int i = 0; i < nnodes; i++) {
-            for (int jp = h_prolong_tr_rowp[i]; jp < h_prolong_tr_rowp[i+1]; jp++) {
+            for (int jp = h_prolong_tr_rowp[i]; jp < h_prolong_tr_rowp[i + 1]; jp++) {
                 int j = h_prolong_tr_cols[jp];
 
-                // find block in non-transposed pattern
-                int _ip = -1;
-                for (int ip = h_prolong_rowp[j]; ip < h_prolong_rowp[j+1]; ip++) {
-                    int i2 = h_prolong_cols[ip];
-                    if (i2 == i) {
-                        _ip = ip; break;
-                    }
-                }
-
-                for (int kp = h_kmat_rowp[j]; kp < h_kmat_rowp[j+1]; kp++) {
+                for (int kp = h_kmat_rowp[j]; kp < h_kmat_rowp[j + 1]; kp++) {
                     int k = h_kmat_cols[kp];
-                    for (int lp = h_prolong_rowp[k]; lp < h_prolong_rowp[k+1]; lp++) {
+                    for (int lp = h_prolong_rowp[k]; lp < h_prolong_rowp[k + 1]; lp++) {
                         int l = h_prolong_cols[lp];
 
                         // find block entry in PTAP matrix
                         int _mp = -1;
-                        for (int mp = h_PTAP_rowp[i]; mp < h_PTAP_rowp[i+1]; mp++) {
+                        for (int mp = h_PTAP_rowp[i]; mp < h_PTAP_rowp[i + 1]; mp++) {
                             int m = h_PTAP_cols[mp];
                             if (m == l) {
                                 _mp = mp;
                             }
                         }
-                        h_PTAP_Kc_blocks[PTAP_nnzb_prod] = _mp; // output Kc
-                        h_PTAP_P1_blocks[PTAP_nnzb_prod] = jp; // transpose P
-                        h_PTAP_K_blocks[PTAP_nnzb_prod] = kp; // K
-                        h_PTAP_P2_blocks[PTAP_nnzb_prod] = lp; // P on right
-                        PTAP_nnzb_prod++;
+                        h_PTAP_Kc_blocks[inzb_prod] = _mp;  // output Kc
+                        h_PTAP_P1_blocks[inzb_prod] = jp;   // transpose P
+                        h_PTAP_K_blocks[inzb_prod] = kp;    // K
+                        h_PTAP_P2_blocks[inzb_prod] = lp;   // P on right
+                        inzb_prod++;
                     }
                 }
             }
         }
 
+        // printf("coarse grid product pattern with nnzb_prod %d\n", PTAP_nnzb_prod);
+        // printf("\tnote also P_nnzb %d, K_nnzb %d, Kc_nnzb %d\n", P_nnzb, kmat_nnzb, PTAP_nnzb);
+        // printf("h_PTAP_Kc_blocks: ");
+        // printVec<int>(PTAP_nnzb_prod, h_PTAP_Kc_blocks);
+        // printf("h_PTAP_P1_blocks: ");
+        // printVec<int>(PTAP_nnzb_prod, h_PTAP_P1_blocks);
+        // printf("h_PTAP_K_blocks: ");
+        // printVec<int>(PTAP_nnzb_prod, h_PTAP_K_blocks);
+        // printf("h_PTAP_P2_blocks: ");
+        // printVec<int>(PTAP_nnzb_prod, h_PTAP_P2_blocks);
+
         // put prod blocks on GPU
-        d_PTAP_Kc_blocks = HostVec<int>(PTAP_nnzb_prod, h_PTAP_Kc_blocks).createDeviceVec().getPtr();
-        d_PTAP_P1_blocks = HostVec<int>(PTAP_nnzb_prod, h_PTAP_P1_blocks).createDeviceVec().getPtr();
+        printf("coarse_grid_nz 5 - allocate block prod patterns on GPU\n");
+        d_PTAP_Kc_blocks =
+            HostVec<int>(PTAP_nnzb_prod, h_PTAP_Kc_blocks).createDeviceVec().getPtr();
+        d_PTAP_P1_blocks =
+            HostVec<int>(PTAP_nnzb_prod, h_PTAP_P1_blocks).createDeviceVec().getPtr();
         d_PTAP_K_blocks = HostVec<int>(PTAP_nnzb_prod, h_PTAP_K_blocks).createDeviceVec().getPtr();
-        d_PTAP_P2_blocks = HostVec<int>(PTAP_nnzb_prod, h_PTAP_P2_blocks).createDeviceVec().getPtr();
+        d_PTAP_P2_blocks =
+            HostVec<int>(PTAP_nnzb_prod, h_PTAP_P2_blocks).createDeviceVec().getPtr();
     }
 
     void compute_coarse_grid_values() {
         // 1) compute coarse grid Galerkin product Ac = P^T * A * P
-        k_compute_PTAP_product6<T><<<PTAP_nnzb_prod, 64>>>(PTAP_nnzb_prod, block_dim,
-            d_PTAP_Kc_blocks, d_PTAP_P1_blocks, d_PTAP_K_blocks, d_PTAP_P2_blocks, 
-            d_prolong_vals, d_kmat_vals, d_PTAP_vals);
+        // printf("\tcompute coarse grid Galerkin product with nprod %d\n", PTAP_nnzb_prod);
+        k_compute_PTAP_product6<T><<<PTAP_nnzb_prod, 64>>>(
+            PTAP_nnzb_prod, block_dim, d_PTAP_Kc_blocks, d_PTAP_P1_blocks, d_PTAP_K_blocks,
+            d_PTAP_P2_blocks, d_prolong_vals, d_kmat_vals, d_PTAP_vals);
+        CHECK_CUDA(cudaDeviceSynchronize());
+        // printf("\tdone with coarse grid Galerkin product\n");
+
+        // printf("CHECK Coarse grid Galerkin values\n");
+        // T *h_PTAP_vals = DeviceVec<T>(PTAP_nnzb * 36, d_PTAP_vals).createHostVec().getPtr();
+        // // printf("tentative prolongator: ");
+        // // printVec<T>(36 * P_nnzb, h_prolong_vals);
+        // for (int iagg = 0; iagg < num_aggregates; iagg++) {
+        //     for (int jp = h_PTAP_rowp[iagg]; jp < h_PTAP_rowp[iagg + 1]; jp++) {
+        //         int jagg = h_PTAP_cols[jp];
+        //         printf("PTAP mat on (agg %d, agg %d): \n", iagg, jagg);
+        //         for (int irow = 0; irow < 6; irow++) {
+        //             printVec<T>(6, &h_PTAP_vals[36 * jp + 6 * irow]);
+        //         }
+        //     }
+        // }
 
         // now make a coarse grid galerkin matrix
-        coarse_kmat_bsr_data = BsrData(num_aggregates, block_dim, PTAP_nnzb, 
-            d_PTAP_rowp, d_PTAP_cols, nullptr, nullptr, false);
+        coarse_kmat_bsr_data = BsrData(num_aggregates, block_dim, PTAP_nnzb, d_PTAP_rowp,
+                                       d_PTAP_cols, nullptr, nullptr, false);
         coarse_kmat = BsrMat<DeviceVec<T>>(coarse_kmat_bsr_data, d_PTAP_vec);
     }
 
@@ -1055,7 +1276,6 @@ private:
     T *alpha_vals, *beta_vals;  // cg coefficients
     T *delta_vals, *eta_vals;   // lanczos coefficients
 
-
     // coarse grid galerkin product
     int *h_prolong_tr_row_cts, *h_prolong_tr_rowp, *h_prolong_tr_cols;
     int PTAP_nnzb;
@@ -1069,11 +1289,12 @@ private:
 
     // smoothed prolongation and projectors
     T *d_Z_vals;
-    T omegaJac; // for smoothed prolongation
+    T omegaJac;  // for smoothed prolongation
     DeviceVec<T> d_SU_vals, d_UTU_vals, d_UTUinv_vals;
     bool *d_free_dof;
 
     // coarse transfer
+    bool _done_post_apply_bcs;
     int Nc;
     DeviceVec<T> d_coarse_rhs_vec, d_coarse_soln_vec;
     T *d_coarse_rhs, *d_coarse_soln;

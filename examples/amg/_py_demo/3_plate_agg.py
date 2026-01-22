@@ -10,7 +10,8 @@ import sys
 # plate case imports from milu python cases
 sys.path.append("../../milu/")
 from _plate import make_plate_case
-from __src import right_pgmres, plot_plate_vec, sort_vis_maps, right_pcg
+from __src import plot_plate_vec, sort_vis_maps
+from __linalg import right_pgmres, right_pcg
 # AMG imports
 sys.path.append("_src/")
 from csr_aggregation import plot_plate_aggregation
@@ -30,6 +31,7 @@ parser.add_argument("--noprec", action=argparse.BooleanOptionalAction, default=F
 parser.add_argument("--thick", type=float, default=1e-2) # 2e-3
 parser.add_argument("--justpc", action=argparse.BooleanOptionalAction, default=False, help="yes: just use pc one vec, no: solve with GMRES")
 parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="whether to debug multilevel process")
+parser.add_argument("--nokernel", action=argparse.BooleanOptionalAction, default=False, help="whether to turnoff kernel or not")
 # it can even do thin plate quite well! maybe even better than multigrid?
 parser.add_argument("--nxe", type=int, default=10, help="num elems each direction x and y")
 parser.add_argument("--fill", type=int, default=0, help="ILU(k) fill level")
@@ -64,7 +66,8 @@ if args.debug:
     # compute node aggregate sets
     # make sure to use unconstrained matrix for aggregation indicators originally
     # need threshold a bit lower sometimes to get proper coarsening
-    aggregate_ind = greedy_serial_aggregation_bsr(A_free, threshold=0.1)
+    # aggregate_ind = greedy_serial_aggregation_bsr(A, threshold=0.15)
+    aggregate_ind = greedy_serial_aggregation_bsr(A_free, threshold=0.14)
     num_agg = np.max(aggregate_ind) + 1
 
     # print(f"{aggregate_ind=}")
@@ -209,7 +212,8 @@ if args.debug:
 from bsr_aggregation import get_rigid_body_modes #, get_coarse_rigid_body_modes
 B = get_rigid_body_modes(xpts0)
 
-pc = AMG_BSRSolver(A_free, A, B, threshold=args.threshold, omega=args.omega, pre_smooth=args.nsmooth, post_smooth=args.nsmooth) #, near_kernel=args.kernel)
+pc = AMG_BSRSolver(A_free, A, B, threshold=args.threshold, omega=args.omega, 
+                   pre_smooth=args.nsmooth, post_smooth=args.nsmooth, near_kernel=not(args.nokernel))
 
 # # check V-cycle symmetry
 # x = np.random.rand(N)
