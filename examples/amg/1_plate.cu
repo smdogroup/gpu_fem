@@ -77,7 +77,7 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDE
     double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
     int nxe_per_comp = nxe, nye_per_comp = nxe; // for now (should have 25 grids)
     auto assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
-    double Q = 1.0; // load magnitude
+    double Q = 1.0e4; // load magnitude
     T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nxe, Lx, Ly, Q);
 
     // build the kmat
@@ -107,11 +107,11 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDE
     k_compute_linear_rigid_body_modes<T><<<(nnodes + 31) / 32, 32>>>(nnodes, block_dim, d_xpts.getPtr(), fine_rbm.getPtr());
 
     // make fine grid AMG solver
-    int coarse_dof_th = 6e3;
+    int coarse_node_th = 600; // this value is problem dependent
     T sparse_th = 0.14;
     // T sparse_th = 0.15; // instead of 0.25 for strength of connections
     printf("MAIN: build fine AMG solver\n");
-    AMG *fine_amg = new AMG(cublasHandle, cusparseHandle, fine_smoother, nnodes, kmat, fine_rbm, coarse_dof_th, sparse_th, omega);
+    AMG *fine_amg = new AMG(cublasHandle, cusparseHandle, fine_smoother, nnodes, kmat, fine_rbm, coarse_node_th, sparse_th, omega);
     assembler.apply_bcs(kmat); // now apply bcs after tentative aggregate pattern formed
     fine_amg->post_apply_bcs();
     auto end0 = std::chrono::high_resolution_clock::now();

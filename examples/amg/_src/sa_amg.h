@@ -31,7 +31,7 @@ class SmoothAggregationAMG : public BaseSolver {
 
     SmoothAggregationAMG(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
                          Smoother *smoother_, int nnodes_, BsrMat<DeviceVec<T>> kmat_,
-                         DeviceVec<T> rigid_body_modes_, int coarse_dof_threshold_ = 6000,
+                         DeviceVec<T> rigid_body_modes_, int coarse_node_threshold_ = 6000,
                          T sparse_threshold_ = 0.15, T omegaJac_ = 0.3)
         : cublasHandle(cublasHandle_),
           cusparseHandle(cusparseHandle_),
@@ -39,7 +39,7 @@ class SmoothAggregationAMG : public BaseSolver {
           kmat(kmat_),
           nnodes(nnodes_),
           rigid_body_modes(rigid_body_modes_),
-          coarse_dof_threshold(coarse_dof_threshold_),
+          coarse_node_threshold(coarse_node_threshold_),
           sparse_threshold(sparse_threshold_) {
         // get data out of kmat
         auto d_kmat_bsr_data = kmat.getBsrData();
@@ -65,7 +65,7 @@ class SmoothAggregationAMG : public BaseSolver {
         printf("\tdone with AMG init\n");
         _done_post_apply_bcs = false;
 
-        is_coarse_mg = num_aggregates > coarse_dof_threshold;
+        is_coarse_mg = num_aggregates > coarse_node_threshold;
     }
 
     void post_apply_bcs() {
@@ -103,7 +103,7 @@ class SmoothAggregationAMG : public BaseSolver {
             // then build coarse AMG solver and new coarse smoother
             printf("\tbuild coarse AMG solver\n");
             coarse_mg = new CoarseMG(cublasHandle, cusparseHandle, coarse_smoother, num_aggregates,
-                                     coarse_kmat, d_Bc_vec, coarse_dof_threshold, sparse_threshold,
+                                     coarse_kmat, d_Bc_vec, coarse_node_threshold, sparse_threshold,
                                      omegaJac);
         }
     }
@@ -1214,7 +1214,7 @@ class SmoothAggregationAMG : public BaseSolver {
     // settings for Smooth aggregation AMG
     int N, block_dim, nnodes;
     int block_dim2;
-    int coarse_dof_threshold;
+    int coarse_node_threshold;
 
     // strength matrix (CSR pattern)
     T sparse_threshold;
