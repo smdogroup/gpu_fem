@@ -20,7 +20,8 @@
 // local multigrid imports
 #include "multigrid/grid.h"
 #include "multigrid/utils/fea.h"
-#include "multigrid/smoothers/mc_smooth1.h"
+#include "multigrid/smoothers/cheb4_poly.h"
+#include "multigrid/smoothers/asw_unstruct.h"
 #include "multigrid/prolongation/structured.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>
@@ -49,14 +50,15 @@ void to_lowercase(char *str) {
 }
 
 template <typename T, class Assembler>
-void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string cycle_type) {
+void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, std::string cycle_type) {
     // geometric multigrid method here..
     // need to make a number of grids..
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
     const SCALER scaler  = LINE_SEARCH;
-    using Smoother = MulticolorGSSmoother_V1<Assembler>;
+    // using Smoother = ChebyshevPolynomialSmoother<Assembler>;
+    using Smoother = UnstructuredQuadAdditiveSchwarzSmoother<T, Assembler>;
     using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
@@ -72,7 +74,10 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     MG *mg;
     KMG *kmg;
 
-    T omegaMC = 1.5; // for GS-SOR
+    // order of chebyshev polynomial
+    int ORDER = 4; 
+    // int ORDER = 8; 
+
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     T omegaLS_min = 1e-2, omegaLS_max = 4.0;
 
@@ -119,11 +124,11 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
             bsr_data.AMD_reordering();
             bsr_data.compute_full_LU_pattern(10.0, false);
         } else {
-            bsr_data.multicolor_reordering(num_colors, _color_rowp);
+            // bsr_data.multicolor_reordering(num_colors, _color_rowp);
             bsr_data.compute_nofill_pattern();
         }
         // auto grid = *GRID::buildFromAssembler(assembler, my_loads, full_LU, reorder);
-        auto h_color_rowp = HostVec<int>(num_colors + 1, _color_rowp);
+        // auto h_color_rowp = HostVec<int>(num_colors + 1, _color_rowp);
 
         assembler.moveBsrDataToDevice();
         auto loads = assembler.createVarsVec(my_loads);
@@ -143,7 +148,10 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
         // build smoother and prolongations..
-        auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC);
+        // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
+        printf("nsmooth %d, omega = %.4e\n", nsmooth, omega);
+        auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, 
+            omega, nsmooth);
         auto prolongation = new Prolongation(assembler);
         auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, omegaLS_min, omegaLS_max);
         
@@ -170,6 +178,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     bool print = true;
     // bool print = false;
     T atol = 1e-6, rtol = 1e-6;
+    // bool double_smooth = false;
     bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
 
     int n_cycles = 500; // max # cycles
@@ -177,7 +186,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
 
     if (is_kcycle) {
         int n_krylov = 500;
-        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omegaMC, atol, rtol, print_freq, print, double_smooth);    
+        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
 
     // fastest is K-cycle usually
@@ -272,9 +281,9 @@ void direct_solve(int nxe, double SR) {
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(bool is_multigrid, int nxe, double SR, int nsmooth, int ninnercyc, std::string cycle_type) {
+void gatekeeper_method(bool is_multigrid, int nxe, double SR, int nsmooth, int ninnercyc, T omega, std::string cycle_type) {
     if (is_multigrid) {
-        multigrid_solve<T, Assembler>(nxe, SR, nsmooth, ninnercyc, cycle_type);
+        multigrid_solve<T, Assembler>(nxe, SR, nsmooth, ninnercyc, omega, cycle_type);
     } else {
         direct_solve<T, Assembler>(nxe, SR);
     }
@@ -285,14 +294,15 @@ int main(int argc, char **argv) {
     bool is_multigrid = true;
     int nxe = 256; // default value
     double SR = 100.0; // default
-    int n_vcycles = 50;
+    // int n_vcycles = 50;
+    double omega = 0.2; // smaller omega for ASW
 
-    int nsmooth = 2; // typically faster right now
-    int ninnercyc = 2; // inner V-cycles to precond K-cycle
+    int nsmooth = 4; // typically faster right now
+    int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)
     std::string cycle_type = "K"; // "V", "F", "W", "K"
 
-    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
-    std::string elem_type = "CFI4";
+    std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+    // std::string elem_type = "CFI4";
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -310,7 +320,14 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --nxe\n";
                 return 1;
             }
-        }  else if (strcmp(arg, "--sr") == 0) {
+        } else if (strcmp(arg, "--omega") == 0) {
+            if (i + 1 < argc) {
+                omega = std::atof(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --omega\n";
+                return 1;
+            }
+        } else if (strcmp(arg, "--sr") == 0) {
             if (i + 1 < argc) {
                 SR = std::atof(argv[++i]);
             } else {
@@ -365,15 +382,15 @@ int main(int argc, char **argv) {
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type);
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, omega, cycle_type);
     } else if (elem_type == "CFI4") {
         using Basis = ChebyshevQuadBasis<T, Quad, 1>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type);
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, omega, cycle_type);
     } else if (elem_type == "CFI9") {
         using Basis = ChebyshevQuadBasis<T, Quad, 2>;
         using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, cycle_type);
+        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, omega, cycle_type);
     } else {
         printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
     }
