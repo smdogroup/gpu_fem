@@ -28,7 +28,7 @@
 #include "multigrid/smoothers/mc_smooth1.h"
 // #include "multigrid/smoothers/damped_jacobi.h"
 #include "multigrid/smoothers/cheb4_poly.h"
-#include "multigrid/smoothers/asw.h"
+#include "multigrid/smoothers/asw_struct.h"
 #include "multigrid/smoothers/spai.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>

@@ -92,7 +92,7 @@ void chebyshev_polynomial_solve(int level, MPI_Comm comm, double SR, int nsmooth
 
     // create the assembler
     TACSMeshLoader mesh_loader{comm};
-    std::string fname = "../../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    std::string fname = "../../examples/gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
     mesh_loader.scanBDFFile(fname.c_str());
     double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
     printf("making assembler for mesh '%s'\n", fname.c_str());
@@ -234,7 +234,7 @@ void gsmc_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.
 
     // create the assembler
     TACSMeshLoader mesh_loader{comm};
-    std::string fname = "../../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    std::string fname = "../../examples/gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
     mesh_loader.scanBDFFile(fname.c_str());
     double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
     printf("making assembler for mesh '%s'\n", fname.c_str());
@@ -372,7 +372,7 @@ void ilu_solve(int level, MPI_Comm comm, double SR, T qorder, int fill_level, T 
 
     // create the assembler
     TACSMeshLoader mesh_loader{comm};
-    std::string fname = "../../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    std::string fname = "../../examples/gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
     mesh_loader.scanBDFFile(fname.c_str());
     double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
     printf("making assembler for mesh '%s'\n", fname.c_str());
@@ -519,7 +519,7 @@ void solve_direct(int level, MPI_Comm comm, double SR, T force = 5.0e7) {
 
     // create the assembler
     TACSMeshLoader mesh_loader{comm};
-    std::string fname = "../../multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    std::string fname = "../../examples/gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
     mesh_loader.scanBDFFile(fname.c_str());
     double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
     printf("making assembler for mesh '%s'\n", fname.c_str());

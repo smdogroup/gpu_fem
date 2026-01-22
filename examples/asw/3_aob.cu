@@ -25,13 +25,18 @@
 #include "multigrid/grid.h"
 #include "multigrid/utils/fea.h"
 #include "multigrid/prolongation/structured.h"
-#include "multigrid/solvers/gmg.h"
 #include "multigrid/smoothers/mc_smooth1.h"
+// #include "multigrid/smoothers/damped_jacobi.h"
+#include "multigrid/smoothers/cheb4_poly.h"
+#include "multigrid/solvers/gmg.h"
 #include <string>
 #include <chrono>
 
-// smoother
-#include "multigrid/smoothers/asw_struct.h"
+#include "multigrid/smoothers/asw_unstruct.h"
+
+// wing stuff
+#include "multigrid/prolongation/unstructured.h"
+#include "multigrid/smoothers/_wingbox_coloring.h"
 
 // finalsolver
 #include "multigrid/solvers/direct/cusp_directLU.h"
@@ -60,19 +65,21 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 }
 
 template <typename T, class Assembler>
-void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure = 5.0e7) {
-    /* SPAI-GMRES solve */
+void asw_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omega = 1.5, T force = 5.0e7) {
+    /* damped jacobi / chebyshev_polynomial PCG solve */
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
     const SCALER scaler  = LINE_SEARCH;
-    using Smoother = StructuredAdditiveSchwarzSmoother<T, Assembler, S_CYLINDER>;
-    using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
+    // using Smoother = ChebyshevPolynomialSmoother<Assembler, false>; 
+    using Smoother = UnstructuredQuadAdditiveSchwarzSmoother<T, Assembler>;
+    using Prolongation = UnstructuredProlongation<Assembler, Basis, true>; 
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
+    using Data = ShellIsotropicData<T, false>;
 
     // for K-cycles
     // linear solver
-    // using Precond = CusparseMGDirectLU<T, Assembler>;
+    using Precond = Smoother;
     using PCG = PCGSolver<T, GRID>;
 
     // create cublas and cusparse handles (single one each)
@@ -82,30 +89,42 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
     cusparseHandle_t cusparseHandle = NULL;
     CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
 
+
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start0 = std::chrono::high_resolution_clock::now();
 
-    double L = 1.0, R = 0.5, thick = L / SR;
-    double E = 70e9, nu = 0.3;
-    // double rho = 2500, ys = 350e6;
-    bool imperfection = false; // option for geom imperfection
-    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-    auto assembler = createCylinderAssembler<Assembler>(nxe, nxe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
-    constexpr bool compressive = false;
-    const int load_case = 3; // petal and chirp load
-    double uniform_force = pressure * 1.0 * 1.0;
-    double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
-    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-    double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderLoads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
-    printf("making grid with nxe %d\n", nxe);
+    // create the assembler
+    TACSMeshLoader mesh_loader{comm};
+    std::string fname = "../gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    mesh_loader.scanBDFFile(fname.c_str());
+    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+    printf("making assembler for mesh '%s'\n", fname.c_str());
+    auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
+
+    // make the loads on the wing
+    int nvars = assembler.get_num_vars();
+    int nnodes = assembler.get_num_nodes();
+    HostVec<T> h_loads(nvars);
+    double load_mag = force / nnodes; // estimate for nodal load mag
+    double *my_loads = h_loads.getPtr();
+    for (int inode = 0; inode < nnodes; inode++) {
+        my_loads[6 * inode + 2] = load_mag;
+    }
 
     // perform multicolor reordering
-    auto &bsr_data = assembler.getBsrData();
-    bsr_data.compute_nofill_pattern();
+    // bool custom_wing_coloring = true;
+    bool custom_wing_coloring = false; // need this off to properly do schwarz method
+    // as schwarz doesn't handle node permutations yet (can fix later though)
 
-    // T *_color_rowp = new T[2];
-    auto h_color_rowp = HostVec<int>(2);
+    auto &bsr_data = assembler.getBsrData();
+    // int num_colors, *_color_rowp;
+    // if (custom_wing_coloring) {
+    //     WingboxMultiColoring<Assembler>::apply_coloring(assembler, bsr_data, num_colors, _color_rowp);
+    // } else {
+    //     bsr_data.multicolor_reordering(num_colors, _color_rowp);
+    // }
+    bsr_data.compute_nofill_pattern();
+    // auto h_color_rowp = HostVec<int>(num_colors + 1, _color_rowp);
     assembler.moveBsrDataToDevice();
 
     // create the loads and kmat
@@ -128,32 +147,29 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
     printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
     // build smoother and prolongations..
-    // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
-    printf("making ASW smoother\n");
-    // int size = 2; // size x size coupled blocks of smoothing
-    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, nxe + 1, nxe, 
-        omega, n_smooth, size);
-    printf("\tdone making ASW smoother\n");
-    auto prolongation = new Prolongation(assembler);
+    // nsmooth steps per precond set in the solver
+    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, 
+        omega, nsmooth);
+    // int ORDER_AND_SMOOTH = ORDER * nsmooth;
+    // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omegaMC, ORDER, nsmooth);
+    int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
+    auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
     auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
-    auto pc = smoother;
 
     // create the preconditioner and GMRES solver now
+    auto pc = smoother; // turns out the smoother does work somewhat
+    // BaseSolver *pc = nullptr; // if want to try no precond for comparison (TEMP DEBUG)
     auto options = SolverOptions();
-    options.ncycles = 800; // number of max PCG cycles
+    options.ncycles = 200; // number of max PCG cycles
     options.print_freq = 10;
+    
+    // auto linear_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options);
 
-    // PCG solver
-    auto linear_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options);
+    const int N_SUBSPACE = 800;
+    using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
+    int MAX_ITER = N_SUBSPACE;
+    auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
 
-    // // can maybe use BiCGStab if need be..
-    // // only use GMRES if SR > 100
-    // const int N_SUBSPACE = 200; // 100
-    // using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
-    // int MAX_ITER = N_SUBSPACE;
-    // auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
-
-    // out settings
     linear_solver->set_rel_tol(1e-6);
     linear_solver->set_abs_tol(1e-6);
     linear_solver->set_print(true);
@@ -168,9 +184,11 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
     // get initial residual
     T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
 
+    
+
     // linear solve
     bool fail = linear_solver->solve(grid->d_defect, lin_soln, true);
-    // bool fail = smoother->solve(grid->d_defect, lin_soln); // just preconditioner solve
+    // bool fail = pc->solve(grid->d_defect, lin_soln, true); // uncomment this to just see preconditioner solve
     
     // final residual
     T final_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
@@ -181,22 +199,14 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nSPAI-GMRES on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\nASW-PCG on AOB wingbox case with %d level and %.4e SR\n", level, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/wing_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
-
-    int nx = nxe + 1;
-    int ndof = nx * nx * 6;
-    double total = startup_time.count() + solve_time.count();
-    size_t bytes_per_double = sizeof(double);
-    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
-    printf("ASW-PCG memory in MB %.4e with NDOF %d\n", mem_mb, ndof);
-
 
     if (fail) {
         printf("\tPCG linear solver failed\n");
@@ -205,17 +215,17 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
 }
 
 template <typename T, class Assembler>
-void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
+void solve_direct(int level, MPI_Comm comm, double SR, T force = 5.0e7) {
 
     /* direct NL solve used to check that how NL the problem is and how */
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
     const SCALER scaler  = LINE_SEARCH;
-    // using Smoother = SPAI<T, Assembler>;
     using Smoother = MulticolorGSSmoother_V1<Assembler>;
-    using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
+    using Prolongation = UnstructuredProlongation<Assembler, Basis, true>; 
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
+    using Data = ShellIsotropicData<T, false>;
 
     // for K-cycles
     // linear solver
@@ -233,20 +243,23 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start0 = std::chrono::high_resolution_clock::now();
 
-    double L = 1.0, R = 0.5, thick = L / SR;
-    double E = 70e9, nu = 0.3;
-    // double rho = 2500, ys = 350e6;
-    bool imperfection = false; // option for geom imperfection
-    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-    auto assembler = createCylinderAssembler<Assembler>(nxe, nxe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
-    constexpr bool compressive = false;
-    const int load_case = 3; // petal and chirp load
-    double uniform_force = pressure * 1.0 * 1.0;
-    double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
-    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-    double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderLoads<T,  Basis, Physics, load_case>(nxe, nxe, L, R, nodal_loads);
-    printf("making grid with nxe %d\n", nxe);
+    // create the assembler
+    TACSMeshLoader mesh_loader{comm};
+    std::string fname = "../gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    mesh_loader.scanBDFFile(fname.c_str());
+    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+    printf("making assembler for mesh '%s'\n", fname.c_str());
+    auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
+
+    // make the loads on the wing
+    int nvars = assembler.get_num_vars();
+    int nnodes = assembler.get_num_nodes();
+    HostVec<T> h_loads(nvars);
+    double load_mag = force / nnodes; // estimate for nodal load mag
+    double *my_loads = h_loads.getPtr();
+    for (int inode = 0; inode < nnodes; inode++) {
+        my_loads[6 * inode + 2] = load_mag;
+    }
 
     // perform multicolor reordering
     auto &bsr_data = assembler.getBsrData();
@@ -281,7 +294,8 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     T omegaMC = 1.0;
     int nsmooth = 1; // not used
     auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
-    auto prolongation = new Prolongation(assembler);
+    int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
+    auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
     auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
 
     // the ILU preconditioner
@@ -315,8 +329,6 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
 
-    pc->factor_matrix(); // run factor again so fair comparison
-
     // get initial residual
     T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
 
@@ -331,45 +343,43 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     std::chrono::duration<double> solve_time = end_solve - start_solve;
 
     // compute log residual reduction per unit time
-    // it's converging about 1e14 resid drop, only need like 1e7 so half
-    T log_resid_drop = (log(init_resid) - log(final_resid)) / log(10.0);
-    // T log_resid_cap = log(1e6) / log(10.0); // cap out past 1e6 because don't need deeper than this really for Newton-Krylov..
-    T log_red_rate =  log_resid_drop / solve_time.count(); // 0.5 * 
-    printf("\nDirectLU-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
+    printf("\nGSMC-PCG on AOB wingbox case with %d level and %.4e SR\n", level, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
-
-    int nx = nxe + 1;
-    int ndof = nx * nx * 6;
-    double total = startup_time.count() + solve_time.count();
-    size_t bytes_per_double = sizeof(double);
-    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
-    printf("fullLU-memory in MB %.4e with NDOF %d\n", mem_mb, ndof);
 
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
     printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
+
+    if (fail) {
+        printf("\tPCG linear solver failed\n");
+        return;
+    }
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(std::string solver_type, int nxe, double SR, T omega, int n_smooth, int size, T load_mag = 5.0e7) {
+void gatekeeper_method(std::string solver_type, int level, MPI_Comm comm, double SR, int nsmooth, T omega, T load_mag = 5.0e7) {
     if (solver_type == "direct") {
-        solve_direct<T, Assembler>(nxe, SR, load_mag);
+        solve_direct<T, Assembler>(level, comm, SR, load_mag);
     } else if (solver_type == "asw") {
-        asw_solve<T, Assembler>(nxe, SR, omega, n_smooth, size, load_mag);
+        asw_solve<T, Assembler>(level, comm, SR, nsmooth, omega, load_mag);
     }
 }
 
 int main(int argc, char **argv) {
+    // Intialize MPI and declare communicator
+    MPI_Init(&argc, &argv);
+    MPI_Comm comm = MPI_COMM_WORLD;
+
     // input ----------
     std::string solver_type = "asw";
-    int nxe = 128; // default value (want to run higher like nxe = 128))
+    int level = 1; // level 1 wingbox
     double SR = 100.0; // default, the less slender it is, solves much faster
     double pressure = 8.0e6;
     double omega = 0.2; // default omega
-    int n_smooth = 2; // 5, number of ASW smoothing steps
-    int size = 2;
+    int nsmooth = 64; 
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -383,11 +393,11 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --solver\n";
                 return 1;
             }
-        } else if (strcmp(arg, "--nxe") == 0) {
+        } else if (strcmp(arg, "--level") == 0) {
             if (i + 1 < argc) {
-                nxe = std::atoi(argv[++i]);
+                level = std::atoi(argv[++i]);
             } else {
-                std::cerr << "Missing value for --nxe\n";
+                std::cerr << "Missing value for --level\n";
                 return 1;
             }
         } else if (strcmp(arg, "--omega") == 0) {
@@ -411,18 +421,11 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --load\n";
                 return 1;
             }
-        } else if (strcmp(arg, "--n_smooth") == 0) {
+        } else if (strcmp(arg, "--nsmooth") == 0) {
             if (i + 1 < argc) {
-                n_smooth = std::atoi(argv[++i]);
+                nsmooth = std::atoi(argv[++i]);
             } else {
-                std::cerr << "Missing value for --n_smooth\n";
-                return 1;
-            }
-        } else if (strcmp(arg, "--size") == 0) {
-            if (i + 1 < argc) {
-                size = std::atoi(argv[++i]);
-            } else {
-                std::cerr << "Missing value for --size\n";
+                std::cerr << "Missing value for --nsmooth\n";
                 return 1;
             }
         } else {
@@ -444,7 +447,7 @@ int main(int argc, char **argv) {
     // have to use MITC4 shells cause this is before diff element types in paper
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-    gatekeeper_method<T, Assembler>(solver_type, nxe, SR, omega, n_smooth, size, pressure);
+    gatekeeper_method<T, Assembler>(solver_type, level, comm, SR, nsmooth, omega, pressure);
     
 
     return 0;
