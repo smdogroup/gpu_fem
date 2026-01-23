@@ -38,8 +38,8 @@ solver_label_map = {
     "GSMC": "GSMC",
     "MCGS": "GSMC",
     "ASW": "ASW",
-    "JACOBI": "Jacobi",
-    "Jacobi": "Jacobi",
+    # "JACOBI": "Jacobi",
+    "DJ": "Jacobi",
 }
 df["solver_plot"] = df["solver"].map(lambda s: solver_label_map.get(s.strip(), s.strip()))
 
