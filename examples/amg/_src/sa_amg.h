@@ -32,7 +32,7 @@ class SmoothAggregationAMG : public BaseSolver {
     SmoothAggregationAMG(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
                          Smoother *smoother_, int nnodes_, BsrMat<DeviceVec<T>> kmat_,
                          DeviceVec<T> rigid_body_modes_, int coarse_node_threshold_ = 6000,
-                         T sparse_threshold_ = 0.15, T omegaJac_ = 0.3)
+                         T sparse_threshold_ = 0.15, T omegaJac_ = 0.3, int nsmooth_ = 1)
         : cublasHandle(cublasHandle_),
           cusparseHandle(cusparseHandle_),
           smoother(smoother_),
@@ -40,7 +40,8 @@ class SmoothAggregationAMG : public BaseSolver {
           nnodes(nnodes_),
           rigid_body_modes(rigid_body_modes_),
           coarse_node_threshold(coarse_node_threshold_),
-          sparse_threshold(sparse_threshold_) {
+          sparse_threshold(sparse_threshold_),
+          nsmooth(nsmooth_) {
         // get data out of kmat
         auto d_kmat_bsr_data = kmat.getBsrData();
         d_kmat_vals = kmat.getVec().getPtr();
@@ -65,12 +66,15 @@ class SmoothAggregationAMG : public BaseSolver {
         printf("\tdone with AMG init\n");
         _done_post_apply_bcs = false;
 
+        d_bcs = DeviceVec<int>(0);  // no bcs default
+
         is_coarse_mg = num_aggregates > coarse_node_threshold;
     }
 
-    void post_apply_bcs() {
+    void post_apply_bcs(DeviceVec<int> d_bcs_) {
         // after applying BCs on kmat now compute the tentative prolongator and other values
         // meaning kmat no bcs used for aggregate formation
+        d_bcs = d_bcs_;
         printf("\nPOST_APPLY_BCS\n");
         printf("1 - AMG compute prolong values\n");
         compute_prolongator_values();
@@ -104,7 +108,9 @@ class SmoothAggregationAMG : public BaseSolver {
             printf("\tbuild coarse AMG solver\n");
             coarse_mg = new CoarseMG(cublasHandle, cusparseHandle, coarse_smoother, num_aggregates,
                                      coarse_kmat, d_Bc_vec, coarse_node_threshold, sparse_threshold,
-                                     omegaJac);
+                                     omegaJac, nsmooth);
+            auto no_bcs = DeviceVec<int>(0);
+            coarse_mg->post_apply_bcs(no_bcs);
         }
     }
 
@@ -120,7 +126,7 @@ class SmoothAggregationAMG : public BaseSolver {
         // pre-smooth defect
         // CHECK_CUDA(cudaDeviceSynchronize());
         // printf("2 - AMG pre-smoothing\n");
-        this->smoother->solve(d_rhs_vec, d_inner_soln_vec);
+        this->smoother->smoothDefect(d_rhs_vec, d_inner_soln_vec, nsmooth);
 
         // restrict
         // CHECK_CUDA(cudaDeviceSynchronize());
@@ -132,6 +138,13 @@ class SmoothAggregationAMG : public BaseSolver {
                                                 d_prolong_vals, d_rhs_vec.getPtr(),
                                                 d_coarse_rhs_vec.getPtr());
 
+        // DEBUG: check coarse rhs vec
+        // T *h_coarse_rhs = d_coarse_rhs_vec.createHostVec().getPtr();
+        // for (int iagg = 0; iagg < num_aggregates; iagg++) {
+        //     printf("h_coarse_rhs (iagg %d): ", iagg);
+        //     printVec<T>(6, &h_coarse_rhs[6 * iagg]);
+        // }
+
         // coarse solve
         if (!is_coarse_mg) {  // direct solve
             // CHECK_CUDA(cudaDeviceSynchronize());
@@ -142,6 +155,14 @@ class SmoothAggregationAMG : public BaseSolver {
             // printf("4 - AMG pass to coarser AMG solver\n");
             this->coarse_mg->solve(d_coarse_rhs_vec, d_coarse_soln_vec);
         }
+
+        // DEBUG: check coarse rhs vec
+        // printf("\n\n");
+        // T *h_coarse_soln = d_coarse_soln_vec.createHostVec().getPtr();
+        // for (int iagg = 0; iagg < num_aggregates; iagg++) {
+        //     printf("h_coarse_soln (iagg %d): ", iagg);
+        //     printVec<T>(6, &h_coarse_soln[6 * iagg]);
+        // }
 
         // prolongation
         // CHECK_CUDA(cudaDeviceSynchronize());
@@ -156,10 +177,17 @@ class SmoothAggregationAMG : public BaseSolver {
         a = 1.0;
         CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_temp, 1, d_inner_soln, 1));
 
+        // update rhs for defect
+        a = -1.0, b = 1.0;
+        CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
+                                      CUSPARSE_OPERATION_NON_TRANSPOSE, nnodes, nnodes, kmat_nnzb,
+                                      &a, descrKmat, d_kmat_vals, d_kmat_rowp, d_kmat_cols,
+                                      block_dim, d_temp, &b, d_rhs));
+
         // post-smooth
         // CHECK_CUDA(cudaDeviceSynchronize());
         // printf("6 - AMG post-smooth\n");
-        this->smoother->solve(d_rhs_vec, d_inner_soln_vec);
+        this->smoother->smoothDefect(d_rhs_vec, d_inner_soln_vec, nsmooth);
 
         // copy internal soln to external solution of the solve method
         cudaMemcpy(soln.getPtr(), d_inner_soln, N * sizeof(T), cudaMemcpyDeviceToDevice);
@@ -326,8 +354,8 @@ class SmoothAggregationAMG : public BaseSolver {
                 h_aggregate_ind[i] = num_aggregates++;
             }
         }
-        // printf("phase 2 - h_aggregate_ind: ");
-        // printVec<int>(nnodes, h_aggregate_ind);
+        printf("final - h_aggregate_ind: ");
+        printVec<int>(nnodes, h_aggregate_ind);
 
         d_aggregate_ind = HostVec<int>(nnodes, h_aggregate_ind).createDeviceVec().getPtr();
     }
@@ -695,6 +723,7 @@ class SmoothAggregationAMG : public BaseSolver {
         // 1) compute tentative prolongator with QR factorization for each aggregate
         printf("4.1 - compute prolongator: QR factorization\n");
         _graham_schmidt_QR_factorization();
+        _apply_dirichlet_bcs();
         CHECK_CUDA(cudaDeviceSynchronize());
 
         // 2) compute spectral radius of fine grid matrix
@@ -703,11 +732,27 @@ class SmoothAggregationAMG : public BaseSolver {
         CHECK_CUDA(cudaDeviceSynchronize());
         // _compute_spectral_radius(); // don't do this for now..
 
-        // 2) compute smoothed prolongator
+        // 3) compute smoothed prolongator
         // compute -omega/rho(Dinv*A) * beta_k * A*P into Z first (scaled prolong defect matrix)
         printf("4.3 - compute prolongator: smooth prolongator\n");
         compute_matmat_prod_nz_pattern();
         _smooth_prolongator();
+        _apply_dirichlet_bcs();
+    }
+
+    void _apply_dirichlet_bcs() {
+        dim3 block(32);
+        int nbcs = d_bcs.getSize();
+        dim3 grid((nbcs + 31) / 32);
+        // printf("applying dirichlet bcs with %d #bcs\n", nbcs);
+        // int *h_bcs = d_bcs.createHostVec().getPtr();
+        // printf("h_bcs: ");
+        // printVec<int>(nbcs, h_bcs);
+
+        // launch two kernels asynchronously
+        apply_mat_bcs_P_kernel<T, DeviceVec>
+            <<<grid, block>>>(d_bcs, block_dim, d_prolong_rowp, d_prolong_cols, d_prolong_vals);
+        CHECK_CUDA(cudaDeviceSynchronize());
     }
 
     void _graham_schmidt_QR_factorization() {
@@ -783,7 +828,16 @@ class SmoothAggregationAMG : public BaseSolver {
                                         d_tentative_block_map, d_Bc_vec.getPtr(), d_prolong_vals);
         }
 
-        // check the computed values..
+        // T *h_B_vals = rigid_body_modes.createHostVec().getPtr();
+        // for (int inode = 0; inode < nnodes; inode++) {
+        //     printf("Bf agg %d: \n", inode);
+        //     for (int irow = 0; irow < 6; irow++) {
+        //         printVec<T>(6, &h_B_vals[36 * inode + 6 * irow]);
+        //     }
+        // }
+
+        // // check the computed values..
+        // printf("\n\n");
         // T *h_Bc_vals = d_Bc_vec.createHostVec().getPtr();
         // // printf("coarse rigid body modes: ");
         // // printVec<T>(36 * num_aggregates, h_Bc_vals);
@@ -793,9 +847,10 @@ class SmoothAggregationAMG : public BaseSolver {
         //         printVec<T>(6, &h_Bc_vals[36 * iagg + 6 * irow]);
         //     }
         // }
+
+        // _apply_dirichlet_bcs();  // DEBUG
+        // printf("\n\n");
         // T *h_prolong_vals = DeviceVec<T>(P_nnzb * 36, d_prolong_vals).createHostVec().getPtr();
-        // // printf("tentative prolongator: ");
-        // // printVec<T>(36 * P_nnzb, h_prolong_vals);
         // for (int inode = 0; inode < nnodes; inode++) {
         //     for (int jp = h_prolong_rowp[inode]; jp < h_prolong_rowp[inode + 1]; jp++) {
         //         int iagg = h_prolong_cols[jp];
@@ -826,14 +881,14 @@ class SmoothAggregationAMG : public BaseSolver {
             <<<DP_grid, DP_block>>>(P_nnzb, block_dim, d_dinv_vals, d_prolong_rows, d_Z_vals);
         // CHECK_CUDA(cudaDeviceSynchronize());
 
-        // compute free variables
-        auto free_var_vec = DeviceVec<bool>(N);
-        free_var_vec.setFullVecToConstValue(true);  // set all to default true meaning free var
-        d_free_dof = free_var_vec.getPtr();
-
         // do orthogonal projector on Z (only really needed for coarse-grid galerkin AMG,
         // not smooth GMG)
         if constexpr (ORTHOG_PROJECTOR) {
+            // compute free variables
+            auto free_var_vec = DeviceVec<bool>(N);
+            free_var_vec.setFullVecToConstValue(true);  // set all to default true meaning free var
+            d_free_dof = free_var_vec.getPtr();
+
             dim3 OP_block(32), OP_grid(nnodes);
             // d_SU_vals.zeroValues();
             int ndiag_vals = block_dim * block_dim * nnodes;
@@ -915,6 +970,18 @@ class SmoothAggregationAMG : public BaseSolver {
         //     for (int jp = h_prolong_rowp[inode]; jp < h_prolong_rowp[inode + 1]; jp++) {
         //         int iagg = h_prolong_cols[jp];
         //         printf("tentative prolong on (node %d, agg %d): \n", inode, iagg);
+        //         for (int irow = 0; irow < 6; irow++) {
+        //             printVec<T>(6, &h_prolong_vals[36 * jp + 6 * irow]);
+        //         }
+        //     }
+        // }
+
+        // printf("\n\n");
+        // T *h_prolong_vals = DeviceVec<T>(P_nnzb * 36, d_prolong_vals).createHostVec().getPtr();
+        // for (int inode = 0; inode < nnodes; inode++) {
+        //     for (int jp = h_prolong_rowp[inode]; jp < h_prolong_rowp[inode + 1]; jp++) {
+        //         int iagg = h_prolong_cols[jp];
+        //         printf("smoothed prolong on (node %d, agg %d): \n", inode, iagg);
         //         for (int irow = 0; irow < 6; irow++) {
         //             printVec<T>(6, &h_prolong_vals[36 * jp + 6 * irow]);
         //         }
@@ -1091,6 +1158,21 @@ class SmoothAggregationAMG : public BaseSolver {
         h_PTAP_cols = HostVec<int>(PTAP_nnzb).getPtr();
         memcpy(h_PTAP_rowp, PTAP_rowp.data(), (num_coarse + 1) * sizeof(int));
         memcpy(h_PTAP_cols, PTAP_cols.data(), PTAP_nnzb * sizeof(int));
+
+        // now compute LU fillin for direct solve if necessary..
+        if (!is_coarse_mg) {
+            printf("MAKING coarse LU pattern for direct solve\n");
+            auto c_bsr_data = BsrData(num_aggregates, block_dim, PTAP_nnzb, h_PTAP_rowp,
+                                      h_PTAP_cols, nullptr, nullptr, true);
+            c_bsr_data.compute_full_LU_pattern(10.0, false);
+            // now get new nnzb, rowp and cols
+            delete[] h_PTAP_rowp;
+            delete[] h_PTAP_cols;
+            PTAP_nnzb = c_bsr_data.nnzb;
+            h_PTAP_rowp = c_bsr_data.rowp;
+            h_PTAP_cols = c_bsr_data.cols;
+        }
+
         d_PTAP_rowp = HostVec<int>(num_coarse + 1, h_PTAP_rowp).createDeviceVec().getPtr();
         d_PTAP_cols = HostVec<int>(PTAP_nnzb, h_PTAP_cols).createDeviceVec().getPtr();
         // assign Kc or PTAP coarse grid matrix values
@@ -1157,8 +1239,13 @@ class SmoothAggregationAMG : public BaseSolver {
         // printf("h_PTAP_P2_blocks: ");
         // printVec<int>(PTAP_nnzb_prod, h_PTAP_P2_blocks);
 
+        // printf("h_Ac_rowp: ");
+        // printVec<int>(num_aggregates + 1, h_PTAP_rowp);
+        // printf("h_Ac_cols: ");
+        // printVec<int>(PTAP_nnzb, h_PTAP_cols);
+
         // put prod blocks on GPU
-        printf("coarse_grid_nz 5 - allocate block prod patterns on GPU\n");
+        // printf("coarse_grid_nz 5 - allocate block prod patterns on GPU\n");
         d_PTAP_Kc_blocks =
             HostVec<int>(PTAP_nnzb_prod, h_PTAP_Kc_blocks).createDeviceVec().getPtr();
         d_PTAP_P1_blocks =
@@ -1177,6 +1264,7 @@ class SmoothAggregationAMG : public BaseSolver {
         CHECK_CUDA(cudaDeviceSynchronize());
         // printf("\tdone with coarse grid Galerkin product\n");
 
+        // printf("\n\n");
         // printf("CHECK Coarse grid Galerkin values\n");
         // T *h_PTAP_vals = DeviceVec<T>(PTAP_nnzb * 36, d_PTAP_vals).createHostVec().getPtr();
         // // printf("tentative prolongator: ");
@@ -1210,6 +1298,7 @@ class SmoothAggregationAMG : public BaseSolver {
     int *d_kmat_rowp, *d_kmat_rows, *d_kmat_cols;
     int *h_kmat_rowp, *h_kmat_cols, kmat_nnzb;
     int *h_kmat_diagp, *d_kmat_diagp;
+    int nsmooth;
 
     // settings for Smooth aggregation AMG
     int N, block_dim, nnodes;
@@ -1298,4 +1387,7 @@ class SmoothAggregationAMG : public BaseSolver {
     int Nc;
     DeviceVec<T> d_coarse_rhs_vec, d_coarse_soln_vec;
     T *d_coarse_rhs, *d_coarse_soln;
+
+    // dirichlet bcs (really for coarse grid only)
+    DeviceVec<int> d_bcs;
 };

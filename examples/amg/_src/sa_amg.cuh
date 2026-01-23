@@ -63,49 +63,46 @@ __global__ void k_compute_strength_bools(const int nnzb, const int block_dim, co
 }
 
 
-template <typename T>
-__global__ void k_compute_PTAP_product6(const int PTAP_nnzb_prod, const int block_dim, 
-    const int *Kc_blocks, const int *PL_blocks, const int *K_blocks, const int *PR_blocks, 
-    const T *prolong_vals, const T *kmat_vals, T *galerkin_vals) {
-    
-    int prod_block_ind = blockIdx.x;
-    if (prod_block_ind >= PTAP_nnzb_prod) return;
+template <typename T, template <typename> class Vec>
+__global__ void apply_mat_bcs_P_kernel(Vec<int> bcs, const int32_t block_dim, const int *rowp, const int *cols, 
+                                          T *values)
+{
+    // apply bcs to the rows of the matrix
+    int this_thread_bc = blockIdx.x * blockDim.x + threadIdx.x;
+    // int stride = blockDim.x;
+    int num_bcs = bcs.getSize();
     int block_dim2 = block_dim * block_dim;
-    int tid = threadIdx.x;
-    T __shared__ AP_vals[36];
-    memset(AP_vals, 0.0, 36 * sizeof(T));
 
-    const T *PL_vals = &prolong_vals[block_dim2 * PL_blocks[prod_block_ind]];
-    const T *K_vals = &kmat_vals[block_dim2 * K_blocks[prod_block_ind]];
-    const T *PR_vals = &prolong_vals[block_dim2 * PR_blocks[prod_block_ind]];
-    T *Kc_vals = &galerkin_vals[block_dim2 * Kc_blocks[prod_block_ind]];
+    // assume num_bcs is reasonable that you can parallelize over it
+    // with one bc per thread
+    // if very large, we can change parallelization strategy
+    if (this_thread_bc < num_bcs)
+    {
+        // get data associated with the row of this BC in the BSR matrix
+        int bc_dof = bcs[this_thread_bc];
+        // int _global_row = bc_dof;
+        int _block_row = bc_dof / block_dim;
+        // int block_row = iperm[_block_row]; // old to new brow
+        int block_row = _block_row; // no perm
+        int inner_row = bc_dof % block_dim;
+        int global_row = block_dim * block_row + inner_row;
+        int istart = rowp[block_row];
+        int iend = rowp[block_row + 1];
+        T *val = &values[block_dim2 * istart];
 
-    int Kc_ind = Kc_blocks[prod_block_ind];
-    // if (threadIdx.x == 0) {
-    //     printf("block %d, Kc_ind %d\n", prod_block_ind, Kc_ind);
-    // }
+        // now loop over all columns, setting this entire row zero
+        for (int col_ptr_ind = istart; col_ptr_ind < iend; col_ptr_ind++)
+        {
+            int block_col = cols[col_ptr_ind];
+            // printf("set row %d, block col %d to zero\n", global_row, block_col);
+            for (int inner_col = 0; inner_col < block_dim; inner_col++) {
+                int inz = block_dim * inner_row + inner_col;
+                val[inz] = 0.0;
+            }
+            val += block_dim2; // go to the next nonzero block (on this row)
+        }
 
-    // computes one 6x6 * 6x6 * 6x6 matrix into 6x6 out of P^T * A *P
-    // intermediate A*P product stored in shared memory (since not storing matrix values for AP)
-
-    // first compute AP product (216 sum-prod terms)
-    for (int ip = threadIdx.x; ip < 216; ip += blockDim.x) {
-        int ij = ip % 36, k = ip / 36;
-        int i = ij / 6, j = ij % 6;
-
-        // (AP)_{ik} = K_{ij} * P_{jk} (where second index is col and col is ind % 6 while row is ind / 6)
-        atomicAdd(&AP_vals[6 * i + k], K_vals[6 * i + j] * PR_vals[6 * j + k]);
-    }
-    __syncthreads();
-
-    // then compute P^T * AP (216 sum-prod terms) into P^T * A * P => Kc matrix
-    for (int ip = threadIdx.x; ip < 216; ip += blockDim.x) {
-        int ij = ip % 36, k = ip / 36;
-        int i = ij / 6, j = ij % 6;
-
-        // PL_vals we need to read in transposed here (i,j) => (j,i)
-        // (Kc)_{ik} = (P^T)_{ij} * (AP)_{jk} = P_{ji} * (AP)_{jk}
-        atomicAdd(&Kc_vals[6 * i + k], PL_vals[6 * j + i] * AP_vals[6 * j + k]);
+        // printf("apply bc %d\n", bc_dof);
     }
 }
 
@@ -233,4 +230,52 @@ __global__ void k_remove_GS_projector_mode(const int imode, const int jmode, con
     T ij_dot = Bc_block[block_dim * jmode + imode];
     int inn_row = ind % block_dim;
     P_block[block_dim * inn_row + imode] -= ij_dot * P_block[block_dim * inn_row + jmode];
+}
+
+
+
+template <typename T>
+__global__ void k_compute_PTAP_product6(const int PTAP_nnzb_prod, const int block_dim, 
+    const int *Kc_blocks, const int *PL_blocks, const int *K_blocks, const int *PR_blocks, 
+    const T *prolong_vals, const T *kmat_vals, T *galerkin_vals) {
+    
+    int prod_block_ind = blockIdx.x;
+    if (prod_block_ind >= PTAP_nnzb_prod) return;
+    int block_dim2 = block_dim * block_dim;
+    int tid = threadIdx.x;
+    T __shared__ AP_vals[36];
+    memset(AP_vals, 0.0, 36 * sizeof(T));
+
+    const T *PL_vals = &prolong_vals[block_dim2 * PL_blocks[prod_block_ind]];
+    const T *K_vals = &kmat_vals[block_dim2 * K_blocks[prod_block_ind]];
+    const T *PR_vals = &prolong_vals[block_dim2 * PR_blocks[prod_block_ind]];
+    T *Kc_vals = &galerkin_vals[block_dim2 * Kc_blocks[prod_block_ind]];
+
+    int Kc_ind = Kc_blocks[prod_block_ind];
+    // if (threadIdx.x == 0) {
+    //     printf("block %d, Kc_ind %d\n", prod_block_ind, Kc_ind);
+    // }
+
+    // computes one 6x6 * 6x6 * 6x6 matrix into 6x6 out of P^T * A *P
+    // intermediate A*P product stored in shared memory (since not storing matrix values for AP)
+
+    // first compute AP product (216 sum-prod terms)
+    for (int ip = threadIdx.x; ip < 216; ip += blockDim.x) {
+        int ij = ip % 36, k = ip / 36;
+        int i = ij / 6, j = ij % 6;
+
+        // (AP)_{ik} = K_{ij} * P_{jk} (where second index is col and col is ind % 6 while row is ind / 6)
+        atomicAdd(&AP_vals[6 * i + k], K_vals[6 * i + j] * PR_vals[6 * j + k]);
+    }
+    __syncthreads();
+
+    // then compute P^T * AP (216 sum-prod terms) into P^T * A * P => Kc matrix
+    for (int ip = threadIdx.x; ip < 216; ip += blockDim.x) {
+        int ij = ip % 36, k = ip / 36;
+        int i = ij / 6, j = ij % 6;
+
+        // PL_vals we need to read in transposed here (i,j) => (j,i)
+        // (Kc)_{ik} = (P^T)_{ij} * (AP)_{jk} = P_{ji} * (AP)_{jk}
+        atomicAdd(&Kc_vals[6 * i + k], PL_vals[6 * j + i] * AP_vals[6 * j + k]);
+    }
 }

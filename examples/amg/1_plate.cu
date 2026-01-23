@@ -92,6 +92,7 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDE
     int block_dim = bsr_data.block_dim; // should be 6 here
     int nnodes = N / block_dim;
     auto fake_assembler = FAssembler(bsr_data, nnodes);
+    auto d_bcs = assembler.getBCs();
 
     // assemble the kmat
     assembler.add_jacobian_fast(kmat);
@@ -109,11 +110,14 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDE
     // make fine grid AMG solver
     int coarse_node_th = 600; // this value is problem dependent
     T sparse_th = 0.14;
+    // T omegaJac = 0.3;
+    // T omegaJac = 0.6; // for smooth prolongator
+    T omegaJac = 0.87;
     // T sparse_th = 0.15; // instead of 0.25 for strength of connections
     printf("MAIN: build fine AMG solver\n");
-    AMG *fine_amg = new AMG(cublasHandle, cusparseHandle, fine_smoother, nnodes, kmat, fine_rbm, coarse_node_th, sparse_th, omega);
+    AMG *fine_amg = new AMG(cublasHandle, cusparseHandle, fine_smoother, nnodes, kmat, fine_rbm, coarse_node_th, sparse_th, omegaJac, nsmooth);
     assembler.apply_bcs(kmat); // now apply bcs after tentative aggregate pattern formed
-    fine_amg->post_apply_bcs();
+    fine_amg->post_apply_bcs(d_bcs);
     auto end0 = std::chrono::high_resolution_clock::now();
 
     // assist in making smoothers at coarser levels
@@ -171,6 +175,8 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDE
     bool check_conv = true;
     printf("MAIN: KRYLOV solve\n");
     linear_solver->solve(loads, soln, check_conv);
+    // DEBUG: just pc
+    // pc->solve(loads, soln);
     printf("\tMAIN: done with solve\n");
     T final_resid = linear_solver->getResidualNorm(loads, soln);
 

@@ -70,6 +70,8 @@ if args.debug:
     aggregate_ind = greedy_serial_aggregation_bsr(A_free, threshold=0.14)
     num_agg = np.max(aggregate_ind) + 1
 
+    print(f'{aggregate_ind=}')
+
     # print(f"{aggregate_ind=}")
     print(f"{num_agg=}")
     nx = args.nxe + 1
@@ -77,8 +79,18 @@ if args.debug:
 
     # get rigid body modes for DEBUG: (check rigid body modes)
     from bsr_aggregation import get_rigid_body_modes, get_bc_flags_bsr #, get_coarse_rigid_body_modes
+
+    # for debug temporarily swap x and y vals in xpts0 (since TACS reordered it weird..)
+    x = xpts0[0::3] * 1.0
+    y = xpts0[1::3] * 1.0
+    xpts0[0::3] = y * 1.0
+    xpts0[1::3] = x * 1.0
+
     B = get_rigid_body_modes(xpts0)
-    print(f"{B.shape=}")
+    # print(f"{B.shape=}")
+    
+    print(f"{xpts0=}")
+
     for imode in range(6):
         bi = B[:,:,imode].copy().reshape((N,))
         bi /= np.linalg.norm(bi)
@@ -93,6 +105,9 @@ if args.debug:
         print(f"rigid body mode {imode} with norm {np.linalg.norm(bi):.4e} => A*vec norm {b_nrm:.4e}")
         print(f"\tvs random unit vec with A*vec norm {r_nrm:.4e}")
 
+    for inode in range(B.shape[0]):
+        print(f"B {inode=} : {B[inode]=}")
+
     omega = None
     # omega = 0.0
     # omega = 0.3
@@ -106,14 +121,74 @@ if args.debug:
     # # create tentative prolongator then smooth it
     # T, Bc = tentative_prolongator_bsr(xpts_arr, aggregate_ind)
     bc_flags = get_bc_flags_bsr(A)
+    # bc_flags[:] = False # temp debug
     T, Bc = tentative_prolongator_bsr(B, aggregate_ind, bc_flags)
     # P = T.copy()
     P = smooth_prolongator_bsr(T, A, Bc, bc_flags, omega=omega) # single damped jacobi step, so only one step of fillin
     R = P.T # sym matrix so restriction is transpose prolong
 
+    Bc *= -1 # DEBUG
+
+    for inode in range(Bc.shape[0]):
+        print(f"Bc {inode=} :")
+        for i in range(6):
+            Bc_vec = Bc[inode,i,:]
+            Bc_vec = np.array([np.round(Bc_vec[i], 4) for i in range(6)])
+            print(Bc_vec)
+
+    T *= -1 # DEBUG
+
+    nnodes = B.shape[0]
+    for inode in range(nnodes):
+        for jp in range(T.indptr[inode], T.indptr[inode+1]):
+            j = T.indices[jp]
+            print(f"T (node {inode}, agg {j}) :")
+            T_block = T.data[jp]
+            for i in range(6):
+                T_vec = T_block[i,:]
+                T_vec = np.array([np.round(T_vec[i], 4) for i in range(6)])
+                print(T_vec)
+
+    P *= -1 # DEBUG
+
+    for inode in range(nnodes):
+        for jp in range(P.indptr[inode], P.indptr[inode+1]):
+            j = P.indices[jp]
+            print(f"P (node {inode}, agg {j}) :")
+            P_block = P.data[jp]
+            for i in range(6):
+                P_vec = P_block[i,:]
+                P_vec = np.array([np.round(P_vec[i], 4) for i in range(6)])
+                print(P_vec)
+
+    # print(f"{P=}")
+    P_rowp = P.indptr
+    P_cols = P.indices
+    # some entries have lost sparsity due to zero Dirichlet effects
+    print(f"{P_rowp=}\n{P_cols=}")
+    # P_csr = P.tocsr()
+    # # plt.spy(P_csr)
+    # # plt.show()
+    # plt.imshow(P_csr.toarray())
+    # plt.show()
+
     # galerkin coarse grid construction
     Ac = R @ (A @ P)
     Ac_free = R @ (A_free @ P)
+
+    for iagg in range(num_agg):
+        for jp in range(Ac.indptr[iagg], Ac.indptr[iagg+1]):
+            j = Ac.indices[jp]
+            print(f"Ac (agg {iagg}, agg {j}) :")
+            Ac_block = Ac.data[jp]
+            for i in range(6):
+                Ac_vec = Ac_block[i,:]
+                Ac_vec = np.array([np.round(Ac_vec[i], 0) for i in range(6)])
+                print(Ac_vec)
+
+    Ac_rowp = Ac.indptr
+    Ac_cols = Ac.indices
+    print(f"{Ac_rowp=}\n{Ac_cols=}")
 
     # print(f"{Ac.shape=}")
 
@@ -190,16 +265,17 @@ if args.debug:
 
     # plot soln comparison
     # for plotting
-    nxe = int(nnodes**0.5)-1
-    sort_fw = np.arange(0, N)
-    fig = plt.figure()
-    ax = fig.add_subplot(121, projection='3d')
-    plot_plate_vec(nxe, x_direct.copy(), ax, sort_fw, nodal_dof=2)
 
-    # plot right-precond solution
-    ax = fig.add_subplot(122, projection='3d')
-    plot_plate_vec(nxe, x_fine.copy(), ax, sort_fw, nodal_dof=2)
-    plt.show()
+    # nxe = int(nnodes**0.5)-1
+    # sort_fw = np.arange(0, N)
+    # fig = plt.figure()
+    # ax = fig.add_subplot(121, projection='3d')
+    # plot_plate_vec(nxe, x_direct.copy(), ax, sort_fw, nodal_dof=2)
+
+    # # plot right-precond solution
+    # ax = fig.add_subplot(122, projection='3d')
+    # plot_plate_vec(nxe, x_fine.copy(), ax, sort_fw, nodal_dof=2)
+    # plt.show()
 
     print("END OF DEBUG, exiting before solve..")
     exit()

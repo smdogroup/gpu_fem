@@ -398,6 +398,7 @@ def smooth_prolongator_bsr(T: sp.bsr_matrix, A: sp.bsr_matrix, Bc: np.ndarray,
     if omega is None:
         rho = spectral_radius_block_DinvA_bsr(A)
         omega = 2.0 / rho * 0.9
+        print(f"{omega=}")
 
     # --- block diagonal inverse ---
     Dinv_blocks = np.zeros((nblocks, b, b))

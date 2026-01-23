@@ -504,7 +504,7 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
         }
 
         // int SMOOTH_ORDER = ORDER; // chebyshev smoothing
-        int SMOOTH_ORDER = 1; // jacobi-like smoothing (probably better cause less fillin?)
+        int SMOOTH_ORDER = 1;  // jacobi-like smoothing (probably better cause less fillin?)
 
         for (int iter = 0; iter < n_iters; iter++) {
             // number of smoothing steps
@@ -515,7 +515,7 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
 
             // iteration starts by first computing z_1 so k=1 (as z_0 = 0)
             for (int k = 1; k < SMOOTH_ORDER + 1; k++) {
-            // int k = 1; // just do jacobi smoothing here for matrix
+                // int k = 1; // just do jacobi smoothing here for matrix
 
                 // compute -omega/rho(Dinv*A) * beta_k * A*P into Z first (scaled prolong defect
                 // matrix)
@@ -532,14 +532,14 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
                 dim3 DP_block(216), DP_grid(P_nnzb);
                 k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(
                     P_nnzb, block_dim, d_dinv_vals.getPtr(), d_P_rows, d_Z_vals);
-                
+
                 dim3 add_block(64);
 
                 // add alpha_k * Zprev into Z
                 if (SMOOTH_ORDER > 1) {
                     T alpha_k = (2.0 * k - 3.0) / (2.0 * k + 1.0);
-                    k_add_colored_submat_PFP<T>
-                        <<<DP_grid, add_block>>>(P_nnzb, block_dim, alpha_k, 0, d_Zprev_vals, d_Z_vals);
+                    k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(P_nnzb, block_dim, alpha_k,
+                                                                        0, d_Zprev_vals, d_Z_vals);
                 }
 
                 // do orthogonal projector on Z (only really needed for coarse-grid galerkin AMG,
@@ -566,7 +566,7 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
                 Z_mat->copyValuesTo(*Zprev_mat);
 
             }  // end of chebyshev recursion
-        } // end of smoothing loop
+        }      // end of smoothing loop
 
     }  // end of smoothMatrix function
 
