@@ -20,17 +20,16 @@ do
         done
     done
 done
-# # then scalability study
-# # for NXE in 32 128 512 2048
-# for NXE in 16 32 64 128 256
-# # for NXE in 32 128
-# do
-#     for SR in 1e1 1e2 1e3
-#     do
-#         for solver in direct ilu0 ilu1 ilu2 jacobi gsmc chebyshev asw
-#         do
-#         echo "nxe = $NXE, SR = $SR"
-#         mpiexec -n 1 ./1_cylinder.out --solver $solver --nxe $NXE --SR $SR
-#         done
-#     done
-# done
+
+# then scalability study
+for NXE in 32 128 512 2048
+do
+    for SR in 1e1 1e2 1e3
+    do
+        for solver in direct ilu0 ilu1 ilu2 jacobi gsmc chebyshev asw
+        do
+        echo "nxe = $NXE, SR = $SR"
+        mpiexec -n 1 ./1_cylinder.out --solver $solver --nxe $NXE --SR $SR
+        done
+    done
+done
