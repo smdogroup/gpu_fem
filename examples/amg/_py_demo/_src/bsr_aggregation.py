@@ -614,7 +614,15 @@ class AMG_BSRSolver:
         r = rhs - self.A.dot(x)
         rc = self.R.dot(r)
         ec = self.coarse_solver.solve(rc)
-        x += self.P.dot(ec)
+        xc = self.P.dot(ec)
+
+        # now do line-search update of this
+        # fc = self.A.dot(xc)
+        # omega_LS = np.dot(rhs, xc) / np.dot(xc, fc)
+        # print(f"{omega_LS=}")
+        # x += omega_LS * xc
+        # just results in omega_LS = 1 from AMG
+        x += xc
 
         # Post-smoothing (backward GS, applied to x!)
         if self.post_smooth > 0:

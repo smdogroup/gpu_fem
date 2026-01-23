@@ -354,8 +354,8 @@ class SmoothAggregationAMG : public BaseSolver {
                 h_aggregate_ind[i] = num_aggregates++;
             }
         }
-        printf("final - h_aggregate_ind: ");
-        printVec<int>(nnodes, h_aggregate_ind);
+        // printf("final - h_aggregate_ind: ");
+        // printVec<int>(nnodes, h_aggregate_ind);
 
         d_aggregate_ind = HostVec<int>(nnodes, h_aggregate_ind).createDeviceVec().getPtr();
     }
@@ -962,21 +962,8 @@ class SmoothAggregationAMG : public BaseSolver {
             <<<DP_grid, add_block>>>(P_nnzb, block_dim, scale, 0, d_Z_vals, d_prolong_vals);
         // CHECK_CUDA(cudaDeviceSynchronize());
 
-        // printf("CHECK SMOOTH PROLONG VALUES\n");
-        // T *h_prolong_vals = DeviceVec<T>(P_nnzb * 36, d_prolong_vals).createHostVec().getPtr();
-        // // printf("tentative prolongator: ");
-        // // printVec<T>(36 * P_nnzb, h_prolong_vals);
-        // for (int inode = 0; inode < nnodes; inode++) {
-        //     for (int jp = h_prolong_rowp[inode]; jp < h_prolong_rowp[inode + 1]; jp++) {
-        //         int iagg = h_prolong_cols[jp];
-        //         printf("tentative prolong on (node %d, agg %d): \n", inode, iagg);
-        //         for (int irow = 0; irow < 6; irow++) {
-        //             printVec<T>(6, &h_prolong_vals[36 * jp + 6 * irow]);
-        //         }
-        //     }
-        // }
-
         // printf("\n\n");
+        // printf("CHECK SMOOTH PROLONG VALUES\n");
         // T *h_prolong_vals = DeviceVec<T>(P_nnzb * 36, d_prolong_vals).createHostVec().getPtr();
         // for (int inode = 0; inode < nnodes; inode++) {
         //     for (int jp = h_prolong_rowp[inode]; jp < h_prolong_rowp[inode + 1]; jp++) {
@@ -1063,8 +1050,8 @@ class SmoothAggregationAMG : public BaseSolver {
         std::vector<int> prolong_tr_rowp(nnodes + 1, 0);  // row pointer array for P
         std::vector<int> prolong_tr_cols;                 // column indices for P
 
-        h_prolong_tr_row_cts = HostVec<int>(nnodes).getPtr();
-        h_prolong_tr_rowp = HostVec<int>(nnodes + 1).getPtr();
+        h_prolong_tr_row_cts = HostVec<int>(num_aggregates).getPtr();
+        h_prolong_tr_rowp = HostVec<int>(num_aggregates + 1).getPtr();
         h_prolong_tr_cols = HostVec<int>(P_nnzb).getPtr();
 
         // printf("coarse_grid_nz 1 - get P^T pattern\n");
@@ -1077,12 +1064,12 @@ class SmoothAggregationAMG : public BaseSolver {
             }
         }
 
-        for (int i = 0; i < nnodes; i++) {
+        for (int i = 0; i < num_aggregates; i++) {
             h_prolong_tr_rowp[i + 1] = h_prolong_tr_rowp[i] + h_prolong_tr_row_cts[i];
         }
 
         // reset to zero
-        memset(h_prolong_tr_row_cts, 0, nnodes * sizeof(int));
+        memset(h_prolong_tr_row_cts, 0, num_aggregates * sizeof(int));
         for (int i = 0; i < nnodes; i++) {
             // loop through cols
             for (int jp = h_prolong_rowp[i]; jp < h_prolong_rowp[i + 1]; jp++) {
@@ -1092,6 +1079,32 @@ class SmoothAggregationAMG : public BaseSolver {
                 h_prolong_tr_row_cts[j]++;
             }
         }
+        // printf("h_prolong_tr_rowp: ");
+        // printVec<int>(num_aggregates + 1, h_prolong_tr_rowp);
+        // printf("h_prolong_tr_cols: ");
+        // printVec<int>(P_nnzb, h_prolong_tr_cols);
+
+        // also compute map between P and P^T block storage since I don't have that storage
+        int *h_prolong_tr_map = new int[P_nnzb];  // PT block input => P block output
+        for (int iagg = 0; iagg < num_aggregates; iagg++) {
+            for (int jp = h_prolong_tr_rowp[iagg]; jp < h_prolong_tr_rowp[iagg + 1]; jp++) {
+                int jnode = h_prolong_tr_cols[jp];
+
+                // now find equivalent block ind in prolong
+                for (int kp = h_prolong_rowp[jnode]; kp < h_prolong_rowp[jnode + 1]; kp++) {
+                    int kagg = h_prolong_cols[kp];
+                    if (kagg == iagg) {
+                        h_prolong_tr_map[jp] = kp;
+                        // printf("h_prolong_tr_map on (node %d, agg %d) with jp %d => kp %d\n",
+                        // jnode,
+                        //        iagg, jp, kp);
+                        // break;
+                    }
+                }
+            }
+        }
+        // printf("h_prolong_tr_map: ");
+        // printVec<int>(P_nnzb, h_prolong_tr_map);
 
         // 2) compute A*P nonzero pattern
         // printf("coarse_grid_nz 2 - compute A*P pattern\n");
@@ -1182,7 +1195,7 @@ class SmoothAggregationAMG : public BaseSolver {
         // 4) compute nonzero product block pattern..
         // printf("coarse_grid_nz 4 - compute P^T * A * P 6x6 block triple-mat prod patterns\n");
         PTAP_nnzb_prod = 0;
-        for (int i = 0; i < nnodes; i++) {
+        for (int i = 0; i < num_aggregates; i++) {
             for (int jp = h_prolong_tr_rowp[i]; jp < h_prolong_tr_rowp[i + 1]; jp++) {
                 int j = h_prolong_tr_cols[jp];
 
@@ -1201,7 +1214,7 @@ class SmoothAggregationAMG : public BaseSolver {
         h_PTAP_P2_blocks = HostVec<int>(PTAP_nnzb_prod).getPtr();
 
         int inzb_prod = 0;
-        for (int i = 0; i < nnodes; i++) {
+        for (int i = 0; i < num_aggregates; i++) {
             for (int jp = h_prolong_tr_rowp[i]; jp < h_prolong_tr_rowp[i + 1]; jp++) {
                 int j = h_prolong_tr_cols[jp];
 
@@ -1218,26 +1231,76 @@ class SmoothAggregationAMG : public BaseSolver {
                                 _mp = mp;
                             }
                         }
-                        h_PTAP_Kc_blocks[inzb_prod] = _mp;  // output Kc
-                        h_PTAP_P1_blocks[inzb_prod] = jp;   // transpose P
-                        h_PTAP_K_blocks[inzb_prod] = kp;    // K
-                        h_PTAP_P2_blocks[inzb_prod] = lp;   // P on right
+                        int jp_untr =
+                            h_prolong_tr_map[jp];  // P^T to P storage since we don't store P^T
+                        h_PTAP_Kc_blocks[inzb_prod] = _mp;      // output Kc
+                        h_PTAP_P1_blocks[inzb_prod] = jp_untr;  // transpose P
+                        h_PTAP_K_blocks[inzb_prod] = kp;        // K
+                        h_PTAP_P2_blocks[inzb_prod] = lp;       // P on right
                         inzb_prod++;
                     }
                 }
             }
         }
 
+        // DEBUG block product pattern
+        // for (int iblock = 0; iblock < PTAP_nnzb_prod; iblock++) {
+        //     if (h_PTAP_Kc_blocks[iblock] == 0) {
+        //         // Kc(0,0) block, check which blocks of P1, K, P2 we incur
+        //         int P1_block = h_PTAP_P1_blocks[iblock];
+        //         int K_block = h_PTAP_K_blocks[iblock];
+        //         int P2_block = h_PTAP_P2_blocks[iblock];
+        //         printf("block %d in PTAP(0,0) prod\n", iblock);
+        //         printf("\tP1_block %d, K_block %d, P2_block %d\n", P1_block, K_block, P2_block);
+
+        //         // now figure out which nodes, agg they correspond to each..
+        //         for (int i = 0; i < num_aggregates; i++) {
+        //             for (int jp = h_prolong_tr_rowp[i]; jp < h_prolong_tr_rowp[i + 1]; jp++) {
+        //                 int j = h_prolong_tr_cols[jp];
+        //                 if (jp == P1_block) {
+        //                     printf("\tPT_block (node %d, iagg %d)\n", j, i);
+        //                 }
+        //             }
+        //         }
+
+        //         for (int i = 0; i < nnodes; i++) {
+        //             for (int jp = h_kmat_rowp[i]; jp < h_kmat_rowp[i + 1]; jp++) {
+        //                 int j = h_kmat_cols[jp];
+        //                 if (jp == K_block) {
+        //                     printf("\tK_block (node %d, node %d)\n", i, j);
+        //                 }
+        //             }
+        //         }
+
+        //         for (int i = 0; i < nnodes; i++) {
+        //             for (int jp = h_prolong_rowp[i]; jp < h_prolong_rowp[i + 1]; jp++) {
+        //                 int j = h_prolong_cols[jp];
+        //                 if (jp == P2_block) {
+        //                     printf("\tP_block (node %d, node %d)\n", i, j);
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+
+        // DEBUG temporarily change to just do one block product (for nxe = 2 case)
+        // PTAP_nnzb_prod = 1;
+        // h_PTAP_Kc_blocks = HostVec<int>(PTAP_nnzb_prod).getPtr();
+        // h_PTAP_P1_blocks = HostVec<int>(PTAP_nnzb_prod).getPtr();
+        // h_PTAP_K_blocks = HostVec<int>(PTAP_nnzb_prod).getPtr();
+        // h_PTAP_P2_blocks = HostVec<int>(PTAP_nnzb_prod).getPtr();
+        // h_PTAP_Kc_blocks[0] = 0;
+        // h_PTAP_P1_blocks[0] = 4;
+        // h_PTAP_K_blocks[0] = 24;
+        // h_PTAP_P2_blocks[0] = 4;
+
         // printf("coarse grid product pattern with nnzb_prod %d\n", PTAP_nnzb_prod);
-        // printf("\tnote also P_nnzb %d, K_nnzb %d, Kc_nnzb %d\n", P_nnzb, kmat_nnzb, PTAP_nnzb);
-        // printf("h_PTAP_Kc_blocks: ");
-        // printVec<int>(PTAP_nnzb_prod, h_PTAP_Kc_blocks);
-        // printf("h_PTAP_P1_blocks: ");
-        // printVec<int>(PTAP_nnzb_prod, h_PTAP_P1_blocks);
-        // printf("h_PTAP_K_blocks: ");
-        // printVec<int>(PTAP_nnzb_prod, h_PTAP_K_blocks);
-        // printf("h_PTAP_P2_blocks: ");
-        // printVec<int>(PTAP_nnzb_prod, h_PTAP_P2_blocks);
+        // printf("\tnote also P_nnzb %d, K_nnzb %d, Kc_nnzb %d\n", P_nnzb, kmat_nnzb,
+        // PTAP_nnzb); printf("h_PTAP_Kc_blocks: "); printVec<int>(PTAP_nnzb_prod,
+        // h_PTAP_Kc_blocks); printf("h_PTAP_P1_blocks: "); printVec<int>(PTAP_nnzb_prod,
+        // h_PTAP_P1_blocks); printf("h_PTAP_K_blocks: "); printVec<int>(PTAP_nnzb_prod,
+        // h_PTAP_K_blocks); printf("h_PTAP_P2_blocks: "); printVec<int>(PTAP_nnzb_prod,
+        // h_PTAP_P2_blocks);
 
         // printf("h_Ac_rowp: ");
         // printVec<int>(num_aggregates + 1, h_PTAP_rowp);
@@ -1257,12 +1320,34 @@ class SmoothAggregationAMG : public BaseSolver {
 
     void compute_coarse_grid_values() {
         // 1) compute coarse grid Galerkin product Ac = P^T * A * P
+        cudaMemset(d_PTAP_vals, 0.0, PTAP_nnzb * block_dim2 * sizeof(T));
+
         // printf("\tcompute coarse grid Galerkin product with nprod %d\n", PTAP_nnzb_prod);
-        k_compute_PTAP_product6<T><<<PTAP_nnzb_prod, 64>>>(
+        // k_compute_PTAP_product6<T><<<PTAP_nnzb_prod, 64>>>(
+        //     PTAP_nnzb_prod, block_dim, d_PTAP_Kc_blocks, d_PTAP_P1_blocks, d_PTAP_K_blocks,
+        //     d_PTAP_P2_blocks, d_prolong_vals, d_kmat_vals, d_PTAP_vals);
+        // CHECK_CUDA(cudaDeviceSynchronize());
+
+        k_compute_PTAP_product6_v2<T><<<PTAP_nnzb_prod, 216>>>(
             PTAP_nnzb_prod, block_dim, d_PTAP_Kc_blocks, d_PTAP_P1_blocks, d_PTAP_K_blocks,
             d_PTAP_P2_blocks, d_prolong_vals, d_kmat_vals, d_PTAP_vals);
         CHECK_CUDA(cudaDeviceSynchronize());
         // printf("\tdone with coarse grid Galerkin product\n");
+
+        // printf("\n\n");
+        // printf("CHECK fine grid kmat values\n");
+        // T *h_Avals = DeviceVec<T>(kmat_nnzb * 36, d_kmat_vals).createHostVec().getPtr();
+        // // printf("tentative prolongator: ");
+        // // printVec<T>(36 * P_nnzb, h_prolong_vals);
+        // for (int inode = 0; inode < nnodes; inode++) {
+        //     for (int jp = h_kmat_rowp[inode]; jp < h_kmat_rowp[inode + 1]; jp++) {
+        //         int jnode = h_kmat_cols[jp];
+        //         printf("A mat on (node %d, node %d): \n", inode, jnode);
+        //         for (int irow = 0; irow < 6; irow++) {
+        //             printVec<T>(6, &h_Avals[36 * jp + 6 * irow]);
+        //         }
+        //     }
+        // }
 
         // printf("\n\n");
         // printf("CHECK Coarse grid Galerkin values\n");

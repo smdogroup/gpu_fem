@@ -32,6 +32,7 @@
 // new multigrid imports for K-cycles, etc.
 #include "_src/sa_amg.h"
 #include "_src/_rigid_modes.cuh"
+#include "multigrid/solvers/krylov/bsr_gmres.h"
 #include "multigrid/solvers/krylov/bsr_pcg.h"
 
 /* command line args:
@@ -50,17 +51,19 @@ void to_lowercase(char *str) {
 }
 
 template <typename T, class Assembler>
-void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDER) {
+void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omegas, T omegap, int ORDER) {
     // geometric multigrid method here..
     // need to make a number of grids..
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
     const SCALER scaler  = LINE_SEARCH;
-    using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
+    using Prolongation = StructuredProlongation<Assembler, CYLINDER>; // prolongation unused here (just need for grid, TODO is to remove this dependency)
     using FAssembler = FakeAssembler<T>;
     using Smoother = ChebyshevPolynomialSmoother<FAssembler>; // uses fake assembler for smoother so can also build on coarser grids
-    using AMG = SmoothAggregationAMG<T, Smoother>;
+    // const bool ORTHOG_PROJECTOR = true;
+    const bool ORTHOG_PROJECTOR = false;
+    using AMG = SmoothAggregationAMG<T, Smoother, ORTHOG_PROJECTOR>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
     using PCG = PCGSolver<T, GRID>;
 
@@ -70,19 +73,20 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDE
     CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
 
     
-    // make the fine grid assembler
+    // make the fine grid assembler and loads
     double L = 1.0, R = 0.5, thick = L / SR;
     double E = 70e9, nu = 0.3;
     // double rho = 2500, ys = 350e6;
     bool imperfection = false; // option for geom imperfection
     int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
     auto assembler = createCylinderAssembler<Assembler>(nxe, nxe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
-    
-    // build the loads
     constexpr bool compressive = false;
     const int load_case = 3; // petal and chirp load
-    double uniform_force = 5e7 * 1.0 * 1.0;
+    T pressure = 5.0e7;
+    double uniform_force = pressure * 1.0 * 1.0;
     double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
+    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
+    double Q = 1.0e4; // load magnitude
     T *my_loads = getCylinderLoads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
 
     // build the kmat
@@ -97,41 +101,62 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDE
     int block_dim = bsr_data.block_dim; // should be 6 here
     int nnodes = N / block_dim;
     auto fake_assembler = FAssembler(bsr_data, nnodes);
+    auto d_bcs = assembler.getBCs();
 
     // assemble the kmat
     assembler.add_jacobian_fast(kmat);
-    assembler.apply_bcs(kmat);
+    // delay bcs until after forming SA-aggregates
 
     auto start0 = std::chrono::high_resolution_clock::now();
     // build smoother on fine grid
-    Smoother *fine_smoother = new Smoother(cublasHandle, cusparseHandle, fake_assembler, kmat, omega, ORDER, nsmooth);
+    Smoother *fine_smoother = new Smoother(cublasHandle, cusparseHandle, fake_assembler, kmat, omegas, ORDER, nsmooth);
     
-    // TODO : make fine rigid body modes array on device
+    // make fine rigid body modes array on device
     auto d_xpts = assembler.getXpts();
     auto fine_rbm = DeviceVec<T>(6 * N); // each of 6 rigid body modes
     k_compute_linear_rigid_body_modes<T><<<(nnodes + 31) / 32, 32>>>(nnodes, block_dim, d_xpts.getPtr(), fine_rbm.getPtr());
 
+    T *h_xpts = d_xpts.createHostVec().getPtr();
+    // printf("h_xpts: ");
+    // printVec<T>(3 * nnodes, h_xpts);
+
     // make fine grid AMG solver
-    int coarse_dof_th = 6e3;
-    T sparse_th = 0.15; // instead of 0.25 for strength of connections
-    AMG *fine_amg = new AMG(cublasHandle, cusparseHandle, fine_smoother, nnodes, kmat, fine_rbm, coarse_dof_th, sparse_th);
+    // TODO : add coarse_node_th and sparse_th as command line inputs also
+    int coarse_node_th = 600; // this value is problem dependent
+    T sparse_th = 0.13;
+    // omegaJac is not omegap input
+    // T omegaJac = 0.3;
+    // T omegaJac = 0.6; // for smooth prolongator (smaller is sometimes better, this should be another input)
+    // T omegaJac = 1.8;
+    // T omegaJac = 0.8631319920631012;
+    // T sparse_th = 0.15; // instead of 0.25 for strength of connections
+    printf("MAIN: build fine AMG solver\n");
+    AMG *fine_amg = new AMG(cublasHandle, cusparseHandle, fine_smoother, nnodes, kmat, fine_rbm, coarse_node_th, sparse_th, omegap, nsmooth);
+    assembler.apply_bcs(kmat); // now apply bcs after tentative aggregate pattern formed
+    fine_amg->post_apply_bcs(d_bcs);
     auto end0 = std::chrono::high_resolution_clock::now();
 
     // assist in making smoothers at coarser levels
+    printf("MAIN: build fine AMG solver\n");
     AMG *c_amg = fine_amg;
-    while (c_amg != nullptr && c_amg->is_coarse_mg) {
+    bool first = true;
+    while (c_amg != nullptr && c_amg->is_coarse_mg || first) {
         // build smoother for coarser problem (but it can't use assembler though..)
         auto c_bsr_data = c_amg->get_coarse_bsr_data();
         auto coarse_kmat = c_amg->get_coarse_kmat();
         int c_nnodes = c_amg->get_num_aggregates();
+        printf("MAIN: build coarse system with %d aggregates\n", c_nnodes);
         auto fake_c_assembler = FAssembler(c_bsr_data, c_nnodes);
-        Smoother *c_smoother = new Smoother(cublasHandle, cusparseHandle, fake_c_assembler, coarse_kmat, omega, ORDER, nsmooth);
+        Smoother *c_smoother = new Smoother(cublasHandle, cusparseHandle, fake_c_assembler, coarse_kmat, omegas, ORDER, nsmooth);
 
         // build coarser system
+        printf("MAIN: build coarse system\n");
         c_amg->build_coarse_system(fake_c_assembler, c_smoother);
+        printf("\tMAIN: done building coarse system\n");
 
         // then set current amg (c_amg) to coarser problem
         c_amg = c_amg->coarse_mg;
+        first = false;
     }
 
     // build prolongation and fine grid also (unnecessary but required arg of PCG solver right now for some reason)
@@ -140,15 +165,36 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDE
 
     // now build PCG / Krylov solver with AMG as preconditioner
     int level = 0;
-    SolverOptions options = SolverOptions(); // defaults
-    auto pcg = new PCG(cublasHandle, cusparseHandle, grid, fine_amg, options, level);
-    T init_resid = pcg->getResidualNorm(loads, soln);
+    // create the preconditioner and GMRES solver now
+    auto options = SolverOptions();
+    options.ncycles = 800; // number of max PCG cycles
+    options.print_freq = 10;
+
+    printf("MAIN: build KRYLOV\n");
+
+    // only use GMRES if SR > 100
+    const int N_SUBSPACE = 100;
+    using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
+    int MAX_ITER = N_SUBSPACE;
+    auto pc = fine_amg;
+    auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
+    // auto linear_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options, level);
+    T init_resid = linear_solver->getResidualNorm(loads, soln);
+    
+    // out settings
+    linear_solver->set_rel_tol(1e-6);
+    linear_solver->set_abs_tol(1e-6);
+    linear_solver->set_print(true);
 
     // perform the Krylov linear solve
     auto start1 = std::chrono::high_resolution_clock::now();
     bool check_conv = true;
-    pcg->solve(loads, soln, check_conv);
-    T final_resid = pcg->getResidualNorm(loads, soln);
+    printf("MAIN: KRYLOV solve\n");
+    linear_solver->solve(loads, soln, check_conv);
+    // DEBUG: just pc
+    // pc->solve(loads, soln);
+    printf("\tMAIN: done with solve\n");
+    T final_resid = linear_solver->getResidualNorm(loads, soln);
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end1 = std::chrono::high_resolution_clock::now();
@@ -161,7 +207,7 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDE
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\tSA-AMG-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\tSA-AMG-GMRES on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // print some of the data of host residual
@@ -300,7 +346,7 @@ void solve_direct(int nxe, double SR) {
     T log_resid_drop = (log(init_resid) - log(final_resid)) / log(10.0);
     // T log_resid_cap = log(1e6) / log(10.0); // cap out past 1e6 because don't need deeper than this really for Newton-Krylov..
     T log_red_rate =  log_resid_drop / solve_time.count();
-    printf("\nDirectLU-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\nDirectLU on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     int nx = nxe + 1;
@@ -323,9 +369,9 @@ void solve_direct(int nxe, double SR) {
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(std::string solver_type, int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDER) {
+void gatekeeper_method(std::string solver_type, int nxe, double SR, int nsmooth, int ninnercyc, T omegas, T omegap, int ORDER) {
     if (solver_type != "direct") {
-        amg_solve<T, Assembler>(nxe, SR, nsmooth, ninnercyc, omega, ORDER);
+        amg_solve<T, Assembler>(nxe, SR, nsmooth, ninnercyc, omegas, omegap, ORDER);
     } else {
         solve_direct<T, Assembler>(nxe, SR);
     }
@@ -333,10 +379,10 @@ void gatekeeper_method(std::string solver_type, int nxe, double SR, int nsmooth,
 
 int main(int argc, char **argv) {
     // input ----------
-    int nxe = 256; // default value
-    double SR = 50.0; // default
-    int n_vcycles = 50;
-    double omega = 0.3;
+    int nxe = 50; // default value
+    double SR = 100.0; // default
+    double omegas = 0.3; // omega for smoother
+    double omegap = 0.3; // omega for smooth prolongation
     int ORDER = 8; // for chebyshev
 
     int nsmooth = 1; // typically faster right now
@@ -362,11 +408,18 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --nxe\n";
                 return 1;
             }
-        } else if (strcmp(arg, "--omega") == 0) {
+        } else if (strcmp(arg, "--omegas") == 0) {
             if (i + 1 < argc) {
-                omega = std::atof(argv[++i]);
+                omegas = std::atof(argv[++i]);
             } else {
-                std::cerr << "Missing value for --omega\n";
+                std::cerr << "Missing value for --omegas\n";
+                return 1;
+            }
+        } else if (strcmp(arg, "--omegap") == 0) {
+            if (i + 1 < argc) {
+                omegap = std::atof(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --omegap\n";
                 return 1;
             }
         } else if (strcmp(arg, "--sr") == 0) {
@@ -418,7 +471,7 @@ int main(int argc, char **argv) {
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
 
     printf("cylinder mesh with MITC4 elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
-    gatekeeper_method<T, Assembler>(solver_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);
+    gatekeeper_method<T, Assembler>(solver_type, nxe, SR, nsmooth, ninnercyc, omegas, omegap, ORDER);
 
     return 0;
 

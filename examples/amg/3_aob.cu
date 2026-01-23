@@ -22,6 +22,7 @@
 #include "multigrid/utils/fea.h"
 #include "multigrid/smoothers/cheb4_poly.h"
 #include "multigrid/smoothers/mc_smooth1.h"
+#include "multigrid/prolongation/unstructured.h"
 #include "multigrid/prolongation/structured.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>
@@ -51,20 +52,23 @@ void to_lowercase(char *str) {
 }
 
 template <typename T, class Assembler>
-void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omegas, T omegap, int ORDER) {
+void amg_solve(MPI_Comm &comm, int level, double SR, int nsmooth, int ninnercyc, T omegas, T omegap, int ORDER) {
     // geometric multigrid method here..
     // need to make a number of grids..
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
+    using Data = typename Physics::Data;
     const SCALER scaler  = LINE_SEARCH;
-    using Prolongation = StructuredProlongation<Assembler, PLATE>;
+    const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
+    using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
     using FAssembler = FakeAssembler<T>;
     using Smoother = ChebyshevPolynomialSmoother<FAssembler>; // uses fake assembler for smoother so can also build on coarser grids
+    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
+
     // const bool ORTHOG_PROJECTOR = true;
     const bool ORTHOG_PROJECTOR = false;
     using AMG = SmoothAggregationAMG<T, Smoother, ORTHOG_PROJECTOR>;
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
     using PCG = PCGSolver<T, GRID>;
 
     cublasHandle_t cublasHandle = NULL;
@@ -74,12 +78,26 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omegas, T omega
 
     
     // make the fine grid assembler and loads
-    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
-    int nxe_per_comp = nxe, nye_per_comp = nxe; // for now (should have 25 grids)
-    // auto assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
-    auto assembler = createPlateClampedAssembler<Assembler, true>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
-    double Q = 1.0e4; // load magnitude
-    T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nxe, Lx, Ly, Q);
+    // read the ESP/CAPS => nastran mesh for TACS
+    TACSMeshLoader mesh_loader{comm};
+    std::string fname = "../gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    mesh_loader.scanBDFFile(fname.c_str());
+    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+    // TODO : run optimized design from AOB case
+    printf("making assembler+GMG for mesh '%s'\n", fname.c_str());
+    
+    // create the TACS Assembler from the mesh loader
+    auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
+
+    // create the loads (really only needed on finer mesh.. TBD how to setup nonlinear case..)
+    int nvars = assembler.get_num_vars();
+    int nnodes = nvars / 6;
+    HostVec<T> h_loads(nvars);
+    double load_mag = 10.0;
+    double *my_loads = h_loads.getPtr();
+    for (int inode = 0; inode < nnodes; inode++) {
+        my_loads[6 * inode + 2] = load_mag;
+    }
 
     // build the kmat
     auto &bsr_data = assembler.getBsrData();
@@ -91,7 +109,7 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omegas, T omega
     auto soln = assembler.createVarsVec();
     int N = soln.getSize();
     int block_dim = bsr_data.block_dim; // should be 6 here
-    int nnodes = N / block_dim;
+    // int nnodes = N / block_dim;
     auto fake_assembler = FAssembler(bsr_data, nnodes);
     auto d_bcs = assembler.getBCs();
 
@@ -152,11 +170,11 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omegas, T omega
     }
 
     // build prolongation and fine grid also (unnecessary but required arg of PCG solver right now for some reason)
-    auto prolongation = new Prolongation(assembler);
+    auto prolongation = new Prolongation(cusparseHandle, assembler, 10);
     auto grid = new GRID(assembler, prolongation, fine_smoother, kmat, loads, cublasHandle, cusparseHandle);
 
     // now build PCG / Krylov solver with AMG as preconditioner
-    int level = 0;
+    // int level = 0;
     // create the preconditioner and GMRES solver now
     auto options = SolverOptions();
     options.ncycles = 800; // number of max PCG cycles
@@ -195,175 +213,133 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omegas, T omega
     int ndof = N;
     double total = startup_time.count() + solve_time.count();
     // double mem_MB = kmg->get_memory_usage_mb();
-    printf("plate SA-AMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e", ndof, startup_time.count(), solve_time.count(), total);
+    printf("AOB-wing SA-AMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e", ndof, startup_time.count(), solve_time.count(), total);
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\tSA-AMG-GMRES on plate case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\tSA-AMG-GMRES on AOB-wing case with %d level and %.4e SR\n", level, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // print some of the data of host residual
     auto h_soln = soln.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/plate_mg_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/cylinder_mg_lin.vtk");
 }
 
+
 template <typename T, class Assembler>
-void solve_direct(int nxe, double SR) {
-
-    /* direct NL solve used to check that how NL the problem is and how */
-
+void solve_linear_direct(MPI_Comm &comm, int level, double SR) {
+  
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
-    const SCALER scaler  = LINE_SEARCH;
-    using Smoother = MulticolorGSSmoother_V1<Assembler>;
-    using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
+    using Data = typename Physics::Data;
 
-    // for K-cycles
-    // linear solver
-    using Precond = CusparseMGDirectLU<T, Assembler>;
-    using PCG = PCGSolver<T, GRID>;
+  auto start0 = std::chrono::high_resolution_clock::now();
 
-    // create cublas and cusparse handles (single one each)
-    // -----------------------------------------------------
-    cublasHandle_t cublasHandle = NULL;
-    CHECK_CUBLAS(cublasCreate(&cublasHandle));
-    cusparseHandle_t cusparseHandle = NULL;
-    CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+  TACSMeshLoader mesh_loader{comm};
+  std::string fname = "../gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+  mesh_loader.scanBDFFile(fname.c_str());
 
+  //   double E = 70e9, nu = 0.3, thick = 0.005;  // material & thick properties
+  double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties
 
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto start0 = std::chrono::high_resolution_clock::now();
+  // make the assembler from the uCRM mesh
+  auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
 
-    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
-    int nxe_per_comp = nxe, nye_per_comp = nxe; // for now (should have 25 grids)
-    // auto assembler = createPlateAssembler<Assembler>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
-    auto assembler = createPlateClampedAssembler<Assembler, true>(nxe, nxe, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
-    double Q = 1.0e4; // load magnitude
-    T *my_loads = getPlateLoads<T, Basis, Physics>(nxe, nxe, Lx, Ly, Q);
-    printf("making grid with nxe %d\n", nxe);
+  // TODO : set this in from optimized design from AOB case
 
-    // perform multicolor reordering
-    auto &bsr_data = assembler.getBsrData();
-    bsr_data.AMD_reordering();
-    bsr_data.compute_full_LU_pattern(10.0, false);
+  // BSR factorization
+  auto& bsr_data = assembler.getBsrData();
+  double fillin = 10.0;  // 10.0
+  bool print = true;
+  bsr_data.AMD_reordering();
 
-    // T *_color_rowp = new T[2];
-    auto h_color_rowp = HostVec<int>(2);
-    assembler.moveBsrDataToDevice();
+//   // TRY INSTEAD Mc REORDERING
+//   int num_colors, *_color_rowp, *nodal_num_comps, *node_geom_ind;
+//   GRID::get_nodal_geom_indices(assembler, nodal_num_comps, node_geom_ind);
+//   bsr_data.multicolor_junction_reordering_v2(node_geom_ind, num_colors, _color_rowp);
 
-    // create the loads and kmat
-    auto loads = assembler.createVarsVec(my_loads);
-    assembler.apply_bcs(loads);
-    auto kmat = createBsrMat<Assembler, VecType<T>>(assembler);
-    auto res = assembler.createVarsVec();
-    auto lin_soln = assembler.createVarsVec();
-    auto vars = assembler.createVarsVec();
-    auto loads2 = assembler.createVarsVec();
-    int N = res.getSize();
+  bsr_data.compute_full_LU_pattern(fillin, print);
+  assembler.moveBsrDataToDevice();
 
-    // assemble the kmat
-    auto startkmat = std::chrono::high_resolution_clock::now();
-    assembler.add_jacobian_fast(kmat);
-    assembler.apply_bcs(kmat);
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto endkmat = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+  // get the loads
+  int nvars = assembler.get_num_vars();
+  int nnodes = assembler.get_num_nodes();
+  HostVec<T> h_loads(nvars);
+  double load_mag = 10.0;
+  double *h_loads_ptr = h_loads.getPtr();
+  for (int inode = 0; inode < nnodes; inode++) {
+    h_loads_ptr[6 * inode + 2] = load_mag;
+  }
+  auto loads = h_loads.createDeviceVec();
+  assembler.apply_bcs(loads);
 
-    // build smoother and prolongations..
-    // nsmooth steps per precond set in the solver
-    T omegaMC = 1.0;
-    int nsmooth = 1; // not used
-    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
-    auto prolongation = new Prolongation(assembler);
-    auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
+  // setup kmat and initial vecs
+  auto kmat = createBsrMat<Assembler, VecType<T>>(assembler);
+  auto soln = assembler.createVarsVec();
+  auto res = assembler.createVarsVec();
+  auto vars = assembler.createVarsVec();
 
-    // the ILU preconditioner
-    auto pc = new Precond(cublasHandle, cusparseHandle, assembler, kmat); // turns out the smoother does work somewhat
+  // assemble the kmat
+  assembler.set_variables(vars);
+  
+  CHECK_CUDA(cudaDeviceSynchronize());
+  auto starta = std::chrono::high_resolution_clock::now();
+//   assembler.add_jacobian(res, kmat);
+  assembler.add_jacobian_fast(kmat);
+  CHECK_CUDA(cudaDeviceSynchronize());
+  auto enda = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> assemb_time = enda - starta;
 
-    // create the preconditioner and GMRES solver now
-    auto options = SolverOptions();
-    options.ncycles = 800; // number of max PCG cycles
-    options.print_freq = 10;
+  assembler.apply_bcs(res);
+  assembler.apply_bcs(kmat);
 
-    // PCG solver
-    auto linear_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options);
+  CHECK_CUDA(cudaDeviceSynchronize());
+  auto start1 = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> startup_time = start1 - start0;
 
-    // only use GMRES if SR > 100
-    // const int N_SUBSPACE = 100;
-    // using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
-    // int MAX_ITER = N_SUBSPACE;
-    // auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
+  // solve the linear system
+  CUSPARSE::direct_LU_solve(kmat, loads, soln);
 
+  CHECK_CUDA(cudaDeviceSynchronize());
+  auto end1 = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> solve_time = end1 - start1;
+  std::chrono::duration<double> total_time = end1 - start0;
 
-    // out settings
-    linear_solver->set_rel_tol(1e-6);
-    linear_solver->set_abs_tol(1e-6);
-    linear_solver->set_print(true);
+  size_t bytes_per_double = sizeof(double);
+  double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
+  printf("direct LU solve on #dof %d, uses memory(MB) %.2e\n", nvars, mem_mb);
+  printf("\tassembly %.2e and ovr startup %.2e, solve time %.2e and total time %.2e (sec)\n", assemb_time.count(), startup_time.count(), solve_time.count(), total_time.count());
 
-    auto endstartup = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> startup_time = endstartup - start0;
+  // print some of the data of host residual
+  auto h_soln = soln.createHostVec();
+  printToVTK<Assembler, HostVec<T>>(assembler, h_soln, "out/aob_direct_L" + std::to_string(level) + ".vtk");
 
-    // run the linear solver
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto start_solve = std::chrono::high_resolution_clock::now();
-    // run factor again so that we give fair comparison
-    pc->factor_matrix();
-    
-
-    // get initial residual
-    T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
-
-    // linear solve
-    bool fail = linear_solver->solve(grid->d_defect, lin_soln, true);
-    
-    // final residual
-    T final_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
-
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto end_solve = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> solve_time = end_solve - start_solve;
-
-    // compute log residual reduction per unit time
-    // it's converging about 1e14 resid drop, only need like 1e7 so half
-    T log_resid_drop = (log(init_resid) - log(final_resid)) / log(10.0);
-    // T log_resid_cap = log(1e6) / log(10.0); // cap out past 1e6 because don't need deeper than this really for Newton-Krylov..
-    T log_red_rate =  log_resid_drop / solve_time.count();
-    printf("\nDirectLU-PCG on plate case with %d nxe and %.4e SR\n", nxe, SR);
-    printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
-
-    int nx = nxe + 1;
-    int ndof = nx * nx * 6;
-    double total = startup_time.count() + solve_time.count();
-    size_t bytes_per_double = sizeof(double);
-    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
-    printf("fullLU-memory in MB %.4e with NDOF %d\n", mem_mb, ndof);
-
-    // // print to VTK (permuting from solve to vis order)
-    int *d_perm = linear_solver->grid->d_perm;
-    auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_lin.vtk");
-    // T lin_max_disp = get_max_disp(lin_soln);
-
-    if (fail) {
-        printf("\tPCG linear solver failed\n");
-        return;
-    }
+  // free data
+  assembler.free();
+  h_loads.free();
+  kmat.free();
+  soln.free();
+  res.free();
+  vars.free();
+  h_soln.free();
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(std::string solver_type, int nxe, double SR, int nsmooth, int ninnercyc, T omegas, T omegap, int ORDER) {
+void gatekeeper_method(std::string solver_type, MPI_Comm &comm, int level, double SR, int nsmooth, int ninnercyc, T omegas, T omegap, int ORDER) {
     if (solver_type != "direct") {
-        amg_solve<T, Assembler>(nxe, SR, nsmooth, ninnercyc, omegas, omegap, ORDER);
+        amg_solve<T, Assembler>(comm, level, SR, nsmooth, ninnercyc, omegas, omegap, ORDER);
     } else {
-        solve_direct<T, Assembler>(nxe, SR);
+        solve_linear_direct<T, Assembler>(comm, level, SR);
     }
 }
 
 int main(int argc, char **argv) {
-    // input ----------
-    int nxe = 50; // default value
+    // Intialize MPI and declare communicator
+    MPI_Init(&argc, &argv);
+    MPI_Comm comm = MPI_COMM_WORLD;
+
+    // DEFAULTS
+    int level = 1; // level mesh to solve.. level 4 also a good starting setting (big case)
     double SR = 100.0; // default
     double omegas = 0.3; // omega for smoother
     double omegap = 0.3; // omega for smooth prolongation
@@ -385,11 +361,11 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --solver\n";
                 return 1;
             }
-        } else if (strcmp(arg, "--nxe") == 0) {
+        } else if (strcmp(arg, "--level") == 0) {
             if (i + 1 < argc) {
-                nxe = std::atoi(argv[++i]);
+                level = std::atoi(argv[++i]);
             } else {
-                std::cerr << "Missing value for --nxe\n";
+                std::cerr << "Missing value for --level\n";
                 return 1;
             }
         } else if (strcmp(arg, "--omegas") == 0) {
@@ -454,8 +430,8 @@ int main(int argc, char **argv) {
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
 
-    printf("cylinder mesh with MITC4 elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
-    gatekeeper_method<T, Assembler>(solver_type, nxe, SR, nsmooth, ninnercyc, omegas, omegap, ORDER);
+    printf("AOB-wing mesh with MITC4 elements, level %d and SR %.2e\n------------\n", level, SR);
+    gatekeeper_method<T, Assembler>(solver_type, comm, level, SR, nsmooth, ninnercyc, omegas, omegap, ORDER);
 
     return 0;
 

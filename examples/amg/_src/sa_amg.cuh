@@ -234,6 +234,7 @@ __global__ void k_remove_GS_projector_mode(const int imode, const int jmode, con
 
 
 
+// THIS VERSION IS WRONG cause adds into AP first in shared mem (but not all AP blocks are added in, so not correct foil method)
 template <typename T>
 __global__ void k_compute_PTAP_product6(const int PTAP_nnzb_prod, const int block_dim, 
     const int *Kc_blocks, const int *PL_blocks, const int *K_blocks, const int *PR_blocks, 
@@ -250,6 +251,17 @@ __global__ void k_compute_PTAP_product6(const int PTAP_nnzb_prod, const int bloc
     const T *K_vals = &kmat_vals[block_dim2 * K_blocks[prod_block_ind]];
     const T *PR_vals = &prolong_vals[block_dim2 * PR_blocks[prod_block_ind]];
     T *Kc_vals = &galerkin_vals[block_dim2 * Kc_blocks[prod_block_ind]];
+
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        printf("Kc_vals: ");
+        printVec<T>(36, Kc_vals);
+        printf("PL_vals: ");
+        printVec<T>(36, PL_vals);
+        printf("PR_vals: ");
+        printVec<T>(36, PR_vals);
+        printf("K_vals: ");
+        printVec<T>(36, K_vals);
+    }
 
     int Kc_ind = Kc_blocks[prod_block_ind];
     // if (threadIdx.x == 0) {
@@ -277,5 +289,40 @@ __global__ void k_compute_PTAP_product6(const int PTAP_nnzb_prod, const int bloc
         // PL_vals we need to read in transposed here (i,j) => (j,i)
         // (Kc)_{ik} = (P^T)_{ij} * (AP)_{jk} = P_{ji} * (AP)_{jk}
         atomicAdd(&Kc_vals[6 * i + k], PL_vals[6 * j + i] * AP_vals[6 * j + k]);
+    }
+}
+
+template <typename T>
+__global__ void k_compute_PTAP_product6_v2(const int PTAP_nnzb_prod, const int block_dim, 
+    const int *Kc_blocks, const int *PL_blocks, const int *K_blocks, const int *PR_blocks, 
+    const T *prolong_vals, const T *kmat_vals, T *galerkin_vals) {
+    
+    int prod_block_ind = blockIdx.x;
+    if (prod_block_ind >= PTAP_nnzb_prod) return;
+    int block_dim2 = block_dim * block_dim;
+    int tid = threadIdx.x;
+    // can't do shared memory.. or add into AP partial cause isn't adding all blocks into AP
+    // that was wrong last time
+
+    const T *PL_vals = &prolong_vals[block_dim2 * PL_blocks[prod_block_ind]];
+    const T *K_vals = &kmat_vals[block_dim2 * K_blocks[prod_block_ind]];
+    const T *PR_vals = &prolong_vals[block_dim2 * PR_blocks[prod_block_ind]];
+    T *Kc_vals = &galerkin_vals[block_dim2 * Kc_blocks[prod_block_ind]];
+
+    int Kc_ind = Kc_blocks[prod_block_ind];
+    // computes one 6x6 * 6x6 * 6x6 matrix into 6x6 out of P^T * A *P
+
+    // compute full P^T * A * P product in-place (1296 product terms = 6^4)
+    for (int il = threadIdx.x; il < 1296; il += blockDim.x) {
+        int ijk = il % 216, l = il / 216;
+        int ij = ijk % 36, k = ijk / 36;
+        int i = ij / 6, j = ij % 6;
+
+        // if (blockIdx.x == 0) {
+        //     printf("i %d, j %d, k %d, l %d\n", i, j, k, l);
+        // }
+
+        // (Kc)_{il} = (P^T)_{ij} * A_{jk} * P_{kl}
+        atomicAdd(&Kc_vals[6 * i + l], PL_vals[6 * j + i] * K_vals[6 * j + k] * PR_vals[6 * k + l]);
     }
 }

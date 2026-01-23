@@ -267,6 +267,215 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
     return assembler;
 }
 
+template <class Assembler, bool swap_xy = false>
+Assembler createPlateClampedAssembler(int nxe, int nye, double Lx, double Ly, double E, double nu,
+                                      double thick, double rho = 2500, double ys = 350e6,
+                                      int nxe_per_comp = 1, int nye_per_comp = 1) {
+    using T = typename Assembler::T;
+    using Basis = typename Assembler::Basis;
+    using Geo = typename Assembler::Geo;
+    using Data = typename Assembler::Data;
+    using Physics = typename Assembler::Phys;
+    const int order = Basis::order;
+
+    /*
+    make a rectangular plate mesh of shell elements
+    simply supported with transverse constrant distributed load
+
+    - In the very thin-walled regime (low thick) becomes
+    CPT or Kirchoff plate theory with no transverse shear effects
+    - PDE for Kirchoff plate theory, linear static analysis
+        D * nabla^4 w = q(x,y)
+        w = 0, w_{,n} = 0 (clamped)
+    - if transverse loads q(x,y) = Q * sin(pi * x / a) * sin(pi * y / b)
+      [one half-wave each direction], then solution is:
+        w(x,y) = A * sin(pi * x / a) * sin(pi * y / b)
+        with A = Q / D / pi^4 / (1/a^4 + 1 / b^4 + 2 / a^2 b^2)
+
+    - clamped BCs are: 123456 on each edge
+    */
+
+    assert(nxe % nxe_per_comp == 0);
+    assert(nye % nye_per_comp == 0);
+
+    // number of nodes per direction
+    int nnx = Basis::ISOGEOM ? nxe + order : order * nxe + 1;
+    int nny = Basis::ISOGEOM ? nye + order : order * nye + 1;
+    int num_nodes = nnx * nny;
+    int num_elements = nxe * nye;
+
+    // printf("num nodes %d, num_elements %d\n", num_nodes, num_elements);
+
+    // printf("checkpoint 1\n");
+
+    constexpr bool IS_HR_ELEM = Physics::hellingerReissner;
+    int offset = IS_HR_ELEM ? 5 : 0;  // for where standard u,v,w,thx,thy,thz DOF are
+    int vpn = Physics::vars_per_node;
+
+    // make our bcs vec (note I use 1-based terminology from nastran in
+    // description above) but since this is in C++ I apply BCs here 0-based as
+    // in 012345
+    std::vector<int> my_bcs;
+    // (0,0) corner with dof 123456
+    for (int idof = 0; idof < vpn; idof++) {
+        my_bcs.push_back(idof);
+    }
+    // negative x2 (or y) edge with dof 23
+    for (int ix = 1; ix < nnx; ix++) {
+        int iy = 0;
+        int inode = swap_xy ? (nny * ix + iy) : nnx * iy + ix;
+        for (int idof = 0; idof < vpn; idof++) {
+            my_bcs.push_back(vpn * inode + offset + idof);
+        }
+    }
+    // neg and pos x1 edges with dof 13 and 3 resp.
+    for (int iy = 1; iy < nny; iy++) {
+        // neg x1 edge
+        int ix = 0;
+        int inode = swap_xy ? (nny * ix + iy) : nnx * iy + ix;
+        for (int idof = 0; idof < vpn; idof++) {
+            my_bcs.push_back(vpn * inode + offset + idof);
+        }
+
+        // pos x1 edge
+        ix = nnx - 1;
+        inode = swap_xy ? (nny * ix + iy) : nnx * iy + ix;
+        for (int idof = 0; idof < vpn; idof++) {
+            my_bcs.push_back(vpn * inode + offset + idof);
+        }
+    }
+    // pos x2 edge (up to one before upper-right corner)
+    for (int ix = 1; ix < nnx - 1; ix++) {
+        int iy = nny - 1;
+        int inode = swap_xy ? (nny * ix + iy) : nnx * iy + ix;
+        for (int idof = 0; idof < vpn; idof++) {
+            my_bcs.push_back(vpn * inode + offset + idof);
+        }
+    }
+    // (+x1,+x2) corner node, add thy DOF
+    int ix = nnx - 1, iy = nny - 1;
+    int inode = swap_xy ? (nny * ix + iy) : nnx * iy + ix;
+    for (int idof = 0; idof < vpn; idof++) {
+        my_bcs.push_back(vpn * inode + offset + idof);
+    }
+    // (-x1,+x2) corner node, top left
+    ix = 0, iy = nny - 1;
+    inode = swap_xy ? (nny * ix + iy) : nnx * iy + ix;
+    for (int idof = 0; idof < vpn; idof++) {
+        my_bcs.push_back(vpn * inode + offset + idof);
+    }
+    // (+x1,-x2) corner node, bottom right
+    ix = nnx - 1, iy = 0;
+    inode = swap_xy ? (nny * ix + iy) : nnx * iy + ix;
+    for (int idof = 0; idof < vpn; idof++) {
+        my_bcs.push_back(vpn * inode + offset + idof);
+    }
+
+    HostVec<int> bcs(my_bcs.size());
+    // deep copy here
+    for (int ibc = 0; ibc < my_bcs.size(); ibc++) {
+        bcs[ibc] = my_bcs.at(ibc);
+    }
+
+    // printf("checkpoint 2 - post bcs\n");
+
+    // printf("bcs: ");
+    // printVec<int>(bcs.getSize(), bcs.getPtr());
+    int n = order + 1;  // num local nodes
+
+    // now initialize the element connectivity
+    int N = Basis::num_nodes * num_elements;
+    int32_t *elem_conn = new int[N];
+    for (int iye = 0; iye < nye; iye++) {
+        for (int ixe = 0; ixe < nxe; ixe++) {
+            int ielem = nxe * iye + ixe;
+
+            // no sorted order like in MITC?
+            for (int iloc = 0; iloc < n * n; iloc++) {
+                int ilx = iloc % n, ily = iloc / n;
+                int ix = Basis::ISOGEOM ? ixe + ilx : order * ixe + ilx;
+                int iy = Basis::ISOGEOM ? iye + ily : order * iye + ily;
+                int inode = swap_xy ? (nny * ix + iy) : nnx * iy + ix;
+
+                elem_conn[Basis::num_nodes * ielem + iloc] = inode;
+            }
+        }
+    }
+    // return;
+
+    // printf("elem_conn with nnodes_per_elem %d: ", Basis::num_nodes);
+    // printVec<int>(N, elem_conn);
+    // printf("checkpoint 3 - post elem_conn\n");
+
+    HostVec<int32_t> geo_conn(N, elem_conn);
+    HostVec<int32_t> vars_conn(N, elem_conn);
+
+    // now set the x-coordinates of the panel
+    int32_t num_xpts = Geo::spatial_dim * num_nodes;
+    HostVec<T> xpts(num_xpts);
+    T dx = Lx / (nnx - 1);
+    T dy = Ly / (nny - 1);
+    if constexpr (swap_xy) {
+        for (int ix = 0; ix < nnx; ix++) {
+            for (int iy = 0; iy < nny; iy++) {
+                int inode = nny * ix + iy;
+                T *xpt_node = &xpts[Geo::spatial_dim * inode];
+                if constexpr (Basis::order == 1 || Basis::ISOGEOM) {
+                    xpt_node[0] = dx * ix;
+                    xpt_node[1] = dy * iy;
+                    xpt_node[2] = 0.0;
+                } else {
+                    // pass
+                }
+            }
+        }
+    } else {
+        // not swap xy
+        for (int iy = 0; iy < nny; iy++) {
+            for (int ix = 0; ix < nnx; ix++) {
+                int inode = nny * iy + ix;
+                T *xpt_node = &xpts[Geo::spatial_dim * inode];
+                if constexpr (Basis::order == 1 || Basis::ISOGEOM) {
+                    xpt_node[0] = dx * ix;
+                    xpt_node[1] = dy * iy;
+                    xpt_node[2] = 0.0;
+                } else {
+                    // pass
+                }
+            }
+        }
+    }
+
+    // printf("checkpoint 4 - post xpts\n");
+    HostVec<Data> physData(num_elements, Data(E, nu, thick, rho, ys));
+
+    // printf("checkpoint 5 - create physData\n");
+
+    // make elem_components
+    int num_xcomp = nxe / nxe_per_comp;
+    int num_ycomp = nye / nye_per_comp;
+    int num_components = num_xcomp * num_ycomp;
+
+    HostVec<int> elem_components(num_elements);
+    for (int iye = 0; iye < nye; iye++) {
+        for (int ixe = 0; ixe < nxe; ixe++) {
+            int ielem = nxe * iye + ixe;
+            int ix_comp = ixe / nxe_per_comp;
+            int iy_comp = iye / nye_per_comp;
+
+            int icomp = num_xcomp * iy_comp + ix_comp;
+
+            elem_components[ielem] = icomp;
+        }
+    }
+
+    // make the assembler
+    Assembler assembler(num_nodes, num_nodes, num_elements, geo_conn, vars_conn, xpts, bcs,
+                        physData, num_components, elem_components);
+
+    return assembler;
+}
+
 template <typename T, class Phys>
 T *getPlatePointLoad(int nxe, int nye, double Lx, double Ly, double load_mag) {
     /*

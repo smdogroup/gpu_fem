@@ -37,7 +37,7 @@ parser.add_argument("--nxe", type=int, default=10, help="num elems each directio
 parser.add_argument("--fill", type=int, default=0, help="ILU(k) fill level")
 parser.add_argument("--iters", type=int, default=1, help="num energy-opt iters (if iter == 1 same as SA-AMG)")
 parser.add_argument("--nsmooth", type=int, default=2, help="num Jacobi ML smoothing steps (multilevel/multigrid-like)")
-parser.add_argument("--threshold", type=float, default=0.1, help="aggregation sparsity threshold")
+parser.add_argument("--threshold", type=float, default=0.13, help="aggregation sparsity threshold, higher threshold increases operator complexity and takes fewer GMRES iters, but inc memory and more time per iteration (tradeoff)")
 parser.add_argument("--omega", type=float, default=None, help="jacobi smoother update coeff, default is None and uses spectral radius")
 args = parser.parse_args()
 
@@ -81,29 +81,29 @@ if args.debug:
     from bsr_aggregation import get_rigid_body_modes, get_bc_flags_bsr #, get_coarse_rigid_body_modes
 
     # for debug temporarily swap x and y vals in xpts0 (since TACS reordered it weird..)
-    x = xpts0[0::3] * 1.0
-    y = xpts0[1::3] * 1.0
-    xpts0[0::3] = y * 1.0
-    xpts0[1::3] = x * 1.0
+    # x = xpts0[0::3] * 1.0
+    # y = xpts0[1::3] * 1.0
+    # xpts0[0::3] = y * 1.0
+    # xpts0[1::3] = x * 1.0
 
     B = get_rigid_body_modes(xpts0)
     # print(f"{B.shape=}")
     
     print(f"{xpts0=}")
 
-    for imode in range(6):
-        bi = B[:,:,imode].copy().reshape((N,))
-        bi /= np.linalg.norm(bi)
-        rvec = np.random.rand(N)
-        rvec /= np.linalg.norm(rvec)
-        # compare residual norm of Bi vs random displacement vector (with high freq error)
-        #    on free matrix of fine grid
-        F_bi = A.dot(bi)
-        F_rv = A.dot(rvec)
-        b_nrm = np.linalg.norm(F_bi)
-        r_nrm = np.linalg.norm(F_rv)
-        print(f"rigid body mode {imode} with norm {np.linalg.norm(bi):.4e} => A*vec norm {b_nrm:.4e}")
-        print(f"\tvs random unit vec with A*vec norm {r_nrm:.4e}")
+    # for imode in range(6):
+    #     bi = B[:,:,imode].copy().reshape((N,))
+    #     bi /= np.linalg.norm(bi)
+    #     rvec = np.random.rand(N)
+    #     rvec /= np.linalg.norm(rvec)
+    #     # compare residual norm of Bi vs random displacement vector (with high freq error)
+    #     #    on free matrix of fine grid
+    #     F_bi = A.dot(bi)
+    #     F_rv = A.dot(rvec)
+    #     b_nrm = np.linalg.norm(F_bi)
+    #     r_nrm = np.linalg.norm(F_rv)
+    #     print(f"rigid body mode {imode} with norm {np.linalg.norm(bi):.4e} => A*vec norm {b_nrm:.4e}")
+    #     print(f"\tvs random unit vec with A*vec norm {r_nrm:.4e}")
 
     for inode in range(B.shape[0]):
         print(f"B {inode=} : {B[inode]=}")
@@ -124,7 +124,8 @@ if args.debug:
     # bc_flags[:] = False # temp debug
     T, Bc = tentative_prolongator_bsr(B, aggregate_ind, bc_flags)
     # P = T.copy()
-    P = smooth_prolongator_bsr(T, A, Bc, bc_flags, omega=omega) # single damped jacobi step, so only one step of fillin
+    P = smooth_prolongator_bsr(T, A, Bc, bc_flags, omega=omega, 
+                               near_kernel=not(args.nokernel)) # single damped jacobi step, so only one step of fillin
     R = P.T # sym matrix so restriction is transpose prolong
 
     Bc *= -1 # DEBUG
@@ -176,6 +177,27 @@ if args.debug:
     Ac = R @ (A @ P)
     Ac_free = R @ (A_free @ P)
 
+    # matches
+    # for inode in range(nnodes):
+    #     for jp in range(A.indptr[inode], A.indptr[inode+1]):
+    #         j = A.indices[jp]
+    #         print(f"A (node {inode}, node {j}) :")
+    #         A_block = A.data[jp] * 1.0
+    #         for i in range(6):
+    #             A_vec = A_block[i,:]
+    #             A_vec = np.array([np.round(A_vec[i], 0) for i in range(6)])
+    #             print(A_vec)
+
+    # for inode in range(nnodes):
+    #     for jp in range(A_free.indptr[inode], A_free.indptr[inode+1]):
+    #         j = A_free.indices[jp]
+    #         print(f"A_free (node {inode}, node {j}) :")
+    #         A_block = A_free.data[jp] * 1.0
+    #         for i in range(6):
+    #             A_vec = A_block[i,:]
+    #             A_vec = np.array([np.round(A_vec[i], 0) for i in range(6)])
+    #             print(A_vec)
+
     for iagg in range(num_agg):
         for jp in range(Ac.indptr[iagg], Ac.indptr[iagg+1]):
             j = Ac.indices[jp]
@@ -189,6 +211,17 @@ if args.debug:
     Ac_rowp = Ac.indptr
     Ac_cols = Ac.indices
     print(f"{Ac_rowp=}\n{Ac_cols=}")
+
+    # print(f'{P.shape=}')
+    P_40 = P.data[0] * 1.0
+    A_44 = None
+    inode = 4
+    for jp in range(A.indptr[inode], A.indptr[inode+1]):
+        j = A.indices[jp]
+        if j == 4:
+            A_44 = A.data[jp] * 1.0
+    Ac_v2 = P_40.T @ A_44 @ P_40
+    print(f"{Ac_v2=}")
 
     # print(f"{Ac.shape=}")
 
