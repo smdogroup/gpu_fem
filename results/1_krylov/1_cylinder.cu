@@ -182,7 +182,7 @@ void chebyshev_polynomial_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = pcg_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
     if (!fail) {
@@ -190,7 +190,7 @@ void chebyshev_polynomial_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
@@ -340,7 +340,7 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
     int nx = nxe + 1;
@@ -355,7 +355,7 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
@@ -487,7 +487,7 @@ void gsmc_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressure = 5
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = pcg_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
     if (!fail) {
@@ -495,7 +495,7 @@ void gsmc_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressure = 5
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
@@ -644,7 +644,7 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, T pressure = 5.0e7)
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
     int nx = nxe + 1;
@@ -659,7 +659,7 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, T pressure = 5.0e7)
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
@@ -804,7 +804,7 @@ void spai_solve(int nxe, double SR, int fill_level, int optim, T pressure = 5.0e
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
     int nx = nxe + 1;
@@ -819,7 +819,7 @@ void spai_solve(int nxe, double SR, int fill_level, int optim, T pressure = 5.0e
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
@@ -979,7 +979,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
     if (!fail) {
@@ -987,7 +987,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
