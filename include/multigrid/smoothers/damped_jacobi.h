@@ -53,6 +53,12 @@ class DampedJacobiSmoother : public BaseSolver {
         buildDiagInvMat<startup>();
     }
 
+    T precond_complexity() {
+        // get [nnzb(precond) + nnzb(A)] / nnzb(A)
+        int precond_nnzb = diag_inv_nnzb * 2;
+        return (precond_nnzb + kmat_nnzb) * 1.0 / kmat_nnzb;
+    }
+
     void set_abs_tol(T atol) {}
     void set_rel_tol(T atol) {}
     int get_num_iterations() { return 0; }

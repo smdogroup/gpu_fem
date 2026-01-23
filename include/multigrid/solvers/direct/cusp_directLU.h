@@ -118,6 +118,14 @@ class CusparseMGDirectLU : public BaseSolver {
         assembler.apply_bcs(kmat);
     }
 
+    T precond_complexity(int kmat_orig_nnzb) {
+        // get [nnzb(precond) + nnzb(A)] / nnzb(A)
+        int kmat_new_nnzb = nnzb;
+        int precond_nnzb = nnzb;  // because kmat and ILU now stored with new
+        // for larger fillin ends up being double fillin factor is new mem storage
+        return (precond_nnzb + kmat_new_nnzb) * 1.0 / kmat_orig_nnzb;
+    }
+
     void factor_matrix() {
         // copy the data from the original matrix to new place for factor
         CHECK_CUDA(cudaMemcpy(d_vals_ILU0, d_vals, nnz * sizeof(T), cudaMemcpyDeviceToDevice));

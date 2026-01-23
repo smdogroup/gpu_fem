@@ -83,6 +83,12 @@ class UnstructuredQuadAdditiveSchwarzSmoother : public BaseSolver {
     void set_print(bool print) {}
     void free() {}  // TBD on this one
 
+    T precond_complexity() {
+        // get [nnzb(precond) + nnzb(A)] / nnzb(A)
+        int precond_nnzb = batchSize * size4;
+        return (precond_nnzb + kmat_nnzb) * 1.0 / kmat_nnzb;
+    }
+
     // Applies the Schwarz smoother.
     // First, each block's right-hand side should be collected into d_Xarray.
     // Then, the solution is computed via a batched GEMM.

@@ -3,6 +3,7 @@
 #include "solvers/_solvers.h"
 #include "mesh/TACSMeshLoader.h"
 #include "mesh/vtk_writer.h"
+#include <iomanip>
 
 // new nonlinear solvers
 #include "solvers/nonlinear_static/inexact_newton.h"
@@ -184,6 +185,26 @@ void chebyshev_polynomial_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5
     printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
+    if (!fail) {
+        T pc_compl = smoother->precond_complexity();
+
+        // write to csv (this particular run)
+        // ---------------------------------------
+        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        if (csv.tellp() == 0)
+            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
+        // Set high precision for CSV output
+        csv << std::setprecision(15) << std::scientific;
+        if (ORDER == 1) {
+            csv << (1.0/SR) << "," << nxe << "," << N << ","
+            << "DJ" << "," << pc_compl << "," << solve_time.count() << "\n";
+        } else {
+            csv << (1.0/SR) << "," << nxe << "," << N << ","
+            << "CP" << "," << pc_compl << "," << solve_time.count() << "\n";
+        }
+        
+    }
+
     if (fail) {
         printf("\tPCG linear solver failed\n");
         return;
@@ -313,7 +334,7 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nSPAI-GMRES on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
+    printf("\nASW-GMRES on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // // print to VTK (permuting from solve to vis order)
@@ -329,6 +350,19 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
     double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
     printf("ASW-PCG memory in MB %.4e with NDOF %d\n", mem_mb, ndof);
 
+    if (!fail) {
+        T pc_compl = smoother->precond_complexity();
+
+        // write to csv (this particular run)
+        // ---------------------------------------
+        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        if (csv.tellp() == 0)
+            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
+        // Set high precision for CSV output
+        csv << std::setprecision(15) << std::scientific;
+        csv << (1.0/SR) << "," << nxe << "," << N << ","
+            << "ASW" << "," << pc_compl << "," << solve_time.count() << "\n";
+    }
 
     if (fail) {
         printf("\tPCG linear solver failed\n");
@@ -456,6 +490,20 @@ void gsmc_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressure = 5
     printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
+    if (!fail) {
+        T pc_compl = smoother->precond_complexity();
+
+        // write to csv (this particular run)
+        // ---------------------------------------
+        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        if (csv.tellp() == 0)
+            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
+        // Set high precision for CSV output
+        csv << std::setprecision(15) << std::scientific;
+        csv << (1.0/SR) << "," << nxe << "," << N << ","
+            << "GSMC" << "," << pc_compl << "," << solve_time.count() << "\n";
+    }
+
     if (fail) {
         printf("\tPCG linear solver failed\n");
         return;
@@ -507,6 +555,8 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, T pressure = 5.0e7)
     // perform multicolor reordering
     auto &bsr_data = assembler.getBsrData();
 
+    int kmat_orig_nnzb = bsr_data.nnzb;
+
     bsr_data.qorder_reordering(qorder);
     // bsr_data.compute_nofill_pattern();
     bsr_data.compute_ILUk_pattern(fill_level, 10.0);
@@ -554,7 +604,7 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, T pressure = 5.0e7)
     // auto linear_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options);
 
     // only use GMRES if SR > 100
-    const int N_SUBSPACE = 100;
+    const int N_SUBSPACE = 500;
     using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
     int MAX_ITER = N_SUBSPACE;
     auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
@@ -603,6 +653,20 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, T pressure = 5.0e7)
     size_t bytes_per_double = sizeof(double);
     double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
     printf("ILU(%d)-memory in MB %.4e with NDOF %d\n", fill_level, mem_mb, ndof);
+
+    if (!fail) {
+        T pc_compl = pc->precond_complexity(kmat_orig_nnzb);
+
+        // write to csv (this particular run)
+        // ---------------------------------------
+        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        if (csv.tellp() == 0)
+            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
+        // Set high precision for CSV output
+        csv << std::setprecision(15) << std::scientific;
+        csv << (1.0/SR) << "," << nxe << "," << N << ","
+            << "ILU" << fill_level << "," << pc_compl << "," << solve_time.count() << "\n";
+    }
 
 
     if (fail) {
@@ -750,6 +814,20 @@ void spai_solve(int nxe, double SR, int fill_level, int optim, T pressure = 5.0e
     double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
     printf("SPAI(%d)-memory in MB %.4e with NDOF %d\n", fill_level, mem_mb, ndof);
 
+    if (!fail) {
+        T pc_compl = smoother->precond_complexity();
+
+        // write to csv (this particular run)
+        // ---------------------------------------
+        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        if (csv.tellp() == 0)
+            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
+        // Set high precision for CSV output
+        csv << std::setprecision(15) << std::scientific;
+        csv << (1.0/SR) << "," << nxe << "," << N << ","
+            << "SPAI" << "," << pc_compl << "," << solve_time.count() << "\n";
+    }
+
 
     if (fail) {
         printf("\tPCG linear solver failed\n");
@@ -802,6 +880,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 
     // perform multicolor reordering
     auto &bsr_data = assembler.getBsrData();
+    int kmat_orig_nnzb = bsr_data.nnzb;
     bsr_data.AMD_reordering();
     bsr_data.compute_full_LU_pattern(10.0, false);
 
@@ -902,6 +981,20 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
     printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/plate_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
+
+    if (!fail) {
+        T pc_compl = pc->precond_complexity(kmat_orig_nnzb);
+
+        // write to csv (this particular run)
+        // ---------------------------------------
+        std::ofstream csv("out/cylinder-A100-times.csv", std::ios::app);
+        if (csv.tellp() == 0)
+            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
+        // Set high precision for CSV output
+        csv << std::setprecision(15) << std::scientific;
+        csv << (1.0/SR) << "," << nxe << "," << N << ","
+            << "LU" << "," << pc_compl << "," << solve_time.count() << "\n";
+    }
 
     if (fail) {
         printf("\tPCG linear solver failed\n");

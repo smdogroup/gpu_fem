@@ -9,12 +9,14 @@ for case in ["cylinder-A100"]:
     if case == "cylinder":
         filename = "out/cylinder-times.csv"
     elif case == "cylinder-A100":
-        filename = "out/cylinder-A100-times.csv"
+        filename = "out/cylinder-A100-times_old.csv"
     else: # wingbox
         filename = "out/wingbox-times.csv"
 
     df = pd.read_csv(filename)
     arr = df.to_numpy()
+
+    print(f"{arr=}")
 
     SR = arr[:,0]
     jacobi = arr[:,1]
@@ -23,7 +25,7 @@ for case in ["cylinder-A100"]:
     ilu0 = arr[:,4]
     ilu1 = arr[:,5]
     ilu2 = arr[:,6]
-    LU = arr[:,7]
+    LU = arr[:,8]
 
     toverR = 1.0 / SR
 
@@ -45,7 +47,8 @@ for case in ["cylinder-A100"]:
     plt.style.use(niceplots.get_style())
 
     # fs = 24
-    fs = 20
+    # fs = 20
+    fs = 18
     # fs = 22
 
     # text_fs = 12
@@ -109,7 +112,7 @@ for case in ["cylinder-A100"]:
     # more muted version
     # six_colors1 = ["#c85c6d", "#d78f71", "#e3c877", "#65b39a", "#4d86a3", "#305161"]
     
-    six_colors1 = ["#d95a72", "#eb9a79", "#f3d27d", "#3cc7a1", "#3b90b3", "#1a4c60"]
+    six_colors1 = ["#d95a72", "#eb9a79", "#f3d27d", "#3cc7a1", "#3b90b3", "#1a4c60", 'k']
 
 
 
@@ -118,10 +121,10 @@ for case in ["cylinder-A100"]:
     # colors = six_colors4
     colors = six_colors1
 
-    names = ['Jacobi', 'MCGS', 'CP8', 'ILU0', 'ILU1', 'ILU2']
-    reorder = [2, 1, 0, 5, 4, 3]
+    names = ['Jacobi', 'MCGS', 'CP8', 'ILU0', 'ILU1', 'ILU2', 'ASW']
+    reorder = [6, 2, 1, 0, 5, 4, 3]
 
-    for _i in range(5, -1, -1):
+    for _i in range(6, -1, -1):
         i = reorder[_i]
 
         # if i >= 3:
@@ -133,6 +136,9 @@ for case in ["cylinder-A100"]:
         if show_time:
             _arr = 6.0 / _arr
             _arr[_arr > 2.0] = np.nan
+            _arr0 = arr[:,i+1]
+            if _name == "ASW":
+                print(f"{_arr0=}\n{_arr=}")
         plt.plot(toverR, _arr, "o-" if i != 1 else "o--", linewidth=3, markersize=8, color=colors[_i], label=_name)
 
         # call out certain values..

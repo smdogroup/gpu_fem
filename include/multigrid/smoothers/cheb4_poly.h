@@ -323,6 +323,12 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
         }
     }
 
+    T precond_complexity() {
+        // get [nnzb(precond) + nnzb(A)] / nnzb(A)
+        int precond_nnzb = diag_inv_nnzb * 2;
+        return (precond_nnzb + kmat_nnzb) * 1.0 / kmat_nnzb;
+    }
+
     void smoothDefect(DeviceVec<T> d_defect, DeviceVec<T> d_soln, int n_iters, bool print = false,
                       int print_freq = 10) {
         /* apply chebyshev smoother a certain number of times to solve the system */

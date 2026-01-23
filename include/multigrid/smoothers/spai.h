@@ -8,7 +8,6 @@
 #include "multigrid/solvers/solve_utils.h"
 #include "spai.cuh"
 
-
 template <typename T, class Assembler>
 class SPAI : public BaseSolver {
    public:
@@ -52,6 +51,12 @@ class SPAI : public BaseSolver {
     int get_num_iterations() { return 0; }
     void set_print(bool print) {}
     void free() {}  // TBD on this one
+
+    T precond_complexity() {
+        // get [nnzb(precond) + nnzb(A)] / nnzb(A)
+        int precond_nnzb = M_nnzb;
+        return (precond_nnzb + kmat_nnzb) * 1.0 / kmat_nnzb;
+    }
 
     bool solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) {
         // compute M*rhs => temp
