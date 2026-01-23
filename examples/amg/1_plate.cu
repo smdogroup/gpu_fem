@@ -111,8 +111,8 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDE
     int coarse_node_th = 600; // this value is problem dependent
     T sparse_th = 0.14;
     // T omegaJac = 0.3;
-    // T omegaJac = 0.6; // for smooth prolongator
-    T omegaJac = 0.87;
+    T omegaJac = 0.6; // for smooth prolongator
+    // T omegaJac = 0.87;
     // T sparse_th = 0.15; // instead of 0.25 for strength of connections
     printf("MAIN: build fine AMG solver\n");
     AMG *fine_amg = new AMG(cublasHandle, cusparseHandle, fine_smoother, nnodes, kmat, fine_rbm, coarse_node_th, sparse_th, omegaJac, nsmooth);
