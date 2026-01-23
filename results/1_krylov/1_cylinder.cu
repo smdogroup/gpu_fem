@@ -190,7 +190,7 @@ void chebyshev_polynomial_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
@@ -355,7 +355,7 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
@@ -495,7 +495,7 @@ void gsmc_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressure = 5
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
@@ -659,7 +659,7 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, T pressure = 5.0e7)
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
@@ -819,7 +819,7 @@ void spai_solve(int nxe, double SR, int fill_level, int optim, T pressure = 5.0e
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
@@ -987,7 +987,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
 
         // write to csv (this particular run)
         // ---------------------------------------
-        std::ofstream csv("./out/cylinder-A100-times.csv", std::ios::app);
+        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
         if (csv.tellp() == 0)
             csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
         // Set high precision for CSV output
