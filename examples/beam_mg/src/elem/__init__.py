@@ -1,4 +1,8 @@
+# standard elements
 from .eb_elem import EulerBernoulliElement
 from .ts_elem import TimoshenkoElement
-from .hybr_hermite_elem import HierarchicRotHermiteElement
-from .hybd_hermite_elem import HierarchicDispHermiteElement
+from .hhr_elem import HierarchicRotHermiteElement
+from .hhd_elem import HierarchicDispHermiteElement
+
+# isogeometric elements
+from .aig_elem import AsymptoticIsogeometricTimoshenkoElement

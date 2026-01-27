@@ -10,6 +10,10 @@ from multigrid import VcycleSolver
 from smoothers import BlockGaussSeidel, OnedimAddSchwarz, right_pcg2, right_pgmres2
 from multigrid2 import vcycle_solve, VMG
 
+# IGA elements
+from elem import AsymptoticIsogeometricTimoshenkoElement
+from iga_assembler import IGABeamAssembler
+
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--elem", type=str, default='hermr', help="--beam, options: hyb, ts, ts-nd")
@@ -19,21 +23,26 @@ parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct,
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
+parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="run debug codes")
 args = parser.parse_args()
 
 
 """ verify each beam element and solver type against truth """
 
+is_iga = False
 if args.elem == 'eb':
     ELEMENT = EulerBernoulliElement()
 elif args.elem == 'ts':
     ELEMENT = TimoshenkoElement(reduced_integrated=False)
 elif args.elem == 'tsr':
     ELEMENT = TimoshenkoElement(reduced_integrated=True)
-elif args.elem == 'hermr':
+elif args.elem == 'hhr':
     ELEMENT = HierarchicRotHermiteElement(reduced_integrated=False)
-elif args.elem == 'hermd':
+elif args.elem == 'hhd':
     ELEMENT = HierarchicDispHermiteElement(reduced_integrated=False)
+elif args.elem == 'aig':
+    ELEMENT = AsymptoticIsogeometricTimoshenkoElement(reduced_integrated=False)
+    is_iga = True
 
 # ================================
 # make beam assembler
@@ -42,18 +51,20 @@ elif args.elem == 'hermd':
 # clamped = True
 clamped = False # simply supported
 
-assembler = StandardBeamAssembler(
+ASSEMBLER = IGABeamAssembler if is_iga else StandardBeamAssembler
+
+assembler = ASSEMBLER(
     ELEMENT=ELEMENT,
     nxe=args.nxe,
     thick=args.thick,
     clamped=clamped,
-    split_disp_bc=args.elem in ['hermd']
+    split_disp_bc=args.elem in ['hhd']
 )
 
 if not('mg' in args.solve):
     assembler._assemble_system()
-    plt.imshow(assembler.kmat.toarray())
-    plt.show()
+    # plt.imshow(assembler.kmat.toarray())
+    # plt.show()
 
 # ================================
 # make multigrid object (optional)
@@ -65,17 +76,18 @@ if 'mg' in args.solve:
     # nxe_min = 5
     # nxe_min = 8
     nxe_min = 16
-    # nxe_min = nxe // 2
+    if args.debug:
+        nxe_min = nxe // 2
     grids = []
     smoothers = []
     while (nxe >= nxe_min):
         print(f"{nxe=}")
-        grid = StandardBeamAssembler(
+        grid = ASSEMBLER(
             ELEMENT=ELEMENT,
             nxe=nxe,
             thick=args.thick,
             clamped=clamped,
-            split_disp_bc=args.elem in ['hermd']
+            split_disp_bc=args.elem in ['hhd']
         )
         grid._assemble_system()
         grids += [grid]
@@ -88,7 +100,6 @@ if 'mg' in args.solve:
                 grid, omega=0.3, iters=args.nsmooth, coupled_size=2
             )
         smoothers += [smoother]
-
         nxe = nxe // 2
 
     vmg = VcycleSolver(
@@ -104,12 +115,16 @@ if 'mg' in args.solve:
 if args.solve == 'direct':
     assembler.direct_solve()
 elif args.solve == 'vmg':
-    # new style
-    # assembler._assemble_system()
-    # assembler.u = vmg.solve(assembler.force)
+    # DEBUG
+    if args.debug:
+        assembler._assemble_system()
+        assembler.u = vmg.solve(assembler.force)
 
-    # old V-cycle solver
-    assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth)
+    # proper V-cycle solver
+    if not args.debug:
+        assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
+                                        #  line_search=not(args.elem == 'aig'))
+                                        line_search=True)
 
 elif args.solve == 'kmg':
     vmg.n_cycles = 2

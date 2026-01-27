@@ -43,6 +43,7 @@ class TimoshenkoElement:
             
         # bending energy
         for xi, wt in zip(pts, weights):
+            dpsi = [lagrange_grad(i, xi, J) for i in range(2)]
             for i in range(2):
                 for j in range(2):
                     kelem[2+i, 2+j] += EI * wt * J * dpsi[i] * dpsi[j]

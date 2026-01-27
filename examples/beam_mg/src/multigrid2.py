@@ -70,7 +70,7 @@ def debug_plot(dof_per_node, grid, vec1, vec2):
     plt.show()
 
 def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int=1, 
-                 debug_print:bool=False, print_freq:int=1, double_smooth:bool=True, can_print:bool=True):
+                 debug_print:bool=False, print_freq:int=1, double_smooth:bool=True, can_print:bool=True, line_search:bool=True):
     # grids are just assembler objects usually (no unified GRID object)
     nlevels = len(grids)
     dof_per_node = grids[0].dof_per_node # get from finest grid assembler
@@ -152,8 +152,10 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
 
             # line search scaling of prolongation (since coarse grid less nodes, one DOF scaling not appropriate on default, 
             # can be off by 2x, 4x or some other constant usually)
-            omega = np.dot(dx, defects[i]) / np.dot(dx, df)
-            # omega = 1.0
+            if line_search:
+                omega = np.dot(dx, defects[i]) / np.dot(dx, df)
+            else:
+                omega = 1.0
 
             # debug_plot(dof_per_node, grids[0], vec1=-omega * df, vec2=defects[i])
             

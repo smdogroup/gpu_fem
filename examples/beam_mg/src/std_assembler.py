@@ -105,6 +105,7 @@ class StandardBeamAssembler:
             # Extra gauge-fix: pin w_s(0) = 0 by overwriting the w_s row (idof=2) at the left end.
 
             # ---- LEFT END (node 0): w_b + w_s = 0 (overwrite w_b row) ----
+            # tried changing it to just w_b = 0 on left side since also w_s = 0
             inode = 0
             for colp in range(self.rowp[inode], self.rowp[inode + 1]):
                 block_col = self.cols[colp]
@@ -176,7 +177,7 @@ class StandardBeamAssembler:
     def direct_solve(self):
         self._assemble_system()
         self.u = sp.linalg.spsolve(self.kmat, self.force)
-        print(f"{self.u=}")
+        # print(f"{self.u=}")
         return self.u
     
     @property

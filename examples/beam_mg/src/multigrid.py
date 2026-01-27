@@ -58,6 +58,10 @@ class VcycleSolver:
         if self.print: print(f"\n\t{init_defect_norm=:.2e}\n----------------\n")
         converged = False
 
+        true_soln = sp.sparse.linalg.spsolve(mats[0].copy(), defects[0])
+        print(f"level 0 true soln")
+        debug_plot_diff(dpn, self.grids[0], self.grids[0], vec1=defects[0], vec2=true_soln)
+
         for i_cycle in range(self.n_cycles):
 
             # smooth and restrict downwards
@@ -82,7 +86,7 @@ class VcycleSolver:
                 defects[i+1] = self.grids[i+1].restrict_defect(defects[i].copy())
                 solns[i+1] *= 0.0 # resets coarse soln when you restrict defect
 
-                # print(f"level {i} to {i+1} restrict")
+                print(f"level {i} to {i+1} restrict")
                 debug_plot_diff(dpn, self.grids[i], self.grids[i+1], vec1=defects[i], vec2=defects[i+1])
 
             # coarse grid solve
@@ -99,20 +103,20 @@ class VcycleSolver:
                 # print(f"{dx.shape=} {mats[i].shape=}")
                 df = mats[i].dot(dx)
 
-                fine_soln = sp.sparse.linalg.spsolve(mats[i].copy(), defects[i]) + solns[i]
+                fine_soln = sp.sparse.linalg.spsolve(mats[i].copy(), defects[i])# + solns[i]
 
                 # line search scaling of prolongation (since coarse grid less nodes, one DOF scaling not appropriate on default, 
                 # can be off by 2x, 4x or some other constant usually)
-                omega = np.dot(dx, defects[i]) / np.dot(dx, df)
-                # omega = 1.0
+                # omega = np.dot(dx, defects[i]) / np.dot(dx, df)
+                omega = 1.0
 
                 # debug_plot(2, self.grids[i], vec1=-omega * df, vec2=defects[i])
                 solns[i] += omega * dx
                 defects[i] -= omega * df
                 # if debug_print: print(f"\tprolong line search with {omega=:.2e}")
 
-                # print(f"check prolongate exact (fine exact, fine prolong)")
-                debug_plot_diff(dpn, self.grids[i], self.grids[i], vec1=fine_soln, vec2=solns[i])
+                print(f"check prolongate exact (fine exact, fine prolong)")
+                debug_plot_diff(dpn, self.grids[i], self.grids[i], vec1=fine_soln, vec2=omega * dx)
                 post_soln = solns[i].copy()
 
 

@@ -183,3 +183,29 @@ def interp6_lagrange_rotation_transpose(xi, th_in, th_shear_in):
         theta_shear_out[ibasis] += N_i * th_shear_in
     coarse_out = np.array([0.0, theta_out[0], theta_shear_out[0], 0.0, theta_out[1], theta_shear_out[1]])
     return coarse_out
+
+
+# ================================
+# IGA 
+# ================================
+
+def quad_bernstein(xi):
+    N = np.array([(1-xi)**2, 2*xi*(1-xi), xi**2])
+    dN = np.array([-2*(1-xi), 2*(1-2*xi), 2*xi])
+    return N, dN
+
+
+def get_iga2_basis(xi, left_bndry, right_bndry):
+    B, dB = quad_bernstein(xi)
+
+    # bndry adjustment and regular basis
+    # on GPU can code it up with ? ternary operators probably
+    N = 0.5 * np.array([B[0], np.sum(B) + B[1], B[2]])
+    N += 0.5 * left_bndry * np.array([B[0], -B[0], 0.0])
+    N += 0.5 * right_bndry * np.array([0.0, -B[2], B[2]])
+
+    # bndry adjustment and regular derivs
+    dN = 0.5 * np.array([dB[0], np.sum(dB) + dB[1], dB[2]])
+    dN += 0.5 * left_bndry * np.array([dB[0], -dB[0], 0.0])
+    dN += 0.5 * right_bndry * np.array([0.0, -dB[2], dB[2]])
+    return N, dN
