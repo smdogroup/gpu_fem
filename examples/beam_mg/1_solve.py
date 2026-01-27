@@ -12,9 +12,9 @@ from multigrid2 import vcycle_solve, VMG
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--elem", type=str, default='eb', help="--beam, options: hyb, ts, ts-nd")
+parser.add_argument("--elem", type=str, default='hybh', help="--beam, options: hyb, ts, ts-nd")
 parser.add_argument("--nxe", type=int, default=128, help="number of elements")
-parser.add_argument("--thick", type=float, default=1e-2, help="number of elements")
+parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
