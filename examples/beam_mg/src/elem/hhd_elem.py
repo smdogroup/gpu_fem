@@ -122,9 +122,9 @@ class HierarchicDispHermiteElement:
         # apply bcs..
         fine_disp[0] = 0.0
         fine_disp[2] = 0.0 # gauge fix
-        # fine_disp[-1] = -fine_disp[-3]
-        fine_disp[-3] = -fine_disp[-1]
-        # fine_disp[-3] = 0.0
+        # w_b + w_s = 0 constraint projector
+        fine_disp[-1] = -fine_disp[-3] # equivalent as one below
+        # fine_disp[-3] = -fine_disp[-1]
 
         if self.clamped:
             fine_disp[2] = -fine_disp[1]

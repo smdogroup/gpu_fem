@@ -16,11 +16,12 @@ from iga_assembler import IGABeamAssembler
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--elem", type=str, default='hermr', help="--beam, options: hyb, ts, ts-nd")
+parser.add_argument("--elem", type=str, default='hhd', help="--beam, options: hyb, ts, ts-nd")
 parser.add_argument("--nxe", type=int, default=128, help="number of elements")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
-parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
+parser.add_argument("--nsmooth", type=int, default=4, help="number of smoothing steps")
+parser.add_argument("--omega", type=float, default=0.9, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="run debug codes")
@@ -80,6 +81,10 @@ if 'mg' in args.solve:
         nxe_min = nxe // 2
     grids = []
     smoothers = []
+    # double_smooth = True
+    double_smooth = False
+
+    nsmooth = args.nsmooth
     while (nxe >= nxe_min):
         print(f"{nxe=}")
         grid = ASSEMBLER(
@@ -93,14 +98,17 @@ if 'mg' in args.solve:
         grids += [grid]
         if args.smoother == 'gs':
             smoother = BlockGaussSeidel.from_assembler(
-                grid, omega=0.7, iters=args.nsmooth
+                grid, omega=args.omega, iters=nsmooth
             )
         elif args.smoother == 'asw':
+            omega = args.omega / 2.0 # since 2x smoothing
             smoother = OnedimAddSchwarz.from_assembler(
-                grid, omega=0.3, iters=args.nsmooth, coupled_size=2
+                grid, omega=omega, iters=nsmooth, coupled_size=2
             )
         smoothers += [smoother]
         nxe = nxe // 2
+        if double_smooth:
+            nsmooth *= 2
 
     vmg = VcycleSolver(
         grids=grids,
@@ -122,9 +130,15 @@ elif args.solve == 'vmg':
 
     # proper V-cycle solver
     if not args.debug:
+        # smoothers = None # DEBUG
+        # print("WARNING using internal GS smoother, not ASW/GS created above")
+
         assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
                                         #  line_search=not(args.elem == 'aig'))
-                                        line_search=True)
+                                        # line search sometimes hurts high cond # cases (high defects in prolong)
+                                        line_search=not(args.elem in ['aig', 'tsr', 'hhd']), 
+                                        # line_search=True,
+                                        smoothers=smoothers)
 
 elif args.solve == 'kmg':
     vmg.n_cycles = 2

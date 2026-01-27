@@ -66,6 +66,11 @@ class BlockGaussSeidel:
     def from_assembler(cls, assembler, omega:float=0.7, iters:float=1):
         return cls(assembler.kmat, omega=omega, block_dim=assembler.dof_per_node, iters=iters)
 
+    def solve(self, rhs:np.ndarray):
+        defect = rhs.copy()
+        x = block_gauss_seidel(self.K, defect.copy(), x0=np.zeros_like(defect), 
+                                num_iter=self.iters, dof_per_node=self.block_dim)
+        return x
 
     def smooth_defect(self, x:np.ndarray, defect:np.ndarray):
         # for iter in range(self.iters):
@@ -75,4 +80,3 @@ class BlockGaussSeidel:
         x += dx
         defect -= self.K_bsr.dot(dx)
         return
-

@@ -59,6 +59,14 @@ def block_gauss_seidel_smoother(A, x, defect:np.ndarray, num_iter:int=1, dof_per
     new_defect = defect - A.dot(dx)
     return new_x, new_defect
 
+def call_smoother(smoother, A, x, defect:np.ndarray):
+    # dx = np.zeros_like(defect)
+    # smoother.smooth_defect(dx, defect)
+    dx = smoother.solve(defect.copy())
+    new_x = x + dx
+    new_defect = defect - smoother.K.dot(dx)
+    return new_x, new_defect
+
 def debug_plot(dof_per_node, grid, vec1, vec2):
     import matplotlib.pyplot as plt
     vpn = dof_per_node
@@ -70,7 +78,8 @@ def debug_plot(dof_per_node, grid, vec1, vec2):
     plt.show()
 
 def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int=1, 
-                 debug_print:bool=False, print_freq:int=1, double_smooth:bool=True, can_print:bool=True, line_search:bool=True):
+                 debug_print:bool=False, print_freq:int=1, double_smooth:bool=True, can_print:bool=True, 
+                 line_search:bool=True, smoothers=None):
     # grids are just assembler objects usually (no unified GRID object)
     nlevels = len(grids)
     dof_per_node = grids[0].dof_per_node # get from finest grid assembler
@@ -99,7 +108,10 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
             # pre-smooth
             if debug_print: print(f"\tpre-smooth grid[{i}]")
             num_iter = pre_smooth * 2**i if double_smooth else pre_smooth
-            solns[i], defects[i] = block_gauss_seidel_smoother(mats[i], solns[i], defects[i], num_iter=num_iter, dof_per_node=dof_per_node)
+            if smoothers is None:
+                solns[i], defects[i] = block_gauss_seidel_smoother(mats[i], solns[i], defects[i], num_iter=num_iter, dof_per_node=dof_per_node)
+            else:
+                solns[i], defects[i] = call_smoother(smoothers[i], mats[i], solns[i], defects[i])
 
             # debug_plot(dof_per_node, grids[0], vec1=pre_defect, vec2=defects[i])
 
@@ -168,7 +180,10 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
             # post-smooth
             if debug_print: print(f"\tpost-smooth grid[{i}]")
             num_iter = post_smooth * 2**i if double_smooth else post_smooth
-            solns[i], defects[i] = block_gauss_seidel_smoother(mats[i], solns[i], defects[i], num_iter=num_iter, dof_per_node=dof_per_node)
+            if smoothers is None:
+                solns[i], defects[i] = block_gauss_seidel_smoother(mats[i], solns[i], defects[i], num_iter=num_iter, dof_per_node=dof_per_node)
+            else:
+                solns[i], defects[i] = call_smoother(smoothers[i], mats[i], solns[i], defects[i])
 
             # debug_plot(dof_per_node, grids[0], vec1=post_init_defect, vec2=defects[i])
 
