@@ -14,6 +14,8 @@ class StandardBeamAssembler:
         thick:float=1.0e-2,
         L:float=1.0,
         load_fcn=lambda x : 1.0,
+        clamped:bool=False,
+        split_disp_bc:bool=False,
     ):
         
         self.element = ELEMENT
@@ -23,6 +25,7 @@ class StandardBeamAssembler:
         self.thick = thick
         self.L = L
         self.load_fcn = load_fcn
+        self.split_disp_bc = split_disp_bc
         
         # internal data
         self.kmat = None
@@ -33,8 +36,18 @@ class StandardBeamAssembler:
         self.N = self.dof_per_node * self.nnodes
         self.elem_length = self.L / self.nxe
         dpn = self.dof_per_node
-        self.bcs = list(range(dpn)) + list(range(dpn*(self.nnodes-1), dpn*self.nnodes))
-        # self.bcs = [0, dpn*(self.nnodes-1)]
+        
+        if clamped:
+            self.element.clamped = True
+            if dpn == 3:
+                self.bcs = [0,dpn*(self.nnodes-1)]
+            else:
+                # standard fully clamped
+                self.bcs = list(range(dpn)) + list(range(dpn*(self.nnodes-1), dpn*self.nnodes))
+        else:
+            self.element.clamped = False
+            self.bcs = [0, dpn*(self.nnodes-1)]
+        
         self.conn = [[ielem,ielem+1] for ielem in range(self.nxe)]
 
         # matrix sparsity
@@ -86,23 +99,74 @@ class StandardBeamAssembler:
             felem = unit_felem * load_vals[ielem]
             np.add.at(self.force, local_conn, felem)
 
-        # apply bcs to LHS and RHS
-        # node 1 - clamped BC
-        for colp in range(self.rowp[0], self.rowp[1]):
-            block_col = self.cols[colp]
-            if block_col == 0:
-                self.data[colp,:,:] = np.eye(self.dof_per_node)
-            else:
-                self.data[colp,:,:] = 0.0
-        # last node - clamped BC
-        for colp in range(self.rowp[self.nnodes-1], self.rowp[self.nnodes]):
-            block_col = self.cols[colp]
-            if block_col == self.nnodes-1:
-                self.data[colp,:,:] = np.eye(self.dof_per_node)
-            else:
-                self.data[colp,:,:] = 0.0
-        for bc in self.bcs:
-            self.force[bc] = 0.0
+        if self.split_disp_bc:
+            # dpn = 3 with local dofs: [w_b, (dw/dxi)_b, w_s]
+            # SS: enforce w_b + w_s = 0 at BOTH ends by overwriting the w_b row (idof=0).
+            # Extra gauge-fix: pin w_s(0) = 0 by overwriting the w_s row (idof=2) at the left end.
+
+            # ---- LEFT END (node 0): w_b + w_s = 0 (overwrite w_b row) ----
+            inode = 0
+            for colp in range(self.rowp[inode], self.rowp[inode + 1]):
+                block_col = self.cols[colp]
+                idof = 0  # w_b row
+                for jdof in range(dpn):
+                    self.data[colp, idof, jdof] = 0.0
+                if block_col == inode:
+                    self.data[colp, 0, 0] = 1.0  # w_b
+                    self.data[colp, 0, 2] = 1.0  # w_s
+
+            # ---- LEFT END (node 0): gauge fix w_s(0) = 0 (overwrite w_s row) ----
+            # the extra gauge constraint here removes constant mode from integrated shear strains th_s => w_s (cause non-unique)
+            inode = 0
+            for colp in range(self.rowp[inode], self.rowp[inode + 1]):
+                block_col = self.cols[colp]
+                idof = 2  # w_s row
+                for jdof in range(dpn):
+                    self.data[colp, idof, jdof] = 0.0
+                if block_col == inode:
+                    self.data[colp, 2, 2] = 1.0  # w_s = 0
+
+            # ---- RIGHT END (node nnodes-1): w_b + w_s = 0 (overwrite w_b row) ----
+            inode = self.nnodes - 1
+            for colp in range(self.rowp[inode], self.rowp[inode + 1]):
+                block_col = self.cols[colp]
+                idof = 0  # w_b row
+                for jdof in range(dpn):
+                    self.data[colp, idof, jdof] = 0.0
+                if block_col == inode:
+                    self.data[colp, 0, 0] = 1.0  # w_b
+                    self.data[colp, 0, 2] = 1.0  # w_s
+
+            # RHS for those constraint rows:
+            self.force[dpn * 0 + 0] = 0.0                 # (w_b + w_s)(0) = 0
+            self.force[dpn * 0 + 2] = 0.0                 # w_s(0) = 0  (gauge fix)
+            self.force[dpn * (self.nnodes - 1) + 0] = 0.0 # (w_b + w_s)(L) = 0
+
+
+        else: # not split disp BC (regular SS or clamped)
+
+            # apply bcs to LHS and RHS
+            # node 1 - clamped BC
+            for colp in range(self.rowp[0], self.rowp[1]):
+                block_col = self.cols[colp]
+                for idof in range(dpn):
+                    row = idof
+                    if not(row in self.bcs): continue
+                    for jdof in range(dpn):
+                        col = dpn * block_col + jdof
+                        self.data[colp, idof, jdof] = 1.0 if (row == col) else 0.0
+            # last node - clamped BC
+            for colp in range(self.rowp[self.nnodes-1], self.rowp[self.nnodes]):
+                block_col = self.cols[colp]
+                for idof in range(dpn):
+                    row = dpn * (self.nnodes-1) + idof
+                    if not(row in self.bcs): continue
+                    for jdof in range(dpn):
+                        col = dpn * block_col + jdof
+                        self.data[colp, idof, jdof] = 1.0 if (row == col) else 0.0
+
+            for bc in self.bcs:
+                self.force[bc] = 0.0
         
         self.kmat = sp.bsr_matrix(
             (self.data, self.cols, self.rowp),
@@ -124,6 +188,9 @@ class StandardBeamAssembler:
         # print(f"{self.u=}")
         dpn = self.dof_per_node
         w = self.u[idof::dpn]
+        if self.split_disp_bc:
+            assert dpn == 3
+            w = self.u[0::3] + self.u[2::3] # wb + ws
         plt.figure()
         plt.plot(xvec, w)
         plt.plot(xvec, np.zeros((self.nnodes,)), "k--")

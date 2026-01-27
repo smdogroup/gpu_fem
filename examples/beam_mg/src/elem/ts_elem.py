@@ -9,6 +9,7 @@ class TimoshenkoElement:
         self.dof_per_node = 2
         self.nodes_per_elem = 2
         self.reduced_integrated = reduced_integrated
+        self.clamped = True
 
     def get_kelem(self, E:float, nu:float, thick:float, elem_length:float):
         # quadratic element with 2 DOF per node
@@ -107,9 +108,11 @@ class TimoshenkoElement:
 
         # apply bcs..
         fine_disp[0] = 0.0
-        fine_disp[1] = 0.0
         fine_disp[-2] = 0.0
-        fine_disp[-1] = 0.0
+
+        if self.clamped:
+            fine_disp[1] = 0.0
+            fine_disp[-1] = 0.0
 
         return fine_disp
 
@@ -157,8 +160,10 @@ class TimoshenkoElement:
             
         # apply bcs.. to coarse defect also
         coarse_defect[0] = 0.0
-        coarse_defect[1] = 0.0
         coarse_defect[-2] = 0.0
-        coarse_defect[-1] = 0.0
+        
+        if self.clamped:        
+            coarse_defect[1] = 0.0
+            coarse_defect[-1] = 0.0
 
         return coarse_defect

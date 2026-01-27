@@ -1,3 +1,4 @@
 from .eb_elem import EulerBernoulliElement
 from .ts_elem import TimoshenkoElement
-from .hyb_hermite_elem import HybridHermiteElement
+from .hybr_hermite_elem import HierarchicRotHermiteElement
+from .hybd_hermite_elem import HierarchicDispHermiteElement

@@ -44,7 +44,7 @@ def hermite_cubic_grad(ibasis, xi):
     elif ibasis == 2:
         return 0.75 - 0.75 * xi**2
     elif ibasis == 3:
-        return -0.25 - 0.5 * xi + 0.75 * xi**2
+        return -0.25 + 0.5 * xi + 0.75 * xi**2
     
 def hermite_cubic_hess(ibasis, xi):
     if ibasis == 0:
@@ -131,33 +131,6 @@ def interp_lagrange_rotation_transpose(xi, th_in):
     coarse_out = np.array([0.0, coarse_out1[0], 0.0, coarse_out1[1]])
     return coarse_out
 
-
-def interp_hermite_disp(xi, elem_disp, fine_xscale):
-    """interp the w and th disp here, with elem_disp the hermite cubic DOF [w1, th1, w2, th2]"""
-
-    # convert rotations back to dw/dxi for interpolation
-    hermite_disp = elem_disp[np.array([0, 1, 3, 4])]
-    hermite_disp[np.array([1, 3])] *= fine_xscale # dw/dx => dw/dxi
-    # hermite disp should interp with dw/dxi smaller (down to fine xscale) to give better conv
-    # hard to explain (but in-element rotations typically are exagerrated too much if use coarse xscale)
-
-    w = 0.0
-    for ibasis in range(4):
-        w += hermite_cubic(ibasis, xi) * hermite_disp[ibasis]
-        # w_xi_coarse += get_hermite_grad(ibasis, xi) * elem_disp2[ibasis]
-    return w
-
-# def interp_hermite_rotation(xi, elem_disp, fine_xscale):
-#     """interp the w and th disp here, with elem_disp the hermite cubic DOF [w1, th1, w2, th2]"""
-
-#     # convert rotations back to dw/dxi for interpolation
-#     hermite_disp = elem_disp[np.array([0, 1, 3, 4])]
-#     hermite_disp[np.array([1, 3])] *= fine_xscale # dw/dx => dw/dxi
-#     w_xi_coarse = 0.0
-#     for ibasis in range(4):
-#         w_xi_coarse += get_hermite_grad(ibasis, xi) * hermite_disp[ibasis]
-#     th = w_xi_coarse / fine_xscale
-#     return th
 
 # =======================================
 # HERMITE

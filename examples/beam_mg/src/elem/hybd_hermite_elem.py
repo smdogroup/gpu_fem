@@ -5,61 +5,50 @@ from .basis import interp6_hermite_disp, interp6_hermite_disp_transpose
 from .basis import interp6_lagrange_rotation, interp6_lagrange_rotation_transpose
 
 
-class HybridHermiteElement:
-    """fully integrated timoshenko beam element (experiences locking"""
+class HierarchicDispHermiteElement:
+    """fully integrated timoshenko beam element, uses hybrid displacement model (no locking, TBD if it experiences better multigrid perf)"""
     def __init__(self, reduced_integrated:bool=False):              
         self.dof_per_node = 3
         self.nodes_per_elem = 2
         self.reduced_integrated = reduced_integrated
+        self.clamped = True
 
     def get_kelem(self, E:float, nu:float, thick:float, elem_length:float):
-        # quadratic element with 2 DOF per node
-        pts, weights = second_order_quadrature()
-
-        if self.reduced_integrated:
-            shear_pts, shear_wts = zero_order_quadrature()
-        else:
-            shear_pts, shear_wts = second_order_quadrature()
-
+    # def get_kelem(J, EI, GA, k_shear=5.0/6.0, use_reduced_integration_for_shear=True, schur_complement=False):
+        """
+        J : Jacobian = L/2 (so L = 2*J)
+        EI : bending stiffness
+        GA : shear rigidity (A*G)  (we will multiply by k_shear)
+        k_shear : shear correction factor (default 5/6)
+        """
         kelem = np.zeros((6, 6))
+        pts, weights = second_order_quadrature()
+        J = elem_length / 2.0
         EI = E * thick**3 / 12.0
-        ks = 5.0 / 6.0
-        G = E / 2.0 / (1 + nu)
-        ksGA = ks * G * thick
-        J = elem_length / 2.0 # dx/dxi jacobian
+        GA = E / 2.0 / (1 + nu)
+        k_shear = 5.0 / 6.0
 
-        # trv shear energy int 1/2 * ksGA * theta_s^2 dx
-        for xi, wt in zip(shear_pts, shear_wts):
-            # basis vecs
-            psi_val = [lagrange(i, xi) for i in range(2)]
-
-            for i in range(2):
-                for j in range(2):
-                    c_shear = ksGA * wt * J
-                    kelem[4+i,4+j] += c_shear * psi_val[i] * psi_val[j]
-            
-        # bending energy = int 1/2 * EI * (w_{,xx} + th_{s,x})^2 dx
+        # bending energy
         for xi, wt in zip(pts, weights):
-            psi_val = [lagrange(i, xi) for i in range(2)]
-            dpsi = [lagrange_grad(i, xi, J) for i in range(2)]
+            # quadrature factor dx = J * dxi
+            qfactor = wt * J
             d2phi = [hermite_cubic_hess(i, xi) / J**2 for i in range(4)]
 
-            # w_{,xx}^2 term
-            for i in range(4):
+            # assemble bending-related terms (w-w, w-ths, ths-ths)
+            # index mapping prior to reorder (0..5): w1, th1, w2, th2, gs1, gs2
+            for i in range(4):            
                 i_scale = 1.0 if i % 2 == 0 else J
                 for j in range(4):
                     j_scale = 1.0 if j % 2 == 0 else J
-                    kelem[i,j] += i_scale * j_scale * EI * J * wt * d2phi[i] * d2phi[j]
+                    kelem[i,j] += i_scale * j_scale * EI * qfactor * d2phi[i] * d2phi[j]
 
-                # w_{,xx} * th_{s,x} terms (2 each)
-                for j in range(2):
-                    kelem[i, 4+j] += EI * J * i_scale * d2phi[i] * dpsi[j]
-                    kelem[4+j, i] += EI * J * i_scale * d2phi[i] * dpsi[j]
-                
-            # th_{s,x}^2 term
-            for i in range(2):
-                for j in range(2):
-                    kelem[4+i, 4+j] += EI * wt * J * dpsi[i] * dpsi[j]
+        # shear penalty kGA * ∫ th_s^2 dx
+        for xi, wt in zip(pts, weights): # fully integrated
+            qfactor = wt * J
+            dpsi = [lagrange_grad(i, xi, J) for i in range(2)]
+            for i_s in range(2):
+                for j_s in range(2):
+                    kelem[4+i_s, 4+j_s] += k_shear * GA * qfactor * dpsi[i_s] * dpsi[j_s] #* 0.5 #* 8.0
 
         # reorder to your desired ordering: [w1, th1, gam1, w2, th2, gam2]
         new_order = np.array([0, 1, 4, 2, 3, 5])
@@ -71,10 +60,13 @@ class HybridHermiteElement:
         J = elem_length / 2.0
         pts, wts = second_order_quadrature()
         felem = np.zeros(6)
+        # because w = w_b + w_s, load split evenly between them like backprop
         for xi, wt in zip(pts, wts):
             for i in range(4):
                 i_scale = 1.0 if i % 2 == 0 else J
                 felem[i] += mag * wt * J * i_scale * hermite_cubic(i, xi)
+            for i in range(2):
+                felem[4+i] += mag * wt * J * lagrange(i, xi)
         new_order = np.array([0, 1, 4, 2, 3, 5])
         felem = felem[new_order]
         return felem
@@ -129,11 +121,14 @@ class HybridHermiteElement:
 
         # apply bcs..
         fine_disp[0] = 0.0
-        fine_disp[1] = 0.0
-        fine_disp[2] = 0.0
-        fine_disp[-2] = 0.0
-        fine_disp[-1] = 0.0
-        fine_disp[-3] = 0.0
+        fine_disp[2] = 0.0 # gauge fix
+        # fine_disp[-1] = -fine_disp[-3]
+        fine_disp[-3] = -fine_disp[-1]
+        # fine_disp[-3] = 0.0
+
+        if self.clamped:
+            fine_disp[2] = -fine_disp[1]
+            fine_disp[-1] = -fine_disp[-2]
 
         return fine_disp
 
@@ -179,10 +174,12 @@ class HybridHermiteElement:
             
         # apply bcs.. to coarse defect also
         coarse_defect[0] = 0.0
-        coarse_defect[1] = 0.0
-        coarse_defect[2] = 0.0
-        coarse_defect[-2] = 0.0
-        coarse_defect[-1] = 0.0
+        coarse_defect[2] = 0.0 # gauge fix
         coarse_defect[-3] = 0.0
+        # coarse_defect[-3] = -coarse_defect[-1]
+        
+        if self.clamped:
+            coarse_defect[2] = -coarse_defect[1]
+            coarse_defect[-1] = -coarse_defect[-2]
 
         return coarse_defect

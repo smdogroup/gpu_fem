@@ -8,6 +8,7 @@ class EulerBernoulliElement:
     def __init__(self):
         self.dof_per_node = 2
         self.nodes_per_elem = 2
+        self.clamped = True
 
     def get_kelem(self, E:float, nu:float, thick:float, elem_length:float):
         # quadratic element with 2 DOF per node
@@ -66,7 +67,7 @@ class EulerBernoulliElement:
             # interpolate the w DOF first using FEA basis
             for i, inode_f in enumerate(range(2 * ielem_c, 2 * ielem_c + 3)):
                 xi = -1.0 + 1.0 * i
-                w = interp_hermite_disp(xi, coarse_elem_disps, coarse_xscale=coarse_xscale)
+                w = interp_hermite_disp(xi, coarse_elem_disps, coarse_xscale)
                 # even though we're interpolating from fine to coarse elements with hermite cubic
                 # the in-element dw/dxi interp better if scaled down to fine dw/dxi size (hard to explain but works for hermtie cubic and hugely improves conv back to omega = 1 from omega = 0.25 on two grid case)
                 
@@ -86,9 +87,11 @@ class EulerBernoulliElement:
 
         # apply bcs..
         fine_disp[0] = 0.0
-        fine_disp[1] = 0.0
         fine_disp[-2] = 0.0
-        fine_disp[-1] = 0.0
+
+        if self.clamped:
+            fine_disp[1] = 0.0
+            fine_disp[-1] = 0.0
 
         return fine_disp
 
@@ -126,7 +129,7 @@ class EulerBernoulliElement:
             for i, inode_f in enumerate(range(2 * ielem_c, 2 * ielem_c + 3)):
                 xi = -1.0 + 1.0 * i
                 nodal_in = fine_defect[2 * inode_f : (2 * inode_f + 2)] / fine_weights[2 * inode_f : (2 * inode_f + 2)]
-                coarse_out = interp_hermite_disp_transpose(xi, nodal_in[0], coarse_xscale=coarse_xscale)
+                coarse_out = interp_hermite_disp_transpose(xi, nodal_in[0], coarse_xscale)
                 # coarse_out = restrict_hermite_disp(xi, nodal_in[0])
 
                 # lagrange interp of rotations actually works better interestingly (element allows small rotation in each element to min energy, so weird theta interp with hermite grad)
@@ -139,9 +142,11 @@ class EulerBernoulliElement:
             
         # apply bcs.. to coarse defect also
         coarse_defect[0] = 0.0
-        coarse_defect[1] = 0.0
         coarse_defect[-2] = 0.0
-        coarse_defect[-1] = 0.0
+
+        if self.clamped:
+            coarse_defect[1] = 0.0
+            coarse_defect[-1] = 0.0
 
         # coarse_defect[1::2] = 0.0 # DEBUG remove theta load
 
