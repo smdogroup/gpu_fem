@@ -23,6 +23,8 @@ class HierarchicRotHermiteElement:
         """
         kelem = np.zeros((6, 6))
         pts, weights = second_order_quadrature()
+        # do need to reduce integrate the shear part still.. otherwise experiences thick plate locking
+        shear_pts, shear_wts = zero_order_quadrature() 
         J = elem_length / 2.0
         EI = E * thick**3 / 12.0
         GA = E / 2.0 / (1 + nu)
@@ -55,14 +57,13 @@ class HierarchicRotHermiteElement:
                     kelem[4+i_s, 4+j_s] += EI * qfactor * dpsi[i_s] * dpsi[j_s]
 
         # shear penalty kGA * ∫ th_s^2 dx
-        for xi, wt in zip(pts, weights): # fully integrated
+        for xi, wt in zip(shear_pts, shear_wts): # fully integrated
             qfactor = wt * J
             psi_val = [lagrange(i, xi) for i in range(2)]
             for i_s in range(2):
                 for j_s in range(2):
-                    # probably 8x comes from something wrong with dx/2 (in hermite cubic EB case with 1/h**3 and the dx/2 and that is propagating over to Timoshenko)
-                    corr = 8.0
-                    # corr = 1.0
+                    # where does the *24 come from?
+                    corr = 24.0
                     kelem[4+i_s, 4+j_s] += k_shear * GA * qfactor * psi_val[i_s] * psi_val[j_s] * corr
 
         # reorder to your desired ordering: [w1, th1, gam1, w2, th2, gam2]

@@ -23,6 +23,8 @@ class HierarchicDispHermiteElement:
         """
         kelem = np.zeros((6, 6))
         pts, weights = second_order_quadrature()
+        # do need to reduce integrate the shear part still.. otherwise experiences thick plate locking
+        shear_pts, shear_wts = zero_order_quadrature() 
         J = elem_length / 2.0
         EI = E * thick**3 / 12.0
         GA = E / 2.0 / (1 + nu)
@@ -43,12 +45,14 @@ class HierarchicDispHermiteElement:
                     kelem[i,j] += i_scale * j_scale * EI * qfactor * d2phi[i] * d2phi[j]
 
         # shear penalty kGA * ∫ th_s^2 dx
-        for xi, wt in zip(pts, weights): # fully integrated
+        for xi, wt in zip(shear_pts, shear_wts): # fully integrated
             qfactor = wt * J
             dpsi = [lagrange_grad(i, xi, J) for i in range(2)]
             for i_s in range(2):
                 for j_s in range(2):
-                    kelem[4+i_s, 4+j_s] += k_shear * GA * qfactor * dpsi[i_s] * dpsi[j_s] #* 0.5 #* 8.0
+                    # where does the *24 come from?
+                    corr = 24.0
+                    kelem[4+i_s, 4+j_s] += k_shear * GA * qfactor * dpsi[i_s] * dpsi[j_s] * corr
 
         # reorder to your desired ordering: [w1, th1, gam1, w2, th2, gam2]
         new_order = np.array([0, 1, 4, 2, 3, 5])

@@ -167,3 +167,37 @@ idof = 0
 
 if args.plot:
     assembler.plot_disp(idof=idof)
+
+
+# ==============================
+# VERIFICATION
+# ==============================
+
+# exact solution for center deflection
+b = 1.0; thick = args.thick
+L = assembler.L; E = assembler.E; qmag = 1.0 / assembler.nxe; nu = assembler.nu
+I = b * thick**3 / 12.0
+A = b * thick
+Ks = 5.0 / 6.0
+G = E / 2.0 / (1 + nu)
+x = L / 2.0 # center of beam
+exact_disp = qmag * L**4 / 24.0 / E / I * (x / L - 2.0 * x**3 / L**3 + x**4 / L**4) + qmag * L**2 / 24.0 / G / A / Ks * (x / L - x**2 / L**2)
+
+# predicted disp
+u = assembler.u.copy()
+if args.elem in ['hhd', 'higd']:
+    # hierarchic disp has shear + bending split
+    w = u[0::3] + u[2::3]
+else:
+    w = u[0::assembler.dof_per_node]
+pred_disp = np.max(w)
+
+REL_ERR = abs((pred_disp - exact_disp) / exact_disp)
+print(f"{pred_disp=:.4e} {exact_disp=:.4e} {REL_ERR=:.4e}")
+
+
+# ratio to EB solution
+eb_disp = qmag * L**4 / 24.0 / E / I * (x / L - 2.0 * x**3 / L**3 + x**4 / L**4)
+ts_over_eb = exact_disp / eb_disp
+margin = ts_over_eb - 1.0
+print(f"TS/EB disp = 1 + {margin=:.4e}")

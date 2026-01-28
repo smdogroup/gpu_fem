@@ -19,12 +19,12 @@ class EulerBernoulliElement:
         for xi, wt in zip(pts, weights):
             for row in range(4):
                 row_scale = xscale if row % 2 == 1 else 1.0
-                row_xx = hermite_cubic_hess(row, xi) * row_scale
+                row_xx = hermite_cubic_hess(row, xi) / xscale**2 * row_scale
                 for col in range(4):
                     col_scale = xscale if col % 2 == 1 else 1.0
-                    col_xx = hermite_cubic_hess(col, xi) * col_scale
+                    col_xx = hermite_cubic_hess(col, xi) / xscale**2 * col_scale
 
-                    kelem[row, col] += EI * wt * row_xx * col_xx
+                    kelem[row, col] += EI * wt * xscale * row_xx * col_xx
         return kelem
     
     def get_felem(self, mag:float, elem_length:float):
@@ -35,7 +35,7 @@ class EulerBernoulliElement:
             for row in range(4):
                 row_scale = xscale if row % 2 == 1 else 1.0
                 row_val = row_scale * hermite_cubic(row, xi)
-                felem[row] += mag * wt * row_val
+                felem[row] += mag * wt * xscale * row_val
         return felem    
 
     def prolongate(self, coarse_disp:np.ndarray, length:float):
