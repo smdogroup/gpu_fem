@@ -1,9 +1,8 @@
 import numpy as np
 from .basis import third_order_quadrature, zero_order_quadrature, second_order_quadrature
-from .basis import get_iga2_basis, get_iga2_hess
+from .basis import get_iga2_basis
 
-
-class DeRhamIsogeometricElement:
+class DeRhamIsogeometricDispElement:
     """
     # De Rham (cohomology) IGA plate element
     # based on paper: https://grandmaster.colorado.edu/copper/2016/StudentCompetition/Benzaken_Isogeometric_Multigrid.pdf
@@ -18,9 +17,7 @@ class DeRhamIsogeometricElement:
 
     # except here I'm just doing a beam case..
     """
-    
 
-class DeRhamIsogeometricDispElement:
     # 2nd order IGA with De Rham mixed variational formulation
     def __init__(self, reduced_integrated:bool=False):              
         self.dof_per_node = 3
@@ -40,13 +37,12 @@ class DeRhamIsogeometricDispElement:
 
         kelem = np.zeros((9, 9))
         EI = E * thick**3 / 12.0
-        EI2 = EI / thick**2 # thickness-ind
         ks = 5.0 / 6.0
         G = E / 2.0 / (1 + nu)
         ksGA = ks * G * thick
         J = elem_length # dx/dxi jacobian
 
-        # bending energy = int 0.5 * EI/thick^2 * th_{,x}^2 dx
+        # bending energy = int EI * th_{,x} * dth_{,x} dx
         for xi, wt in zip(pts, weights):
             # IGA quadpts are [0,1] not [-1,1] so slight adjustment here
             xi = 0.5 * (xi + 1)
@@ -54,7 +50,7 @@ class DeRhamIsogeometricDispElement:
             dN /= J
             for i in range(3):
                 for j in range(3):
-                    kelem[3+i, 3+j] += EI2 * wt * J * dN[i] * dN[j]
+                    kelem[3+i, 3+j] += EI * wt * J * dN[i] * dN[j]
 
         # trv shear + shear consistency energy
         for xi, wt in zip(shear_pts, shear_wts):
@@ -65,8 +61,8 @@ class DeRhamIsogeometricDispElement:
 
             for i in range(3):
                 for j in range(3):
-                    c_shear = ksGA * wt * J
-                    # trv shear energy = int 0.5 * kSGA * gam*(dth - dw') dx
+                    c_shear = ksGA * wt * J * thick**2 # boosted now...
+                    # trv shear energy = int kSGA * gam*(dth - dw') dx
                     kelem[6+i, 3+j] += c_shear * N[i] * N[j] # (gam,dth)
                     kelem[6+i, j] -= c_shear * N[i] * dN[j]  # (gam,dw)
 
@@ -74,12 +70,12 @@ class DeRhamIsogeometricDispElement:
                     kelem[j, 6+i] -= wt * J * N[i] * dN[j] # (w,dgam)
                     kelem[3+j, 6+i] += wt * J * N[i] * N[j] # (th, dgam)
 
-                    # with also int 0.5 * thick^2 *  gam * dgam dx
+                    # with also int thick^2 *  gam * dgam dx
                     kelem[6+i, 6+j] -= wt * J * thick**2 * N[i] * N[j] # (gam,dgam)
 
-        import matplotlib.pyplot as plt
-        plt.imshow(np.log(np.abs(kelem) + 1e-14))
-        plt.show()
+        # import matplotlib.pyplot as plt
+        # plt.imshow(np.log(np.abs(kelem) + 1e-14))
+        # plt.show()
                     
 
         # change order from [w1,w2,w3,th1,th2,th3,gam1,gam2,gam3] => [w1, th1, gam1, w2, th2, gam2, w3, th3, gam3]
@@ -174,7 +170,7 @@ class DeRhamIsogeometricDispElement:
 
         # apply bcs again, no need same answer either way
         fine_disp[0] = 0.0
-        fine_disp[-2] = 0.0
+        fine_disp[-3] = 0.0
 
         if self.clamped:
             fine_disp[1] = 0.0
@@ -201,7 +197,7 @@ class DeRhamIsogeometricDispElement:
 
         # apply bcs.. to coarse defect also
         coarse_defect[0] = 0.0
-        coarse_defect[-2] = 0.0
+        coarse_defect[-3] = 0.0
 
         if self.clamped:
             coarse_defect[1] = 0.0
