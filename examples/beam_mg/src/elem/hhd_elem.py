@@ -24,7 +24,10 @@ class HierarchicDispHermiteElement:
         kelem = np.zeros((6, 6))
         pts, weights = second_order_quadrature()
         # do need to reduce integrate the shear part still.. otherwise experiences thick plate locking
-        shear_pts, shear_wts = zero_order_quadrature() 
+        if self.reduced_integrated:
+            shear_pts, shear_wts = zero_order_quadrature() 
+        else:
+            shear_pts, shear_wts = second_order_quadrature() # not reduced integrated
         J = elem_length / 2.0
         EI = E * thick**3 / 12.0
         GA = E / 2.0 / (1 + nu)
@@ -36,15 +39,14 @@ class HierarchicDispHermiteElement:
             qfactor = wt * J
             d2phi = [hermite_cubic_hess(i, xi) / J**2 for i in range(4)]
 
-            # assemble bending-related terms (w-w, w-ths, ths-ths)
-            # index mapping prior to reorder (0..5): w1, th1, w2, th2, gs1, gs2
+            # 0.5 * EI * int w_{b,xx}^2 dx
             for i in range(4):            
                 i_scale = 1.0 if i % 2 == 0 else J
                 for j in range(4):
                     j_scale = 1.0 if j % 2 == 0 else J
                     kelem[i,j] += i_scale * j_scale * EI * qfactor * d2phi[i] * d2phi[j]
 
-        # shear penalty kGA * ∫ th_s^2 dx
+        # shear penalty kGA * ∫ w_{s,x}^2 dx
         for xi, wt in zip(shear_pts, shear_wts): # fully integrated
             qfactor = wt * J
             dpsi = [lagrange_grad(i, xi, J) for i in range(2)]

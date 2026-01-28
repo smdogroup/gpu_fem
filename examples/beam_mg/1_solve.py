@@ -18,6 +18,7 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--elem", type=str, default='hhd', help="--beam, options: hyb, ts, ts-nd")
 parser.add_argument("--nxe", type=int, default=128, help="number of elements")
+parser.add_argument("--nxemin", type=int, default=16, help="min # elems multigrid")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=4, help="number of smoothing steps")
@@ -77,9 +78,7 @@ if not('mg' in args.solve):
 if 'mg' in args.solve:
     # make V-cycle solver
     nxe = args.nxe
-    # nxe_min = 5
-    # nxe_min = 8
-    nxe_min = 16
+    nxe_min = args.nxemin
     if args.debug:
         nxe_min = nxe // 2
     grids = []

@@ -1,5 +1,5 @@
 import numpy as np
-from .basis import third_order_quadrature, zero_order_quadrature
+from .basis import third_order_quadrature, zero_order_quadrature, second_order_quadrature
 from .basis import get_iga2_basis, get_iga2_hess
 
 
@@ -13,12 +13,13 @@ class HierarchicIsogeometricDispElement:
 
     def get_kelem(self, E:float, nu:float, thick:float, elem_length:float, left_bndry:bool, right_bndry:bool):
         # quadratic element with 2 DOF per node
-        pts, weights = third_order_quadrature()
+        # pts, weights = third_order_quadrature()
+        pts, weights = second_order_quadrature()
 
         if self.reduced_integrated:
             shear_pts, shear_wts = zero_order_quadrature()
         else:
-            shear_pts, shear_wts = third_order_quadrature()
+            shear_pts, shear_wts = second_order_quadrature()
 
         kelem = np.zeros((6, 6))
         EI = E / 12.0
@@ -58,7 +59,8 @@ class HierarchicIsogeometricDispElement:
     def get_felem(self, mag, elem_length, left_bndry:bool, right_bndry:bool):
         """get element load vector"""
         J = elem_length # not half because xi in [0, 1] for IGA
-        pts, wts = third_order_quadrature()
+        pts, wts = second_order_quadrature()
+        # pts, wts = third_order_quadrature()
         felem = np.zeros(6)
         for xi, wt in zip(pts, wts):
             xi = 0.5 * (xi + 1)
@@ -139,7 +141,7 @@ class HierarchicIsogeometricDispElement:
             fine_disp[idof::dpn] += np.dot(P, coarse_disp[idof::dpn])
             fine_weights[idof::dpn] += np.dot(P, np.ones(nnodes_coarse))
 
-        # fine_disp /= fine_weights
+        fine_disp /= fine_weights
 
         # apply bcs again, no need same answer either way
         fine_disp[0] = 0.0
