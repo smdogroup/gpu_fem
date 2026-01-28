@@ -6,3 +6,4 @@ from .hhd_elem import HierarchicDispHermiteElement
 
 # isogeometric elements
 from .aig_elem import AsymptoticIsogeometricTimoshenkoElement
+from .higd_elem import HierarchicIsogeometricDispElement

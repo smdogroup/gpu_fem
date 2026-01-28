@@ -209,3 +209,13 @@ def get_iga2_basis(xi, left_bndry, right_bndry):
     dN += 0.5 * left_bndry * np.array([dB[0], -dB[0], 0.0])
     dN += 0.5 * right_bndry * np.array([0.0, -dB[2], dB[2]])
     return N, dN
+
+def get_quad_bernstein_hess(xi):
+    return np.array([2.0, -4.0, 2.0])
+
+def get_iga2_hess(xi, left_bndry, right_bndry):
+    B2 = get_quad_bernstein_hess(xi)
+    N2 = 0.5 * np.array([B2[0], np.sum(B2) + B2[1], B2[2]])
+    N2 += 0.5 * left_bndry * np.array([B2[0], -B2[0], 0.0])
+    N2 += 0.5 * right_bndry * np.array([0.0, -B2[2], B2[2]])
+    return N2

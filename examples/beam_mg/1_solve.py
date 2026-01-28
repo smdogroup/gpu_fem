@@ -11,7 +11,7 @@ from smoothers import BlockGaussSeidel, OnedimAddSchwarz, right_pcg2, right_pgmr
 from multigrid2 import vcycle_solve, VMG
 
 # IGA elements
-from elem import AsymptoticIsogeometricTimoshenkoElement
+from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement
 from iga_assembler import IGABeamAssembler
 
 import argparse
@@ -44,6 +44,9 @@ elif args.elem == 'hhd':
 elif args.elem == 'aig':
     ELEMENT = AsymptoticIsogeometricTimoshenkoElement(reduced_integrated=False)
     is_iga = True
+elif args.elem == 'higd':
+    ELEMENT = HierarchicIsogeometricDispElement()
+    is_iga = True
 
 # ================================
 # make beam assembler
@@ -59,7 +62,7 @@ assembler = ASSEMBLER(
     nxe=args.nxe,
     thick=args.thick,
     clamped=clamped,
-    split_disp_bc=args.elem in ['hhd']
+    split_disp_bc=args.elem in ['hhd', 'higd']
 )
 
 if not('mg' in args.solve):
@@ -92,7 +95,7 @@ if 'mg' in args.solve:
             nxe=nxe,
             thick=args.thick,
             clamped=clamped,
-            split_disp_bc=args.elem in ['hhd']
+            split_disp_bc=args.elem in ['hhd', 'higd']
         )
         grid._assemble_system()
         grids += [grid]
@@ -185,9 +188,11 @@ exact_disp = qmag * L**4 / 24.0 / E / I * (x / L - 2.0 * x**3 / L**3 + x**4 / L*
 
 # predicted disp
 u = assembler.u.copy()
-if args.elem in ['hhd', 'higd']:
+if args.elem in ['hhd']:
     # hierarchic disp has shear + bending split
     w = u[0::3] + u[2::3]
+elif args.elem in ['higd']:
+    w = u[0::2] + u[1::2]
 else:
     w = u[0::assembler.dof_per_node]
 pred_disp = np.max(w)
