@@ -133,18 +133,18 @@ class IGABeamAssembler:
                     self.data[colp, idof, jdof] = 0.0
                 if block_col == inode:
                     self.data[colp, 0, 0] = 1.0  # w_b
-                    self.data[colp, 0, 2] = 1.0  # w_s
+                    self.data[colp, 0, 1] = 1.0  # w_s
 
             # ---- LEFT END (node 0): gauge fix w_s(0) = 0 (overwrite w_s row) ----
             # the extra gauge constraint here removes constant mode from integrated shear strains th_s => w_s (cause non-unique)
             inode = 0
             for colp in range(self.rowp[inode], self.rowp[inode + 1]):
                 block_col = self.cols[colp]
-                idof = 2  # w_s row
+                idof = 1  # w_s row
                 for jdof in range(dpn):
                     self.data[colp, idof, jdof] = 0.0
                 if block_col == inode:
-                    self.data[colp, 2, 2] = 1.0  # w_s = 0
+                    self.data[colp, 1, 1] = 1.0  # w_s = 0
 
             # ---- RIGHT END (node nnodes-1): w_b + w_s = 0 (overwrite w_b row) ----
             inode = self.nnodes - 1
@@ -155,11 +155,11 @@ class IGABeamAssembler:
                     self.data[colp, idof, jdof] = 0.0
                 if block_col == inode:
                     self.data[colp, 0, 0] = 1.0  # w_b
-                    self.data[colp, 0, 2] = 1.0  # w_s
+                    self.data[colp, 0, 1] = 1.0  # w_s
 
             # RHS for those constraint rows:
             self.force[dpn * 0 + 0] = 0.0                 # (w_b + w_s)(0) = 0
-            self.force[dpn * 0 + 2] = 0.0                 # w_s(0) = 0  (gauge fix)
+            self.force[dpn * 0 + 1] = 0.0                 # w_s(0) = 0  (gauge fix)
             self.force[dpn * (self.nnodes - 1) + 0] = 0.0 # (w_b + w_s)(L) = 0
 
 
@@ -209,8 +209,10 @@ class IGABeamAssembler:
         dpn = self.dof_per_node
         w = self.u[idof::dpn]
         if self.split_disp_bc:
-            assert dpn == 3
-            w = self.u[0::3] + self.u[2::3] # wb + ws
+            if dpn == 3: # hhd hermite hierarchic disp
+                w = self.u[0::3] + self.u[2::3] # wb + ws
+            elif dpn == 2: # higd iga hierarchic disp
+                w = self.u[0::2] + self.u[1::2] # wb + ws
         plt.figure()
         plt.plot(xvec, w)
         plt.plot(xvec, np.zeros((self.nnodes,)), "k--")
