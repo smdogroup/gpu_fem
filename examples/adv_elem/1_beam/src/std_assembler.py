@@ -147,7 +147,7 @@ class StandardBeamAssembler:
         else: # not split disp BC (regular SS or clamped)
 
             # apply bcs to LHS and RHS
-            # node 1 - clamped BC
+            # node 1 - SS BC
             for colp in range(self.rowp[0], self.rowp[1]):
                 block_col = self.cols[colp]
                 for idof in range(dpn):
@@ -156,7 +156,7 @@ class StandardBeamAssembler:
                     for jdof in range(dpn):
                         col = dpn * block_col + jdof
                         self.data[colp, idof, jdof] = 1.0 if (row == col) else 0.0
-            # last node - clamped BC
+            # last node - SS BC
             for colp in range(self.rowp[self.nnodes-1], self.rowp[self.nnodes]):
                 block_col = self.cols[colp]
                 for idof in range(dpn):

@@ -58,21 +58,38 @@ class HierarchicIsogeometricDispElement:
         kelem = kelem[new_order, :][:, new_order]
         return kelem
 
-    def get_felem(self, mag, elem_length, left_bndry:bool, right_bndry:bool):
+    # def get_felem(self, mag, elem_length, left_bndry:bool, right_bndry:bool):
+    #     """get element load vector"""
+    #     J = elem_length # not half because xi in [0, 1] for IGA
+    #     pts, wts = second_order_quadrature()
+    #     # pts, wts = third_order_quadrature()
+    #     felem = np.zeros(6)
+    #     for xi, wt in zip(pts, wts):
+    #         xi = 0.5 * (xi + 1)
+    #         N, _ = get_iga2_basis(xi, left_bndry, right_bndry)
+    #         for i in range(3):
+    #             # w_b and w_s get loads cause w = w_b + w_s
+    #             felem[2 * i] += mag  * wt * J * N[i]
+    #             felem[2 * i + 1] += mag * wt * J * N[i]
+    #     return felem
+
+    def get_felem(self, mag, elem_length, left_bndry:bool, right_bndry:bool, xbnd:list):
         """get element load vector"""
         J = elem_length # not half because xi in [0, 1] for IGA
         pts, wts = second_order_quadrature()
         # pts, wts = third_order_quadrature()
+        x0, x1 = xbnd[0], xbnd[1]
         felem = np.zeros(6)
         for xi, wt in zip(pts, wts):
             xi = 0.5 * (xi + 1)
+            xval = x0 * (1.0 - xi) + x1 * xi
+            load_mag = mag(xval)
             N, _ = get_iga2_basis(xi, left_bndry, right_bndry)
             for i in range(3):
-                # w_b and w_s get loads cause w = w_b + w_s
-                felem[2 * i] += mag  * wt * J * N[i]
-                felem[2 * i + 1] += mag * wt * J * N[i]
+                felem[2 * i] += load_mag  * wt * J * N[i]
+                felem[2 * i + 1] += load_mag * wt * J * N[i]
         return felem
-    
+
     def _build_restriction_matrix(self, nxe_c):
         # restriction operator or P^T global
         n_coarse = nxe_c + 2

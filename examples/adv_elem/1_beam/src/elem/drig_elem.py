@@ -83,17 +83,20 @@ class DeRhamIsogeometricDispElement:
         kelem = kelem[new_order, :][:, new_order]
         return kelem
 
-    def get_felem(self, mag, elem_length, left_bndry:bool, right_bndry:bool):
+    def get_felem(self, mag, elem_length, left_bndry:bool, right_bndry:bool, xbnd:list):
         """get element load vector"""
         J = elem_length # not half because xi in [0, 1] for IGA
         pts, wts = second_order_quadrature()
         # pts, wts = third_order_quadrature()
+        x0, x1 = xbnd[0], xbnd[1]
         felem = np.zeros(9)
         for xi, wt in zip(pts, wts):
             xi = 0.5 * (xi + 1)
+            xval = x0 * (1.0 - xi) + x1 * xi
+            load_mag = mag(xval)
             N, _ = get_iga2_basis(xi, left_bndry, right_bndry)
             for i in range(3):
-                felem[3 * i] += mag  * wt * J * N[i]
+                felem[3 * i] += load_mag * wt * J * N[i]
         return felem
     
     def _build_restriction_matrix(self, nxe_c):

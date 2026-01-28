@@ -25,7 +25,7 @@ class IGABeamAssembler:
         self.nu = nu
         self.thick = thick
         self.L = L
-        self.load_fcn = load_fcn
+        self.load_fcn = lambda x : load_fcn(x) / self.nxe
         self.split_disp_bc = split_disp_bc
         
         # internal data
@@ -79,25 +79,24 @@ class IGABeamAssembler:
     def _assemble_system(self):
         # assemble BSR matrix
         self.data = np.zeros((self.nnzb, self.dof_per_node, self.dof_per_node), dtype=np.double)
-        x_vals = [(ielem+0.5) * self.elem_length for ielem in range(self.nxe)]
-        load_vals = [self.load_fcn(x_val) / self.nxe for x_val in x_vals]
+        xbnd_vals = [[ielem * self.elem_length, (ielem+2) * self.elem_length] for ielem in range(self.nxe)]
 
         interior_kelem = self.element.get_kelem(self.E, self.nu, self.thick, self.elem_length, left_bndry=False, right_bndry=False)
-        interior_unit_felem = self.element.get_felem(mag=1.0, elem_length=self.elem_length, left_bndry=False, right_bndry=False)
         dpn = self.dof_per_node
         self.force = np.zeros(self.N)
         
         # compute LHS and RHS no BCs
         for ielem in range(self.nxe):
+            # print(f"{ielem=} {xbnd_vals[ielem]=}")
             if ielem == 0:
                 kelem = self.element.get_kelem(self.E, self.nu, self.thick, self.elem_length, left_bndry=True, right_bndry=False)
-                unit_felem = self.element.get_felem(mag=1.0, elem_length=self.elem_length, left_bndry=True, right_bndry=False)
+                felem = self.element.get_felem(mag=self.load_fcn, elem_length=self.elem_length, left_bndry=True, right_bndry=False, xbnd=xbnd_vals[ielem])
             elif ielem == self.nxe - 1:
                 kelem = self.element.get_kelem(self.E, self.nu, self.thick, self.elem_length, left_bndry=False, right_bndry=True)
-                unit_felem = self.element.get_felem(mag=1.0, elem_length=self.elem_length, left_bndry=False, right_bndry=True)
+                felem = self.element.get_felem(mag=self.load_fcn, elem_length=self.elem_length, left_bndry=False, right_bndry=True, xbnd=xbnd_vals[ielem])
             else: # interior
                 kelem = interior_kelem
-                unit_felem = interior_unit_felem
+                felem = self.element.get_felem(mag=self.load_fcn, elem_length=self.elem_length, left_bndry=False, right_bndry=False, xbnd=xbnd_vals[ielem])
 
             local_conn = np.array(self.dof_conn[ielem])
             # add kelem into LHS sparse structure
@@ -115,7 +114,6 @@ class IGABeamAssembler:
                                                      dpn*lblock_col:dpn*(lblock_col+1)]
 
             # add felem into RHS
-            felem = unit_felem * load_vals[ielem]
             np.add.at(self.force, local_conn, felem)
 
         if self.split_disp_bc:
@@ -166,7 +164,7 @@ class IGABeamAssembler:
         else: # not split disp BC (regular SS or clamped)
 
             # apply bcs to LHS and RHS
-            # node 1 - clamped BC
+            # node 1 - SS BC
             for colp in range(self.rowp[0], self.rowp[1]):
                 block_col = self.cols[colp]
                 for idof in range(dpn):
@@ -175,7 +173,7 @@ class IGABeamAssembler:
                     for jdof in range(dpn):
                         col = dpn * block_col + jdof
                         self.data[colp, idof, jdof] = 1.0 if (row == col) else 0.0
-            # last node - clamped BC
+            # last node - SS BC
             for colp in range(self.rowp[self.nnodes-1], self.rowp[self.nnodes]):
                 block_col = self.cols[colp]
                 for idof in range(dpn):
@@ -199,12 +197,119 @@ class IGABeamAssembler:
         # print(f"{self.u=}")
         return self.u
     
+    def get_node_pts(self) -> list:
+        """
+        Quadratic (p=2) 1D IGA: return physical 'node points' using Greville abscissae.
+        Output length = nxe + 2.
+
+        u_i = (U[i+1] + U[i+2]) / 2   for i = 0..n_ctrl-1, with n_ctrl = nxe + 2
+        x(u) = sum_j N_j(u) * x_ctrl[j]
+        """
+        nxe = int(self.nxe)
+        p = 2
+        n_ctrl = nxe + p  # = nxe + 2
+
+        # Open-uniform knot vector on [0,1], length = n_ctrl + p + 1 = nxe + 5
+        U = np.array([0.0] * (p + 1) +
+                    [i / nxe for i in range(1, nxe)] +
+                    [1.0] * (p + 1), dtype=float)
+
+        x_ctrl = np.asarray(self.control_pts, dtype=float)
+        if x_ctrl.size != n_ctrl:
+            raise ValueError(
+                f"Expected {n_ctrl} control points for p=2, nxe={nxe}, "
+                f"but got {x_ctrl.size}."
+            )
+
+        def find_span(n_ctrl, degree, u, U):
+            # Cox–de Boor span search; returns span in [degree, n_ctrl-1]
+            if u >= U[-1] - 1e-14:
+                return n_ctrl - 1
+            low = degree
+            high = len(U) - degree - 2
+            mid = (low + high) // 2
+            while True:
+                if u < U[mid]:
+                    high = mid - 1
+                elif u >= U[mid + 1]:
+                    low = mid + 1
+                else:
+                    return mid
+                mid = (low + high) // 2
+
+        
+        def basis_functions_and_derivatives(span, u, degree, U, n_deriv=1):
+            # Compute nonzero basis functions and first derivatives using Cox-de Boor + derivative formula
+            # Returns arrays N[0:degree] and dN[0:degree]
+            left = np.zeros(degree+1)
+            right = np.zeros(degree+1)
+            ndu = np.zeros((degree+1, degree+1))
+            ndu[0,0] = 1.0
+            for j in range(1, degree+1):
+                left[j] = u - U[span+1-j]
+                right[j] = U[span+j] - u
+                saved = 0.0
+                for r in range(j):
+                    ndu[j,r] = right[r+1] + left[j-r]
+                    temp = ndu[r,j-1]/ndu[j,r]
+                    ndu[r,j] = saved + right[r+1]*temp
+                    saved = left[j-r]*temp
+                ndu[j,j] = saved
+            N = ndu[:,degree].copy()
+            # derivatives
+            ders = np.zeros((n_deriv+1, degree+1))
+            a = np.zeros((2, degree+1))
+            # compute a triangular table of derivatives
+            for r in range(degree+1):
+                s1 = 0; s2 = 1
+                a[0,0] = 1.0
+                for k in range(1, n_deriv+1):
+                    d = 0.0
+                    rk = r - k
+                    pk = degree - k
+                    if r >= k:
+                        a[s2,0] = a[s1,0]/ndu[pk+1,rk]
+                        d = a[s2,0]*ndu[rk,pk]
+                    j1 = 1 if rk >= -1 else -rk
+                    j2 = k-1 if r-1 <= pk else degree - r
+                    for j in range(j1, j2+1):
+                        a[s2,j] = (a[s1,j] - a[s1,j-1]) / ndu[pk+1, rk+j]
+                        d += a[s2,j]*ndu[rk+j, pk]
+                    if r <= pk:
+                        a[s2,k] = -a[s1,k-1]/ndu[pk+1, r]
+                        d += a[s2,k]*ndu[r, pk]
+                    ders[k,r] = d
+                    s1, s2 = s2, s1
+            # Multiply by correct factors
+            for k in range(1, n_deriv+1):
+                for j in range(degree+1):
+                    ders[k,j] *= degree
+            return N, ders[1]
+        # Greville abscissae (parametric "nodes"), length n_ctrl = nxe+2 for p=2
+        u_nodes = 0.5 * (U[1:1 + n_ctrl] + U[2:2 + n_ctrl])
+
+        node_pts = []
+        for u in u_nodes:
+            span = find_span(n_ctrl, p, float(u), U)
+            N, _ = basis_functions_and_derivatives(span, float(u), p, U, n_deriv=1)
+
+            i0 = span - p  # active basis indices: i0..i0+p
+            x = 0.0
+            for a in range(p + 1):
+                x += N[a] * x_ctrl[i0 + a]
+            node_pts.append(float(x))
+        # print(f"{node_pts=}\n{self.control_pts=}")
+
+        return node_pts
+    
     @property
-    def xvec(self) -> list:
+    def control_pts(self) -> list:
+        # control points for IGA
         return [i*self.elem_length for i in range(self.nnodes)]
 
     def plot_disp(self, idof:int=0):
-        xvec = self.xvec
+        xvec = self.get_node_pts() # not same as control points
+        # xvec = self.control_pts
         # print(f"{self.u=}")
         dpn = self.dof_per_node
         w = self.u[idof::dpn]
