@@ -11,7 +11,7 @@ from smoothers import BlockGaussSeidel, OnedimAddSchwarz, right_pcg2, right_pgmr
 from multigrid2 import vcycle_solve, VMG
 
 # IGA elements
-from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement
+from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement, DeRhamIsogeometricDispElement
 from iga_assembler import IGABeamAssembler
 
 import argparse
@@ -21,7 +21,7 @@ parser.add_argument("--nxe", type=int, default=128, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=16, help="min # elems multigrid")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
-parser.add_argument("--nsmooth", type=int, default=4, help="number of smoothing steps")
+parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--omega", type=float, default=0.9, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
@@ -47,6 +47,9 @@ elif args.elem == 'aig':
     is_iga = True
 elif args.elem == 'higd':
     ELEMENT = HierarchicIsogeometricDispElement(reduced_integrated=False)
+    is_iga = True
+elif args.elem == 'drig':
+    ELEMENT = DeRhamIsogeometricDispElement(reduced_integrated=False)
     is_iga = True
 
 # ================================

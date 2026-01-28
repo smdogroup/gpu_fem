@@ -19,7 +19,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--nxe", type=int, default=128, help="number of elements")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=16, help="min # elems multigrid")
-parser.add_argument("--nsmooth", type=int, default=4, help="number of smoothing steps")
+parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--omega", type=float, default=0.9, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
 args = parser.parse_args()
@@ -142,12 +142,17 @@ plt.legend()
 # plt.show()
 plt.margins(x=0.05, y=0.05)
 # plt.axis([0.5, 2e3, -1, 30])
-plt.axis([1.0/2e3, 2.0, -1, 30])
+plt.axis([1.0/2e3, 2.0, -1, 50])
+
+# fix xtick labels
+xticks = ax.get_xticks()
+xlabels = [f"$10^{{{int(np.log10(x))}}}$" if x > 0 else "" for x in xticks]
+ax.set_xticklabels(xlabels)
 
 
-ax.set_yticks([0, 10, 20, 30])
+ax.set_yticks([0, 10, 20, 30, 40, 50])
 # ax.set_yticklabels([r"$4 \cdot 10^{-2}$", r"$10^{-1}$", r"$10^{0}$"]) #, rotation=45, ha='right')
-ax.set_yticklabels(["0", "10", "20", "30"])
+ax.set_yticklabels(["0", "10", "20", "30", "40", "50"])
 
 # plt.savefig("hybrid-beam-multigrid-times.png", dpi=400)
 plt.savefig("beam-multigrid-cycles.png", dpi=400)

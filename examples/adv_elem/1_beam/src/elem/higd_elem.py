@@ -1,10 +1,13 @@
 import numpy as np
-from .basis import third_order_quadrature, zero_order_quadrature
-from .basis import get_iga2_basis
+from .basis import third_order_quadrature, zero_order_quadrature, second_order_quadrature
+from .basis import get_iga2_basis, get_iga2_hess
 
 
-class AsymptoticIsogeometricTimoshenkoElement:
-    """fully integrated timoshenko beam element (experiences locking"""
+# based on Oesterle paper, "A shear deformable, rotation-free isogeometric shell formulation"
+# https://www.sciencedirect.com/science/article/pii/S004578251630202X
+
+class HierarchicIsogeometricDispElement:
+    """hierarchic displacement element HIGD with 2nd order IGA basis to allow 2nd derivatives in weak form"""
     def __init__(self, reduced_integrated:bool=False):              
         self.dof_per_node = 2
         self.nodes_per_elem = 3
@@ -14,6 +17,7 @@ class AsymptoticIsogeometricTimoshenkoElement:
     def get_kelem(self, E:float, nu:float, thick:float, elem_length:float, left_bndry:bool, right_bndry:bool):
         # quadratic element with 2 DOF per node
         pts, weights = third_order_quadrature()
+        # pts, weights = second_order_quadrature()
 
         if self.reduced_integrated:
             shear_pts, shear_wts = zero_order_quadrature()
@@ -21,37 +25,33 @@ class AsymptoticIsogeometricTimoshenkoElement:
             shear_pts, shear_wts = third_order_quadrature()
 
         kelem = np.zeros((6, 6))
-        EI = E / 12.0
+        EI = E * thick**3 / 12.0
         ks = 5.0 / 6.0
         G = E / 2.0 / (1 + nu)
-        ksGA = ks * G
+        ksGA = ks * G * thick
         J = elem_length # dx/dxi jacobian
-        J /= thick
 
-        # trv shear energy
+        # trv shear energy int 0.5 * ksGA * th_{s,x}^2 dx
         for xi, wt in zip(shear_pts, shear_wts):
             # IGA quadpts are [0,1] not [-1,1] so slight adjustment here
             xi = 0.5 * (xi + 1)
-            N, dN = get_iga2_basis(xi, left_bndry, right_bndry)
+            _, dN = get_iga2_basis(xi, left_bndry, right_bndry)
             dN /= J
 
             for i in range(3):
                 for j in range(3):
                     c_shear = ksGA * wt * J
-                    kelem[i,j] += c_shear * dN[i] * dN[j]
-                    kelem[i, 3+j] -= c_shear * dN[i] * N[j]
-                    kelem[3+i, j] -= c_shear * N[i] * dN[j]
-                    kelem[3+i, 3+j] += c_shear * N[i] * N[j]
+                    kelem[3+i,3+j] += c_shear * dN[i] * dN[j]
             
-        # bending energy
+        # bending energy = int 0.5 * EI * w_{b,xx}^2 dx
         for xi, wt in zip(pts, weights):
             # IGA quadpts are [0,1] not [-1,1] so slight adjustment here
             xi = 0.5 * (xi + 1)
-            N, dN = get_iga2_basis(xi, left_bndry, right_bndry)
-            dN /= J
+            dN2 = get_iga2_hess(xi, left_bndry, right_bndry)
+            dN2 /= J**2
             for i in range(3):
                 for j in range(3):
-                    kelem[3+i, 3+j] += EI * wt * J * dN[i] * dN[j]
+                    kelem[i, j] += EI * wt * J * dN2[i] * dN2[j]
 
         # change order from [w1,w2,w3,th1,th2,th3] => [w1, th1, w2, th2, w3, th3]
         new_order = np.array([0, 3, 1, 4, 2, 5])
@@ -61,13 +61,16 @@ class AsymptoticIsogeometricTimoshenkoElement:
     def get_felem(self, mag, elem_length, left_bndry:bool, right_bndry:bool):
         """get element load vector"""
         J = elem_length # not half because xi in [0, 1] for IGA
-        pts, wts = third_order_quadrature()
+        pts, wts = second_order_quadrature()
+        # pts, wts = third_order_quadrature()
         felem = np.zeros(6)
         for xi, wt in zip(pts, wts):
             xi = 0.5 * (xi + 1)
-            N, dN = get_iga2_basis(xi, left_bndry, right_bndry)
+            N, _ = get_iga2_basis(xi, left_bndry, right_bndry)
             for i in range(3):
+                # w_b and w_s get loads cause w = w_b + w_s
                 felem[2 * i] += mag  * wt * J * N[i]
+                felem[2 * i + 1] += mag * wt * J * N[i]
         return felem
     
     def _build_restriction_matrix(self, nxe_c):
@@ -140,11 +143,12 @@ class AsymptoticIsogeometricTimoshenkoElement:
             fine_disp[idof::dpn] += np.dot(P, coarse_disp[idof::dpn])
             fine_weights[idof::dpn] += np.dot(P, np.ones(nnodes_coarse))
 
-        # fine_disp /= fine_weights
+        fine_disp /= fine_weights
 
         # apply bcs again, no need same answer either way
         fine_disp[0] = 0.0
-        fine_disp[-2] = 0.0
+        fine_disp[1] = 0.0 # gauge fix
+        fine_disp[-2] = -fine_disp[-1] # w_b + w_s = 0 orthog projector
 
         if self.clamped:
             fine_disp[1] = 0.0
@@ -170,64 +174,13 @@ class AsymptoticIsogeometricTimoshenkoElement:
             coarse_defect[idof::dpn] += np.dot(R, fine_defect[idof::dpn])
 
         # apply bcs.. to coarse defect also
-        # coarse_defect[0] = 0.0
-        # coarse_defect[-2] = 0.0
+        coarse_defect[0] = 0.0
+        coarse_defect[-2] = 0.0
+        coarse_defect[1] = 0.0 # this is actually an important constraint
+
         if self.clamped:
             coarse_defect[1] = 0.0
             coarse_defect[-1] = 0.0
 
         return coarse_defect
 
-
-
-    # def restrict_defect(self, fine_defect, length:float):
-    #     # from fine defect to this assembler as coarse defect
-
-    #     # fine size
-    #     ndof_fine = fine_defect.shape[0]
-    #     nnodes_fine = ndof_fine // 2
-    #     nelems_fine = nnodes_fine - 1
-
-    #     # coarse size
-    #     nelems_coarse = nelems_fine // 2
-    #     # assert(nelems_coarse == self.num_elements)
-    #     nnodes_coarse = nelems_coarse + 1
-    #     ndof_coarse = 2 * nnodes_coarse
-
-    #     # allocate final array
-    #     coarse_defect = np.zeros(ndof_coarse)
-    #     fine_weights = np.zeros(ndof_fine) # for global partition of unity normalization
-
-    #     # compute first the fine weights (I do this better way on GPU).. and other codes, this is lightweight implementation, don't care here
-    #     for ielem_c in range(nelems_coarse):
-    #         for i, inode_f in enumerate(range(2 * ielem_c, 2 * ielem_c + 3)):
-    #             fine_weights[2 * inode_f] += 1.0
-    #             fine_weights[2 * inode_f + 1] += 1.0
-
-    #     # begin by apply bcs to fine defect in (usually not necessary)
-    #     fine_defect[0] = 0.0
-    #     fine_defect[1] = 0.0
-    #     fine_defect[-2] = 0.0
-    #     fine_defect[-1] = 0.0
-
-    #     # loop through coarse elements to compute restricted defect
-    #     for ielem_c in range(nelems_coarse):
-    #         coarse_elem_dof = np.array([2 * _node + _dof for _node in [ielem_c, ielem_c + 1] for _dof in range(2)])
-            
-    #         # interpolate the w DOF first using FEA basis
-    #         for i, inode_f in enumerate(range(2 * ielem_c, 2 * ielem_c + 3)):
-    #             xi = -1.0 + 1.0 * i
-    #             nodal_in = fine_defect[2 * inode_f : (2 * inode_f + 2)] / fine_weights[2 * inode_f : (2 * inode_f + 2)]
-    #             coarse_out = interp_lagrange_transpose(xi, nodal_in)
-    #             coarse_defect[coarse_elem_dof] += coarse_out
-
-            
-    #     # apply bcs.. to coarse defect also
-    #     coarse_defect[0] = 0.0
-    #     coarse_defect[-2] = 0.0
-        
-    #     if self.clamped:        
-    #         coarse_defect[1] = 0.0
-    #         coarse_defect[-1] = 0.0
-
-    #     return coarse_defect
