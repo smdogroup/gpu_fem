@@ -62,9 +62,7 @@ class HierarchicRotHermiteElement:
             psi_val = [lagrange(i, xi) for i in range(2)]
             for i_s in range(2):
                 for j_s in range(2):
-                    # where does the *24 come from?
-                    corr = 24.0
-                    kelem[4+i_s, 4+j_s] += k_shear * GA * qfactor * psi_val[i_s] * psi_val[j_s] * corr
+                    kelem[4+i_s, 4+j_s] += k_shear * GA * qfactor * psi_val[i_s] * psi_val[j_s]
 
         # reorder to your desired ordering: [w1, th1, gam1, w2, th2, gam2]
         new_order = np.array([0, 1, 4, 2, 3, 5])

@@ -37,7 +37,7 @@ class HierarchicIsogeometricDispElement:
 
             for i in range(3):
                 for j in range(3):
-                    c_shear = ksGA * wt * J * 24.0 # 24.0 correction? see other elems
+                    c_shear = ksGA * wt * J
                     kelem[3+i,3+j] += c_shear * dN[i] * dN[j]
             
         # bending energy = int 0.5 * EI * w_{b,xx}^2 dx

@@ -45,7 +45,7 @@ elif args.elem == 'aig':
     ELEMENT = AsymptoticIsogeometricTimoshenkoElement(reduced_integrated=False)
     is_iga = True
 elif args.elem == 'higd':
-    ELEMENT = HierarchicIsogeometricDispElement()
+    ELEMENT = HierarchicIsogeometricDispElement(reduced_integrated=False)
     is_iga = True
 
 # ================================
@@ -184,7 +184,9 @@ A = b * thick
 Ks = 5.0 / 6.0
 G = E / 2.0 / (1 + nu)
 x = L / 2.0 # center of beam
-exact_disp = qmag * L**4 / 24.0 / E / I * (x / L - 2.0 * x**3 / L**3 + x**4 / L**4) + qmag * L**2 / 24.0 / G / A / Ks * (x / L - x**2 / L**2)
+# fixed mistake is 1/2 on TS part.. 1/24 for EB is correct
+# this removes correction of 24 in a bunch of TS elems
+exact_disp = qmag * L**4 / 24.0 / E / I * (x / L - 2.0 * x**3 / L**3 + x**4 / L**4) + qmag * L**2 / 2.0 / G / A / Ks * (x / L - x**2 / L**2)
 
 # predicted disp
 u = assembler.u.copy()

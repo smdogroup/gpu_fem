@@ -35,8 +35,7 @@ class TimoshenkoElement:
 
             for i in range(2):
                 for j in range(2):
-                    # where does the *24 come from?
-                    c_shear = ksGA * wt * J * 24.0
+                    c_shear = ksGA * wt * J
                     kelem[i,j] += c_shear * dpsi[i] * dpsi[j]
                     kelem[i, 2+j] -= c_shear * dpsi[i] * psi_val[j]
                     kelem[2+i, j] -= c_shear * psi_val[i] * dpsi[j]

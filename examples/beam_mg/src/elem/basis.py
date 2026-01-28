@@ -5,7 +5,7 @@ import numpy as np
 # =============================
 
 def zero_order_quadrature():
-    return [0.0], [1.0]
+    return [0.0], [2.0] # why 2.0 here? because 1/2 in integration?
 
 def first_order_quadrature():
     irt3 = np.sqrt(1.0/3.0)
