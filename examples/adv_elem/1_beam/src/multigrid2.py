@@ -79,7 +79,7 @@ def debug_plot(dof_per_node, grid, vec1, vec2):
 
 def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int=1, 
                  debug_print:bool=False, print_freq:int=1, double_smooth:bool=True, can_print:bool=True, 
-                 line_search:bool=True, smoothers=None):
+                 line_search:bool=True, smoothers=None, rtol:float=1e-6):
     # grids are just assembler objects usually (no unified GRID object)
     nlevels = len(grids)
     dof_per_node = grids[0].dof_per_node # get from finest grid assembler
@@ -190,7 +190,7 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
         # check conv
         defect_norm = np.linalg.norm(defects[0])
         if i_cycle % print_freq == 0 and can_print: print(f"V[{i_cycle}] : {defect_norm=:.2e}")
-        if defect_norm <= 1e-6 * init_defect_norm:
+        if defect_norm <= rtol * init_defect_norm:
             converged = True
             break
 

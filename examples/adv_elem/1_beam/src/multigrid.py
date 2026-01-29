@@ -34,6 +34,7 @@ class VcycleSolver:
         n_smooth:int=1,
         print:bool=True,
         print_freq:int=1,
+        plot:bool=False
     ):
         self.grids = grids # aka assemblers
         self.smoothers = smoothers
@@ -41,6 +42,7 @@ class VcycleSolver:
         self.n_smooth = n_smooth
         self.print = print
         self.print_freq = print_freq
+        self.plot = plot
 
         self.i_cycle = 0
 
@@ -59,8 +61,9 @@ class VcycleSolver:
         converged = False
 
         true_soln = sp.sparse.linalg.spsolve(mats[0].copy(), defects[0])
-        print(f"level 0 true soln")
-        debug_plot_diff(dpn, self.grids[0], self.grids[0], vec1=defects[0], vec2=true_soln)
+        if self.plot:
+            print(f"level 0 true soln")
+            debug_plot_diff(dpn, self.grids[0], self.grids[0], vec1=defects[0], vec2=true_soln)
 
         for i_cycle in range(self.n_cycles):
 
@@ -73,21 +76,23 @@ class VcycleSolver:
                 self.smoothers[i].smooth_defect(solns[i], defects[i])
 
                 # # check defect is actual defect
-                if i == 0:
+                if i == 0 and self.plot:
                     new_defect = defects[i].copy()
                     act_defect = rhs.copy() - mats[i].dot(solns[i])
                     diff = new_defect - act_defect
                     diff_nrm = np.linalg.norm(diff)
                     defect_nrm = np.linalg.norm(act_defect)
                     print(f"{i_cycle=} {diff_nrm=:.4e} in pre-smooth level {i=} {defect_nrm=:.4e}")
-                debug_plot(dpn, self.grids[i], vec1=pre_defect, vec2=defects[i])
+                if self.plot: 
+                    debug_plot(dpn, self.grids[i], vec1=pre_defect, vec2=defects[i])
 
                 # restrict
                 defects[i+1] = self.grids[i+1].restrict_defect(defects[i].copy())
                 solns[i+1] *= 0.0 # resets coarse soln when you restrict defect
 
-                print(f"level {i} to {i+1} restrict")
-                debug_plot_diff(dpn, self.grids[i], self.grids[i+1], vec1=defects[i], vec2=defects[i+1])
+                if self.plot:
+                    print(f"level {i} to {i+1} restrict")
+                    debug_plot_diff(dpn, self.grids[i], self.grids[i+1], vec1=defects[i], vec2=defects[i+1])
 
             # coarse grid solve
             solns[nlevels-1] = sp.sparse.linalg.spsolve(mats[nlevels-1].copy(), defects[nlevels-1])
@@ -131,8 +136,11 @@ class VcycleSolver:
                 #     print(f"{i_cycle=} {diff_nrm=:.4e} in prolong level {i=} {defect_nrm=:.4e}")
 
                 print(f"level {i+1} to {i} prolongate with {omega=:.2e}")
-                debug_plot_diff(dpn, self.grids[i+1], self.grids[i], vec1=solns[i+1], vec2=solns[i])
+                debug_plot_diff(dpn, self.grids[i+1], self.grids[i], vec1=solns[i+1], vec2=omega * dx)
+                print(f"level {i} prolong vs full-soln")
+                debug_plot_diff(dpn, self.grids[i], self.grids[i], vec1=omega * dx, vec2=solns[i])
                 post_soln = solns[i].copy()
+                post_defect = defects[i].copy()
 
                 # post-smooth
                 self.smoothers[i].smooth_defect(solns[i], defects[i])
@@ -147,7 +155,7 @@ class VcycleSolver:
                 #     defect_nrm = np.linalg.norm(act_defect)
                 #     print(f"{i_cycle=} {diff_nrm=:.4e} in post-smooth level {i=} {defect_nrm=:.4e}")
                 print(f"post smooth")
-                debug_plot_diff(dpn, self.grids[i], self.grids[i], vec1=post_soln, vec2=solns[i])
+                debug_plot_diff(dpn, self.grids[i], self.grids[i], vec1=post_defect, vec2=defects[i])
 
             # check conv
             defect_norm = np.linalg.norm(defects[0])

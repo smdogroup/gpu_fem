@@ -25,7 +25,7 @@ class IGABeamAssembler:
         self.nu = nu
         self.thick = thick
         self.L = L
-        self.load_fcn = lambda x : load_fcn(x) / self.nxe
+        self.load_fcn = load_fcn
         self.split_disp_bc = split_disp_bc
         
         # internal data
@@ -306,6 +306,10 @@ class IGABeamAssembler:
     def control_pts(self) -> list:
         # control points for IGA
         return [i*self.elem_length for i in range(self.nnodes)]
+    
+    @property
+    def xvec(self) -> list:
+        return self.control_pts # just for simple plots debugging
 
     def plot_disp(self, idof:int=0):
         xvec = self.get_node_pts() # not same as control points

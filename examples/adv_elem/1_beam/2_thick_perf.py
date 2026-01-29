@@ -62,7 +62,8 @@ for SR in SR_vec:
             nxe=args.nxe,
             thick=thick,
             clamped=clamped,
-            split_disp_bc=elem in ['hhd', 'higd']
+            split_disp_bc=elem in ['hhd', 'higd'],
+            load_fcn = lambda x : np.sin(4.0 * np.pi * x)
         )
 
         # ================================
@@ -85,7 +86,8 @@ for SR in SR_vec:
                 nxe=nxe,
                 thick=thick,
                 clamped=clamped,
-                split_disp_bc=elem in ['hhd', 'higd']
+                split_disp_bc=elem in ['hhd', 'higd'],
+                load_fcn = lambda x : np.sin(4.0 * np.pi * x)
             )
             grid._assemble_system()
             grids += [grid]
@@ -107,7 +109,7 @@ for SR in SR_vec:
         assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
                                             #  line_search=not(args.elem == 'aig'))
                                             # line search sometimes hurts high cond # cases (high defects in prolong)
-                                            line_search=not(elem in ['aig', 'tsr', 'hhd']), 
+                                            line_search=not(elem in ['aig', 'tsr', 'hhd', 'higd']),                                             
                                             # line_search=True,
                                             smoothers=smoothers)
         if ncyc >= 99:

@@ -26,6 +26,7 @@ parser.add_argument("--omega", type=float, default=0.9, help="omega smoother coe
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="run debug codes")
+parser.add_argument("--verify", action=argparse.BooleanOptionalAction, default=False, help="verify defln with simple load")
 args = parser.parse_args()
 
 
@@ -59,6 +60,13 @@ elif args.elem == 'drig':
 # clamped = True
 clamped = False # simply supported
 
+if args.verify:
+    load_fcn = lambda x : 1.0 # simple load
+else:
+    # need non-simple load in general case (otherwise MG performance may be too benign for hermite elems)
+    # as each level can exactly solve it.. no iterative conv
+    load_fcn = lambda x : np.sin(4.0 * np.pi * x)
+
 ASSEMBLER = IGABeamAssembler if is_iga else StandardBeamAssembler
 
 assembler = ASSEMBLER(
@@ -66,7 +74,8 @@ assembler = ASSEMBLER(
     nxe=args.nxe,
     thick=args.thick,
     clamped=clamped,
-    split_disp_bc=args.elem in ['hhd', 'higd']
+    split_disp_bc=args.elem in ['hhd', 'higd'],
+    load_fcn=load_fcn,
 )
 
 if not('mg' in args.solve):
@@ -97,7 +106,8 @@ if 'mg' in args.solve:
             nxe=nxe,
             thick=args.thick,
             clamped=clamped,
-            split_disp_bc=args.elem in ['hhd', 'higd']
+            split_disp_bc=args.elem in ['hhd', 'higd'],
+            load_fcn=load_fcn,
         )
         grid._assemble_system()
         grids += [grid]
@@ -141,7 +151,7 @@ elif args.solve == 'vmg':
         assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
                                         #  line_search=not(args.elem == 'aig'))
                                         # line search sometimes hurts high cond # cases (high defects in prolong)
-                                        line_search=not(args.elem in ['aig', 'tsr', 'hhd']), 
+                                        line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
                                         # line_search=True,
                                         smoothers=smoothers)
 
@@ -180,7 +190,7 @@ if args.plot:
 
 # exact solution for center deflection
 b = 1.0; thick = args.thick
-L = assembler.L; E = assembler.E; qmag = 1.0 / assembler.nxe; nu = assembler.nu
+L = assembler.L; E = assembler.E; qmag = 1.0; nu = assembler.nu
 I = b * thick**3 / 12.0
 A = b * thick
 Ks = 5.0 / 6.0

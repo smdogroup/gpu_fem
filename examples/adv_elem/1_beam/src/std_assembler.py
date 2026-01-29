@@ -75,7 +75,7 @@ class StandardBeamAssembler:
         # assemble BSR matrix
         self.data = np.zeros((self.nnzb, self.dof_per_node, self.dof_per_node), dtype=np.double)
         x_vals = [(ielem+0.5) * self.elem_length for ielem in range(self.nxe)]
-        load_vals = [self.load_fcn(x_val) / self.nxe for x_val in x_vals]
+        load_vals = [self.load_fcn(x_val) for x_val in x_vals]
 
         kelem = self.element.get_kelem(self.E, self.nu, self.thick, self.elem_length)
         unit_felem = self.element.get_felem(mag=1.0, elem_length=self.elem_length)
