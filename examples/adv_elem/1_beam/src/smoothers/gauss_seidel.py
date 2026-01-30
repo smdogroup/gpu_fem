@@ -46,7 +46,6 @@ def block_gauss_seidel(A, b: np.ndarray, x0: np.ndarray, num_iter=1, dof_per_nod
             except np.linalg.LinAlgError:
                 print(f"Warning: singular block at node {i}, skipping update.")
                 continue
-
     return x
 
 class BlockGaussSeidel:

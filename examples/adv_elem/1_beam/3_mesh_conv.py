@@ -115,7 +115,8 @@ for nxe in nxe_vec:
             assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
                                                 #  line_search=not(args.elem == 'aig'))
                                                 # line search sometimes hurts high cond # cases (high defects in prolong)
-                                                line_search=not(elem in ['aig', 'tsr', 'hhd', 'higd']), 
+                                                # line_search=not(elem in ['aig', 'tsr', 'hhd', 'higd']), 
+                                                line_search=False,
                                                 # line_search=True,
                                                 smoothers=smoothers, rtol=1e-9)
             

@@ -13,6 +13,7 @@ class HierarchicIsogeometricDispElement:
         self.nodes_per_elem = 3
         self.reduced_integrated = reduced_integrated
         self.clamped = True
+        self.ORDER = 2 # 2nd order IGA
 
         # self.reduced_integrated = True
 

@@ -11,7 +11,7 @@ from smoothers import BlockGaussSeidel, OnedimAddSchwarz, right_pcg2, right_pgmr
 from multigrid2 import vcycle_solve, VMG
 
 # IGA elements
-from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement, DeRhamIsogeometricDispElement
+from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement, DeRhamIsogeometricElement2
 from iga_assembler import IGABeamAssembler
 
 import argparse
@@ -50,7 +50,7 @@ elif args.elem == 'higd':
     ELEMENT = HierarchicIsogeometricDispElement(reduced_integrated=False)
     is_iga = True
 elif args.elem == 'drig':
-    ELEMENT = DeRhamIsogeometricDispElement(reduced_integrated=False)
+    ELEMENT = DeRhamIsogeometricElement2(reduced_integrated=False)
     is_iga = True
 
 # ================================
@@ -127,7 +127,8 @@ if 'mg' in args.solve:
 
     vmg = VcycleSolver(
         grids=grids,
-        smoothers=smoothers
+        smoothers=smoothers,
+        plot=args.plot,
     )
 
 
@@ -151,7 +152,8 @@ elif args.solve == 'vmg':
         assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
                                         #  line_search=not(args.elem == 'aig'))
                                         # line search sometimes hurts high cond # cases (high defects in prolong)
-                                        line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
+                                        # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
+                                        line_search=False,
                                         # line_search=True,
                                         smoothers=smoothers)
 
@@ -179,6 +181,7 @@ elif args.solve == 'kmg':
 
 idof = 0
 # idof = 1
+# idof = 2
 
 if args.plot:
     assembler.plot_disp(idof=idof)
@@ -188,35 +191,37 @@ if args.plot:
 # VERIFICATION
 # ==============================
 
-# exact solution for center deflection
-b = 1.0; thick = args.thick
-L = assembler.L; E = assembler.E; qmag = 1.0; nu = assembler.nu
-I = b * thick**3 / 12.0
-A = b * thick
-Ks = 5.0 / 6.0
-G = E / 2.0 / (1 + nu)
-x = L / 2.0 # center of beam
-# fixed mistake is 1/2 on TS part.. 1/24 for EB is correct
-# this removes correction of 24 in a bunch of TS elems
-exact_disp = qmag * L**4 / 24.0 / E / I * (x / L - 2.0 * x**3 / L**3 + x**4 / L**4) + qmag * L**2 / 2.0 / G / A / Ks * (x / L - x**2 / L**2)
+if args.verify:
 
-# predicted disp
-u = assembler.u.copy()
-if args.elem in ['hhd']:
-    # hierarchic disp has shear + bending split
-    w = u[0::3] + u[2::3]
-elif args.elem in ['higd']:
-    w = u[0::2] + u[1::2]
-else:
-    w = u[0::assembler.dof_per_node]
-pred_disp = np.max(w)
+    # exact solution for center deflection
+    b = 1.0; thick = args.thick
+    L = assembler.L; E = assembler.E; qmag = 1.0; nu = assembler.nu
+    I = b * thick**3 / 12.0
+    A = b * thick
+    Ks = 5.0 / 6.0
+    G = E / 2.0 / (1 + nu)
+    x = L / 2.0 # center of beam
+    # fixed mistake is 1/2 on TS part.. 1/24 for EB is correct
+    # this removes correction of 24 in a bunch of TS elems
+    exact_disp = qmag * L**4 / 24.0 / E / I * (x / L - 2.0 * x**3 / L**3 + x**4 / L**4) + qmag * L**2 / 2.0 / G / A / Ks * (x / L - x**2 / L**2)
 
-REL_ERR = abs((pred_disp - exact_disp) / exact_disp)
-print(f"{pred_disp=:.4e} {exact_disp=:.4e} {REL_ERR=:.4e}")
+    # predicted disp
+    u = assembler.u.copy()
+    if args.elem in ['hhd']:
+        # hierarchic disp has shear + bending split
+        w = u[0::3] + u[2::3]
+    elif args.elem in ['higd']:
+        w = u[0::2] + u[1::2]
+    else:
+        w = u[0::assembler.dof_per_node]
+    pred_disp = np.max(w)
+
+    REL_ERR = abs((pred_disp - exact_disp) / exact_disp)
+    print(f"{pred_disp=:.4e} {exact_disp=:.4e} {REL_ERR=:.4e}")
 
 
-# ratio to EB solution
-eb_disp = qmag * L**4 / 24.0 / E / I * (x / L - 2.0 * x**3 / L**3 + x**4 / L**4)
-ts_over_eb = exact_disp / eb_disp
-margin = ts_over_eb - 1.0
-print(f"TS/EB disp = 1 + {margin=:.4e}")
+    # ratio to EB solution
+    eb_disp = qmag * L**4 / 24.0 / E / I * (x / L - 2.0 * x**3 / L**3 + x**4 / L**4)
+    ts_over_eb = exact_disp / eb_disp
+    margin = ts_over_eb - 1.0
+    print(f"TS/EB disp = 1 + {margin=:.4e}")

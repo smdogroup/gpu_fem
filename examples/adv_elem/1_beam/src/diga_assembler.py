@@ -1,9 +1,10 @@
+# TBD..import numpy as np
 import scipy.sparse as sp
 import numpy as np
 import matplotlib.pyplot as plt
 
-class IGABeamAssembler:
-    # for IGA bases or elements
+class DifferentialIGABeamAssembler:
+    # uses 0-form and 1-forms in IGA for Timoshenko beam
 
     def __init__(
         self,
@@ -31,8 +32,6 @@ class IGABeamAssembler:
         self.kmat = None
         self.force = None
         self.u = None
-        
-        assert self.element.ORDER == 2 # 2nd order IGA only currently
         self.nnodes = nxe + 2 # for 2nd order IGA elements p = 2, nnodes = nxe + p generally
         self.dof_per_node = self.element.dof_per_node
         self.N = self.dof_per_node * self.nnodes

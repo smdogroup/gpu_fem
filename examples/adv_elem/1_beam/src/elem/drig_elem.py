@@ -2,10 +2,10 @@ import numpy as np
 from .basis import third_order_quadrature, zero_order_quadrature, second_order_quadrature
 from .basis import get_iga2_basis
 
-class DeRhamIsogeometricDispElement:
+class DeRhamIsogeometricElement2:
     """
     # De Rham (cohomology) IGA plate element
-    # based on paper: https://grandmaster.colorado.edu/copper/2016/StudentCompetition/Benzaken_Isogeometric_Multigrid.pdf
+    # based on paper: https://www.sciencedirect.com/science/article/abs/pii/S0045782511003215
     # "An isogeometric method for the Reissner-Mindlin plate bending problem" by Veiga
 
     # see also the thickness-independent Schwarz multigrid smoothers for it in Benzaken et al.,
@@ -24,6 +24,7 @@ class DeRhamIsogeometricDispElement:
         self.nodes_per_elem = 3
         self.reduced_integrated = reduced_integrated
         self.clamped = True
+        self.ORDER = 2 # 2nd order IGA
 
     def get_kelem(self, E:float, nu:float, thick:float, elem_length:float, left_bndry:bool, right_bndry:bool):
         # quadratic element with 2 DOF per node
@@ -37,15 +38,17 @@ class DeRhamIsogeometricDispElement:
 
         kelem = np.zeros((9, 9))
         EI = E * thick**3 / 12.0
+        # EI2 = EI / thick**2
         ks = 5.0 / 6.0
         G = E / 2.0 / (1 + nu)
         ksGA = ks * G * thick
         J = elem_length # dx/dxi jacobian
 
         # bending energy = int EI * th_{,x} * dth_{,x} dx
-        for xi, wt in zip(pts, weights):
+        for _xi, _wt in zip(pts, weights):
             # IGA quadpts are [0,1] not [-1,1] so slight adjustment here
-            xi = 0.5 * (xi + 1)
+            xi = 0.5 * (_xi + 1)
+            wt = 0.5 * _wt # for smaller window of xi
             _, dN = get_iga2_basis(xi, left_bndry, right_bndry)
             dN /= J
             for i in range(3):
@@ -53,9 +56,10 @@ class DeRhamIsogeometricDispElement:
                     kelem[3+i, 3+j] += EI * wt * J * dN[i] * dN[j]
 
         # trv shear + shear consistency energy
-        for xi, wt in zip(shear_pts, shear_wts):
+        for _xi, _wt in zip(shear_pts, shear_wts):
             # IGA quadpts are [0,1] not [-1,1] so slight adjustment here
-            xi = 0.5 * (xi + 1)
+            xi = 0.5 * (_xi + 1)
+            wt = 0.5 * _wt # for smaller window of xi
             N, dN = get_iga2_basis(xi, left_bndry, right_bndry)
             dN /= J
 
@@ -63,15 +67,13 @@ class DeRhamIsogeometricDispElement:
                 for j in range(3):
                     c_shear = ksGA * wt * J * thick**2 # boosted now...
                     # trv shear energy = int kSGA * gam*(dth - dw') dx
-                    kelem[6+i, 3+j] += c_shear * N[i] * N[j] # (gam,dth)
-                    kelem[6+i, j] -= c_shear * N[i] * dN[j]  # (gam,dw)
+                    kelem[3+j, 6+i] += c_shear * N[i] * N[j] # (dth, gam)
+                    kelem[j, 6+i] -= c_shear * N[i] * dN[j]  # (dw, gam)
 
                     # this second part technically shows up in consistency constraint
-                    kelem[j, 6+i] -= wt * J * N[i] * dN[j] # (w,dgam)
-                    kelem[3+j, 6+i] += wt * J * N[i] * N[j] # (th, dgam)
-
-                    # with also int thick^2 *  gam * dgam dx
-                    kelem[6+i, 6+j] -= wt * J * thick**2 * N[i] * N[j] # (gam,dgam)
+                    kelem[6+i, j] += ksGA * wt * J * N[i] * dN[j] # (dgam, w)
+                    kelem[6+i, 3+j] -= ksGA * wt * J * N[i] * N[j] # (dgam, th)
+                    kelem[6+i, 6+j] += ksGA * wt * J * thick**2 * N[i] * N[j] # (dgam,gam)
 
         # import matplotlib.pyplot as plt
         # plt.imshow(np.log(np.abs(kelem) + 1e-14))
@@ -90,8 +92,9 @@ class DeRhamIsogeometricDispElement:
         # pts, wts = third_order_quadrature()
         x0, x1 = xbnd[0], xbnd[1]
         felem = np.zeros(9)
-        for xi, wt in zip(pts, wts):
-            xi = 0.5 * (xi + 1)
+        for _xi, _wt in zip(pts, wts):
+            xi = 0.5 * (_xi + 1)
+            wt = 0.5 * _wt # for smaller window of xi
             xval = x0 * (1.0 - xi) + x1 * xi
             load_mag = mag(xval)
             N, _ = get_iga2_basis(xi, left_bndry, right_bndry)
@@ -177,7 +180,7 @@ class DeRhamIsogeometricDispElement:
 
         if self.clamped:
             fine_disp[1] = 0.0
-            fine_disp[-1] = 0.0
+            fine_disp[-2] = 0.0
             
         return fine_disp
     
@@ -196,6 +199,7 @@ class DeRhamIsogeometricDispElement:
         coarse_defect = np.zeros(ndof_coarse)
         dpn = self.dof_per_node
         for idof in range(dpn):
+        # for idof in range(2): # not all DOF
             coarse_defect[idof::dpn] += np.dot(R, fine_defect[idof::dpn])
 
         # apply bcs.. to coarse defect also
@@ -204,6 +208,6 @@ class DeRhamIsogeometricDispElement:
 
         if self.clamped:
             coarse_defect[1] = 0.0
-            coarse_defect[-1] = 0.0
+            coarse_defect[-2] = 0.0
 
         return coarse_defect
