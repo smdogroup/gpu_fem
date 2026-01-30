@@ -44,7 +44,6 @@ class IGAPlateAssembler:
         self.elem_length = self.length / (self.nnodes - 1)
         self.elem_width = self.width / (self.nnodes - 1)
         self.num_elements = self.nxe**2
-        dpn = self.dof_per_node
         
         assert not clamped # for now
         self.clamped = clamped
@@ -71,133 +70,155 @@ class IGAPlateAssembler:
 
         # matrix sparsity constructed directly from elem conn
         self.rowp, self.cols, self.nnzb = build_csr_from_conn(self.conn, self.nnodes)
-        
-        # self.data = np.ones(self.nnzb)
-        # self.csr_mat = sp.csr_matrix((self.data, self.cols, self.rowp), shape=(self.nnodes, self.nnodes))
-        # plt.spy(self.csr_mat)
-        # plt.show()
-        # print(f"{self.rowp=}\n{self.cols=}\n{self.nnzb=}")
 
     def _assemble_system(self):
         # assemble BSR matrix
         self.data = np.zeros((self.nnzb, self.dof_per_node, self.dof_per_node), dtype=np.double)
-        xbnd_vals = [[ielem * self.elem_length, (ielem+2) * self.elem_length] for ielem in range(self.nxe)]
 
-        interior_kelem = self.element.get_kelem(self.E, self.nu, self.thick, self.elem_length, left_bndry=False, right_bndry=False)
         dpn = self.dof_per_node
         self.force = np.zeros(self.N)
+        self.dx = self.length / (self.nnx - 1)
         
         # compute LHS and RHS no BCs
-        for ielem in range(self.nxe):
-            # print(f"{ielem=} {xbnd_vals[ielem]=}")
-            if ielem == 0:
-                kelem = self.element.get_kelem(self.E, self.nu, self.thick, self.elem_length, left_bndry=True, right_bndry=False)
-                felem = self.element.get_felem(mag=self.load_fcn, elem_length=self.elem_length, left_bndry=True, right_bndry=False, xbnd=xbnd_vals[ielem])
-            elif ielem == self.nxe - 1:
-                kelem = self.element.get_kelem(self.E, self.nu, self.thick, self.elem_length, left_bndry=False, right_bndry=True)
-                felem = self.element.get_felem(mag=self.load_fcn, elem_length=self.elem_length, left_bndry=False, right_bndry=True, xbnd=xbnd_vals[ielem])
-            else: # interior
-                kelem = interior_kelem
-                felem = self.element.get_felem(mag=self.load_fcn, elem_length=self.elem_length, left_bndry=False, right_bndry=False, xbnd=xbnd_vals[ielem])
+        for ielem in range(self.num_elements):
+            ixe = ielem % self.nxe; iye = ielem // self.nxe 
+            loc_conn = self.conn[ielem]
+            elem_xpts = np.zeros(27)
+            for lnode, gnode in enumerate(elem_xpts):
+                ix, iy = gnode % self.nnx, gnode // self.nnx
+                elem_xpts[3 * lnode] = ix * self.dx
+                elem_xpts[3 * lnode + 1] = iy * self.dx
+            
+            kelem = self.element.get_kelem(
+                self.E, self.nu, self.thick, elem_xpts,
+                left_bndry=ixe == 0,
+                right_bndry=ixe == self.nnx - 1,
+                bot_bndry=iye == 0,
+                top_bndry=iye == self.nnx - 1,
+            )
 
-            local_conn = np.array(self.dof_conn[ielem])
+            felem = self.element.get_felem(
+                mag=self.load_fcn,
+                elem_xpts=elem_xpts,
+                left_bndry=ixe == 0,
+                right_bndry=ixe == self.nnx - 1,
+                bot_bndry=iye == 0,
+                top_bndry=iye == self.nnx - 1,
+            )
+
             # add kelem into LHS sparse structure
-            for lblock_row,block_row in enumerate([ielem, ielem+1, ielem+2]):
+            for lblock_row,block_row in enumerate(loc_conn):
                 for colp in range(self.rowp[block_row], self.rowp[block_row+1]):
                     block_col = self.cols[colp]
-                    if block_col in [ielem, ielem+1, ielem+2]:
-                        lblock_col = block_col - ielem
-
-                        # my_mat = kelem[dpn*lblock_row:dpn*(lblock_row+1), 
-                        #                              dpn*lblock_col:dpn*(lblock_col+1)]
-                        # print(f"{my_mat.shape=} {lblock_col=} {kelem.shape=}")                    
+                    if block_col in loc_conn:
+                        # get which val
+                        lblock_col = np.argwhere(loc_conn == block_col)                 
                         
+                        # add in one nodal block of kelem
                         self.data[colp,:,:] += kelem[dpn*lblock_row:dpn*(lblock_row+1), 
                                                      dpn*lblock_col:dpn*(lblock_col+1)]
 
             # add felem into RHS
-            np.add.at(self.force, local_conn, felem)
+            np.add.at(self.force, loc_conn, felem)
 
         if self.split_disp_bc:
-            # dpn = 3 with local dofs: [w_b, (dw/dxi)_b, w_s]
-            # SS: enforce w_b + w_s = 0 at BOTH ends by overwriting the w_b row (idof=0).
-            # Extra gauge-fix: pin w_s(0) = 0 by overwriting the w_s row (idof=2) at the left end.
 
-            # ---- LEFT END (node 0): w_b + w_s = 0 (overwrite w_b row) ----
-            # tried changing it to just w_b = 0 on left side since also w_s = 0
-            inode = 0
-            for colp in range(self.rowp[inode], self.rowp[inode + 1]):
-                block_col = self.cols[colp]
-                idof = 0  # w_b row
-                for jdof in range(dpn):
-                    self.data[colp, idof, jdof] = 0.0
-                if block_col == inode:
-                    self.data[colp, 0, 0] = 1.0  # w_b
-                    self.data[colp, 0, 1] = 1.0  # w_s
+            for block_row in range(self.nnodes):
+                ix, iy = block_row % self.nnx, block_row // self.nnx
+                
+                # bottom-left corner
+                if ix == 0 and iy == 0:
+                    # w_b = w_s1 = w_s2 = 0
+                    for colp in range(self.rowp[block_row], self.rowp[block_row + 1]):
+                        block_col = self.cols[colp]
+                        if block_col == block_row:
+                            self.data[colp, :, :] = np.eye(3) 
+                        else:
+                            self.data[colp, :, :] = 0.0
+                    
+                    self.force[dpn * block_row + 0] = 0.0 # w_b = 0
+                    self.force[dpn * block_row + 1] = 0.0 # w_s1 = 0
+                    self.force[dpn * block_row + 2] = 0.0 # w_s2 = 0
 
-            # ---- LEFT END (node 0): gauge fix w_s(0) = 0 (overwrite w_s row) ----
-            # the extra gauge constraint here removes constant mode from integrated shear strains th_s => w_s (cause non-unique)
-            inode = 0
-            for colp in range(self.rowp[inode], self.rowp[inode + 1]):
-                block_col = self.cols[colp]
-                idof = 1  # w_s row
-                for jdof in range(dpn):
-                    self.data[colp, idof, jdof] = 0.0
-                if block_col == inode:
-                    self.data[colp, 1, 1] = 1.0  # w_s = 0
+                elif ix == 0: # left edge
+                    # w_b + w_s1 + w_s2 = 0
+                    # and w_s2 = 0
+                    for colp in range(self.rowp[block_row], self.rowp[block_row + 1]):
+                        block_col = self.cols[colp]
+                        self.data[colp, 0, :] = 0.0
+                        self.data[colp, 2, :] = 0.0
+                        if block_col == block_row:
+                            self.data[colp, 0, 0] = 1.0
+                            self.data[colp, 0, 1] = 1.0
+                            self.data[colp, 0, 2] = 1.0
+                            self.data[colp, 2, 2] = 1.0
+                            
+                    self.force[dpn * block_row + 0] = 0.0 # w_b + w_s1 + w_s2 = 0
+                    self.force[dpn * block_row + 2] = 0.0 # w_s2 = 0
 
-            # ---- RIGHT END (node nnodes-1): w_b + w_s = 0 (overwrite w_b row) ----
-            inode = self.nnodes - 1
-            for colp in range(self.rowp[inode], self.rowp[inode + 1]):
-                block_col = self.cols[colp]
-                idof = 0  # w_b row
-                for jdof in range(dpn):
-                    self.data[colp, idof, jdof] = 0.0
-                if block_col == inode:
-                    self.data[colp, 0, 0] = 1.0  # w_b
-                    self.data[colp, 0, 1] = 1.0  # w_s
+                elif iy == 0: # bottom edge 
+                    # w_b + w_s1 + w_s2 = 0
+                    # and w_s1 = 0
+                    for colp in range(self.rowp[block_row], self.rowp[block_row + 1]):
+                        block_col = self.cols[colp]
+                        self.data[colp, 0, :] = 0.0
+                        self.data[colp, 1, :] = 0.0
+                        if block_col == block_row:
+                            self.data[colp, 0, 0] = 1.0
+                            self.data[colp, 0, 1] = 1.0
+                            self.data[colp, 0, 2] = 1.0
+                            self.data[colp, 1, 1] = 1.0
 
-            # RHS for those constraint rows:
-            self.force[dpn * 0 + 0] = 0.0                 # (w_b + w_s)(0) = 0
-            self.force[dpn * 0 + 1] = 0.0                 # w_s(0) = 0  (gauge fix)
-            self.force[dpn * (self.nnodes - 1) + 0] = 0.0 # (w_b + w_s)(L) = 0
+                    self.force[dpn * block_row + 0] = 0.0 # w_b + w_s1 + w_s2 = 0
+                    self.force[dpn * block_row + 1] = 0.0 # w_s1 = 0
+
+                else: # all other edges just w_b + w_s1 + w_s2 = 0 constr
+                    for colp in range(self.rowp[block_row], self.rowp[block_row + 1]):
+                        block_col = self.cols[colp]
+                        self.data[colp, 0, :] = 0.0
+                        if block_col == block_row:
+                            self.data[colp, 0, 0] = 1.0
+                            self.data[colp, 0, 1] = 1.0
+                            self.data[colp, 0, 2] = 1.0
+
+                    self.force[dpn * block_row + 0] = 0.0 # w_b + w_s1 + w_s2 = 0
 
 
-        else: # not split disp BC (regular SS or clamped)
+        # else: # not split disp BC (regular SS or clamped)
 
-            # apply bcs to LHS and RHS
-            # node 1 - SS BC
-            for colp in range(self.rowp[0], self.rowp[1]):
-                block_col = self.cols[colp]
-                for idof in range(dpn):
-                    row = idof
-                    if not(row in self.bcs): continue
-                    for jdof in range(dpn):
-                        col = dpn * block_col + jdof
-                        self.data[colp, idof, jdof] = 1.0 if (row == col) else 0.0
-            # last node - SS BC
-            for colp in range(self.rowp[self.nnodes-1], self.rowp[self.nnodes]):
-                block_col = self.cols[colp]
-                for idof in range(dpn):
-                    row = dpn * (self.nnodes-1) + idof
-                    if not(row in self.bcs): continue
-                    for jdof in range(dpn):
-                        col = dpn * block_col + jdof
-                        self.data[colp, idof, jdof] = 1.0 if (row == col) else 0.0
+        #     # apply bcs to LHS and RHS
+        #     # node 1 - SS BC
+        #     for colp in range(self.rowp[0], self.rowp[1]):
+        #         block_col = self.cols[colp]
+        #         for idof in range(dpn):
+        #             row = idof
+        #             if not(row in self.bcs): continue
+        #             for jdof in range(dpn):
+        #                 col = dpn * block_col + jdof
+        #                 self.data[colp, idof, jdof] = 1.0 if (row == col) else 0.0
+        #     # last node - SS BC
+        #     for colp in range(self.rowp[self.nnodes-1], self.rowp[self.nnodes]):
+        #         block_col = self.cols[colp]
+        #         for idof in range(dpn):
+        #             row = dpn * (self.nnodes-1) + idof
+        #             if not(row in self.bcs): continue
+        #             for jdof in range(dpn):
+        #                 col = dpn * block_col + jdof
+        #                 self.data[colp, idof, jdof] = 1.0 if (row == col) else 0.0
 
-            for bc in self.bcs:
-                self.force[bc] = 0.0
+        #     for bc in self.bcs:
+        #         self.force[bc] = 0.0
         
         self.kmat = sp.bsr_matrix(
             (self.data, self.cols, self.rowp),
             shape=(self.N, self.N)
         )
 
-    # def direct_solve(self):
-    #     self._assemble_system()
-    #     self.u = sp.linalg.spsolve(self.kmat, self.force)
-    #     # print(f"{self.u=}")
-    #     return self.u
+    def direct_solve(self):
+        self._assemble_system()
+        self.u = sp.linalg.spsolve(self.kmat, self.force)
+        # print(f"{self.u=}")
+        return self.u
     
     # def get_node_pts(self) -> list:
     #     """
