@@ -12,7 +12,7 @@ from multigrid2 import vcycle_solve, VMG
 
 # IGA elements
 from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement
-from iga_assembler import IGABeamAssembler
+# from iga_assembler import IGABeamAssembler
 from iga_assembler2 import IGABeamAssemblerV2
 
 import argparse
@@ -24,20 +24,13 @@ parser.add_argument("--omega", type=float, default=0.9, help="omega smoother coe
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
 args = parser.parse_args()
 
+# nxe_vec = [4, 8, 16, 32, 64, 128]
 # nxe_vec = [4, 8, 16, 32, 64, 128, 256, 512, 1024]
 nxe_vec = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
-beam_types = ['eb', 'ts', 'tsr', 'aig', 'hhd', 'higd']
-# beam_types = ['eb', 'hhr', 'hhd', 'higd']
+# beam_types = ['eb', 'tsr', 'hhd', 'higd']
+# beam_types = ['eb', 'aig', 'ts', 'tsr', 'hhr', 'hhd', 'higd']
+beam_types = ['eb', 'tsr', 'ts', 'aig', 'hhr', 'hhd', 'higd']
 deflections = {key:[] for key in beam_types}
-
-load_fcn = lambda x : np.sin(4 * np.pi * x)
-
-# m = 4.0
-# load_fcn = lambda x: (
-#             np.sin(m*np.pi*x)
-#             + 0.35*np.sin(3*m*np.pi*x)
-#             + 0.2*np.sin(7*m*np.pi*x)
-#         ) * np.exp(-4*(x-0.5)**2)
 
 for nxe in nxe_vec:
     thick = args.thick
@@ -67,6 +60,9 @@ for nxe in nxe_vec:
         # make beam assembler
         # ================================
 
+        # m = 1.0
+        m = 4.0
+
         # clamped = True
         clamped = False # simply supported
         # ASSEMBLER = IGABeamAssembler if is_iga else StandardBeamAssembler
@@ -77,8 +73,7 @@ for nxe in nxe_vec:
             thick=thick,
             clamped=clamped,
             split_disp_bc=elem in ['hhd', 'higd'],
-            # load_fcn=lambda x : np.sin(m * np.pi * x) # need non-standard load fcn to get mesh conv behavior
-            load_fcn=load_fcn
+            load_fcn=lambda x : np.sin(m * np.pi * x) # need non-standard load fcn to get mesh conv behavior
         )
 
         # ================================
@@ -98,7 +93,7 @@ for nxe in nxe_vec:
             # double_smooth = True
             double_smooth = False
 
-            nsmooth = args.nsmooth
+            nsmooth = args.nsmooth if not(elem in ['tsr', 'ts', 'aig']) else 4
             _nxe = nxe
             while (_nxe >= nxe_min):
                 # print(f"{nxe=}")
@@ -108,8 +103,7 @@ for nxe in nxe_vec:
                     thick=thick,
                     clamped=clamped,
                     split_disp_bc=elem in ['hhd', 'higd'],
-                    # load_fcn=lambda x : np.sin(m * np.pi * x) # need non-standard load fcn to get mesh conv behavior
-                    load_fcn = load_fcn
+                    load_fcn=lambda x : np.sin(m * np.pi * x) # need non-standard load fcn to get mesh conv behavior
                 )
                 grid._assemble_system()
                 grids += [grid]
@@ -149,13 +143,19 @@ for nxe in nxe_vec:
         else:
             w = u[0::assembler.dof_per_node]
         pred_disp = np.max(w)
+        if pred_disp >= 1.0e0:
+           pred_disp = np.nan 
+        elif pred_disp <= 1e-12:
+            pred_disp = np.nan
+            
+        if is_iga:
+            # trying to see if this makes a difference in IGA conv
+            pred_disp = assembler.get_max_deflection_greville()
 
         deflections[elem] += [pred_disp]
-
 # ==================================
-# now plot each runtimes
+# plot max displacement vs nxe
 # ==================================
-
 import niceplots
 plt.style.use(niceplots.get_style())
 
@@ -164,38 +164,53 @@ fig, ax = plt.subplots()
 # colors = ["#d95a72", "#f3d27d", "#3cc7a1", "#3b90b3"]
 colors = ["#d95a72", "#eb9a79", "#f3d27d", "#3cc7a1", "#3b90b3", "#1a4c60", "k"]
 
+nxe_arr = np.array(nxe_vec, dtype=int)
+
 for ibeam, beam in enumerate(beam_types):
-    h_vec = 1.0 / np.array(nxe_vec)
-    deflns = np.array(deflections[beam])
-    rel_err = np.abs((np.array(deflns[:-1]) - deflns[-1]) / deflns[-1])
-    print(f"{deflns=}\n{rel_err=}")
+    deflns = np.array(deflections[beam], dtype=float)
 
-    ax.plot(h_vec[:-1], rel_err, 'o-' if not(beam == 'hhd') else 'o--', 
-             color=colors[ibeam], label=beam,
-             linewidth=2.5, markersize=7)
-    
-# plt.xlabel("Slenderness")
-plt.xlabel("h (m)")
-plt.xscale('log')
-plt.ylabel(f"Defln L2 rel err")
-plt.yscale('log')
-# plt.ylabel("Runtime (sec)")
-# plt.yscale('log')
-plt.legend()
-# plt.show()
+    # "converged" reference: finest mesh value
+    if ibeam == 0:
+        ax.hlines(deflns[-1], nxe_arr[0], nxe_arr[-1],
+                  linestyles='--', linewidth=1.5, color='k', alpha=1.0)
+
+    # main curve: max displacement vs nxe
+    ax.plot(
+        nxe_arr, deflns,
+        'o-' if beam != 'hhd' else 'o--',
+        color=colors[ibeam], label=beam,
+        linewidth=2.5, markersize=7
+    )
+   
+              
+
+ax.set_xlabel("nxe")
+ax.set_xscale("log")
+ax.set_ylabel("max displacement (predicted)")
+# ax.set_yscale("log")  # optional; comment out if you prefer linear y
+
+ax.legend()
 plt.margins(x=0.05, y=0.05)
-# plt.axis([0.5, 2e3, -1, 30])
-# plt.axis([1.0/2e3, 2.0, -1, 50])
 
-# fix xtick labels
+# nice tick labels for log-x
 xticks = ax.get_xticks()
-xlabels = [f"$10^{{{int(np.log10(x))}}}$" if x > 0 else "" for x in xticks]
+xlabels = []
+for x in xticks:
+    if x <= 0:
+        xlabels.append("")
+    else:
+        # show powers of 2-ish cleanly if you want, otherwise generic 10^k
+        xlabels.append(f"$10^{{{int(np.log10(x))}}}$")
 ax.set_xticklabels(xlabels)
 
+# optional: y tick formatting (same style you used)
+# yticks = ax.get_yticks()
+# ylabels = []
+# for y in yticks:
+#     if y <= 0:
+#         ylabels.append("")
+#     else:
+#         ylabels.append(f"$10^{{{int(np.log10(y))}}}$")
+# ax.set_yticklabels(ylabels)
 
-yticks = ax.get_yticks()
-ylabels = [f"$10^{{{int(np.log10(x))}}}$" if x > 0 else "" for x in yticks]
-ax.set_yticklabels(ylabels)
-
-# plt.savefig("hybrid-beam-multigrid-times.png", dpi=400)
-plt.savefig(f"beam-multigrid-conv.png", dpi=400)
+plt.savefig("beam-maxdisp-vs-nxe.png", dpi=400)

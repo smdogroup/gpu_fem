@@ -12,7 +12,8 @@ from multigrid2 import vcycle_solve, VMG
 
 # IGA elements
 from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement
-from iga_assembler import IGABeamAssembler
+# from iga_assembler import IGABeamAssembler
+from iga_assembler2 import IGABeamAssemblerV2
 
 import argparse
 parser = argparse.ArgumentParser()
@@ -29,7 +30,7 @@ args = parser.parse_args()
 
 SR_vec = [1.0, 3.0, 10.0, 30.0, 50.0, 1e2, 300.0, 500.0, 1e3]
 # beam_types = ['eb', 'tsr', 'hhr', 'hhd', 'higd']
-beam_types = ['eb', 'tsr', 'hhd', 'higd']
+beam_types = ['eb', 'tsr', 'aig', 'hhr', 'hhd', 'higd']
 runtimes = {key:[] for key in beam_types}
 
 for SR in SR_vec:
@@ -49,6 +50,10 @@ for SR in SR_vec:
         elif elem == 'higd':
             ELEMENT = HierarchicIsogeometricDispElement(reduced_integrated=False)
             is_iga = True
+        elif elem == 'aig':
+            # ELEMENT = AsymptoticIsogeometricTimoshenkoElement(reduced_integrated=True)
+            ELEMENT = AsymptoticIsogeometricTimoshenkoElement(reduced_integrated=False)
+            is_iga = True
 
         # ================================
         # make beam assembler
@@ -56,7 +61,9 @@ for SR in SR_vec:
 
         # clamped = True
         clamped = False # simply supported
-        ASSEMBLER = IGABeamAssembler if is_iga else StandardBeamAssembler
+        # ASSEMBLER = IGABeamAssembler if is_iga else StandardBeamAssembler
+        ASSEMBLER = IGABeamAssemblerV2 if is_iga else StandardBeamAssembler
+        
         assembler = ASSEMBLER(
             ELEMENT=ELEMENT,
             nxe=args.nxe,
@@ -127,7 +134,8 @@ plt.style.use(niceplots.get_style())
 
 fig, ax = plt.subplots()
 
-colors = ["#d95a72", "#f3d27d", "#3cc7a1", "#3b90b3"]
+# colors = ["#d95a72", "#f3d27d", "#3cc7a1", "#3b90b3"]
+colors = ["#d95a72", "#eb9a79", "#f3d27d", "#3cc7a1", "#3b90b3", "#1a4c60", "k"]
 thick_vec = 1.0 / np.array(SR_vec)
 
 for ibeam, beam in enumerate(beam_types):
@@ -158,4 +166,4 @@ ax.set_yticks([0, 10, 20, 30, 40, 50])
 ax.set_yticklabels(["0", "10", "20", "30", "40", "50"])
 
 # plt.savefig("hybrid-beam-multigrid-times.png", dpi=400)
-plt.savefig("beam-multigrid-cycles.png", dpi=400)
+plt.savefig(f"beam-multigrid-cycles_{args.smoother}.png", dpi=400)

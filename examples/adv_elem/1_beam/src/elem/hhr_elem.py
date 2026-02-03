@@ -27,7 +27,10 @@ class HierarchicRotHermiteElement:
         kelem = np.zeros((6, 6))
         pts, weights = second_order_quadrature()
         # do need to reduce integrate the shear part still.. otherwise experiences thick plate locking
-        shear_pts, shear_wts = zero_order_quadrature() 
+        if self.reduced_integrated:
+            shear_pts, shear_wts = zero_order_quadrature() 
+        else:
+            shear_pts, shear_wts = second_order_quadrature() # not reduced integrated
         J = elem_length / 2.0
         EI = E * thick**3 / 12.0
         GA = E * thick / 2.0 / (1 + nu)

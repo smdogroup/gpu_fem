@@ -12,7 +12,9 @@ from multigrid2 import vcycle_solve, VMG
 
 # IGA elements
 from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement, DeRhamIsogeometricElement2
-from iga_assembler import IGABeamAssembler
+from elem import AsymptoticIsogeometricTimoshenkoElementV2
+# from iga_assembler import IGABeamAssembler
+from iga_assembler2 import IGABeamAssemblerV2
 
 import argparse
 parser = argparse.ArgumentParser()
@@ -44,7 +46,9 @@ elif args.elem == 'hhr':
 elif args.elem == 'hhd':
     ELEMENT = HierarchicDispHermiteElement(reduced_integrated=False)
 elif args.elem == 'aig':
+    # ELEMENT = AsymptoticIsogeometricTimoshenkoElement(reduced_integrated=True)
     ELEMENT = AsymptoticIsogeometricTimoshenkoElement(reduced_integrated=False)
+    # ELEMENT = AsymptoticIsogeometricTimoshenkoElementV2(reduced_integrated=False)
     is_iga = True
 elif args.elem == 'higd':
     ELEMENT = HierarchicIsogeometricDispElement(reduced_integrated=False)
@@ -67,7 +71,8 @@ else:
     # as each level can exactly solve it.. no iterative conv
     load_fcn = lambda x : np.sin(4.0 * np.pi * x)
 
-ASSEMBLER = IGABeamAssembler if is_iga else StandardBeamAssembler
+# ASSEMBLER = IGABeamAssembler if is_iga else StandardBeamAssembler
+ASSEMBLER = IGABeamAssemblerV2 if is_iga else StandardBeamAssembler
 
 assembler = ASSEMBLER(
     ELEMENT=ELEMENT,
@@ -179,13 +184,6 @@ elif args.solve == 'kmg':
     )
 
 
-idof = 0
-# idof = 1
-# idof = 2
-
-if args.plot:
-    assembler.plot_disp(idof=idof)
-
 
 # ==============================
 # VERIFICATION
@@ -225,3 +223,28 @@ if args.verify:
     ts_over_eb = exact_disp / eb_disp
     margin = ts_over_eb - 1.0
     print(f"TS/EB disp = 1 + {margin=:.4e}")
+
+else:
+    # predicted disp
+    u = assembler.u.copy()
+    if args.elem in ['hhd']:
+        # hierarchic disp has shear + bending split
+        w = u[0::3] + u[2::3]
+    elif args.elem in ['higd']:
+        w = u[0::2] + u[1::2]
+    else:
+        w = u[0::assembler.dof_per_node]
+    pred_disp = np.max(w)
+
+    if is_iga:
+        # trying to see if this makes a difference in IGA conv
+        pred_disp = assembler.get_max_deflection_greville()
+    print(f"{pred_disp=}")
+
+
+# idof = 0
+idof = 1
+# idof = 2
+
+if args.plot:
+    assembler.plot_disp(idof=idof)

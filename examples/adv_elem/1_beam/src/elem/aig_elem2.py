@@ -5,75 +5,83 @@ from .basis import get_iga2_basis
 # based on this paper AIG, https://www.sciencedirect.com/science/article/pii/S0045782525005997
 # "Asymptotically accurate and geometric locking-free finite element implementation of a refined shell theory"
 
-class AsymptoticIsogeometricTimoshenkoElement:
-    """fully integrated timoshenko beam element (experiences locking"""
-    def __init__(self, reduced_integrated:bool=False):              
-        self.dof_per_node = 2
+class AsymptoticIsogeometricTimoshenkoElementV2:
+    """AIG-scaled Timoshenko: x' = x/h and theta' = h*theta (DOF stores theta')"""
+    def __init__(self, reduced_integrated: bool = False):
+        self.dof_per_node = 2              # [w, theta_prime]
         self.nodes_per_elem = 3
         self.reduced_integrated = reduced_integrated
         self.clamped = True
-        self.ORDER = 2 # 2nd order IGA
+        self.ORDER = 2
 
-    def get_kelem(self, E:float, nu:float, thick:float, elem_length:float, left_bndry:bool, right_bndry:bool):
-        # quadratic element with 2 DOF per node
-        # pts, weights = third_order_quadrature()
+    def get_kelem(self, E: float, nu: float, thick: float, elem_length: float,
+                  left_bndry: bool, right_bndry: bool):
+
         pts, weights = second_order_quadrature()
-
         if self.reduced_integrated:
             shear_pts, shear_wts = zero_order_quadrature()
         else:
-            # shear_pts, shear_wts = third_order_quadrature()
-            shear_pts, shear_wts = second_order_quadrature()
+            shear_pts, shear_wts = third_order_quadrature()
 
         kelem = np.zeros((6, 6))
-        # sigma = nu / (1.0 - nu)
-        # opsigma = 1.0 / (1.0 - nu) 
         opsigma = 1.0
-        EI = E / 12.0
+
+        # Physical stiffnesses (start as you requested)
+        EI = (thick**3) * E / 12.0
         ks = 5.0 / 6.0
-        G = E / 2.0 / (1 + nu)
-        ksGA = ks * G
-        J = elem_length # dx/dxi jacobian
-        J /= thick
+        G  = E / (2.0 * (1.0 + nu))
+        ksGA = ks * G * thick
 
-        # trv shear energy
+        # ---- AIG scaling: integrate over x' = x/thick ----
+        # With xi in [0,1], x = elem_length * xi so x' = (elem_length/thick) * xi
+        Jp = elem_length / thick   # dx'/dxi
+
+        # After scaling:
+        # bending prefactor: EI / thick^3 = E/12
+        # shear prefactor:   ksGA / thick  = ks*G
+        Cb = (EI / (thick**3)) * opsigma   # = E/12 * opsigma
+        Cs = (ksGA / thick)                # = ks*G
+
+        # --------------------
+        # Shear: ∫ Cs (w_{,x'} - theta')^2 dx'
+        # --------------------
         for xi, wt in zip(shear_pts, shear_wts):
-            # IGA quadpts are [0,1] not [-1,1] so slight adjustment here
-            xi = 0.5 * (xi + 1)
+            xi = 0.5 * (xi + 1.0)  # map [-1,1] -> [0,1]
             N, dN = get_iga2_basis(xi, left_bndry, right_bndry)
-            dN /= J
-            # print(f"{N=} {dN=}")
+
+            # d/dx' = (1/Jp) d/dxi
+            dNdxp = dN / Jp
+
+            c = Cs * wt * Jp  # dx' = Jp dxi
 
             for i in range(3):
                 for j in range(3):
-                    c_shear = ksGA * wt * J
-                    kelem[i,j] += c_shear * dN[i] * dN[j]
-                    kelem[i, 3+j] -= c_shear * dN[i] * N[j]
-                    kelem[3+i, j] -= c_shear * N[i] * dN[j]
-                    kelem[3+i, 3+j] += c_shear * N[i] * N[j]
-            
-        # bending energy
+                    # (w')^2 block
+                    kelem[i, j] += c * dNdxp[i] * dNdxp[j]
+                    # - w' * theta' blocks
+                    kelem[i, 3 + j] -= c * dNdxp[i] * N[j]
+                    kelem[3 + i, j] -= c * N[i] * dNdxp[j]
+                    # (theta')^2 block
+                    kelem[3 + i, 3 + j] += c * N[i] * N[j]
+
+        # --------------------
+        # Bending: ∫ Cb (theta'_{,x'})^2 dx'
+        # --------------------
         for xi, wt in zip(pts, weights):
-            # IGA quadpts are [0,1] not [-1,1] so slight adjustment here
-            xi = 0.5 * (xi + 1)
+            xi = 0.5 * (xi + 1.0)
             N, dN = get_iga2_basis(xi, left_bndry, right_bndry)
-            dN /= J
+            dNdxp = dN / Jp
+
+            c = Cb * wt * Jp
             for i in range(3):
                 for j in range(3):
-                    kelem[3+i, 3+j] += EI * wt * J * dN[i] * dN[j] * opsigma
+                    kelem[3 + i, 3 + j] += c * dNdxp[i] * dNdxp[j]
 
-        # import matplotlib.pyplot as plt
-        # plt.imshow(kelem)
-        # plt.show()
-
-        # divide all rot DOF by thickness..
-        # kelem[3:6,:] /= thick
-        # kelem[:,3:6] /= thick
-
-        # change order from [w1,w2,w3,th1,th2,th3] => [w1, th1, w2, th2, w3, th3]
+        # reorder [w1,w2,w3,thp1,thp2,thp3] -> [w1,thp1,w2,thp2,w3,thp3]
         new_order = np.array([0, 3, 1, 4, 2, 5])
         kelem = kelem[new_order, :][:, new_order]
         return kelem
+
 
     def get_felem(self, mag, elem_length, left_bndry:bool, right_bndry:bool, xbnd:list):
         """get element load vector"""
@@ -198,57 +206,3 @@ class AsymptoticIsogeometricTimoshenkoElement:
             coarse_defect[-1] = 0.0
 
         return coarse_defect
-
-
-
-    # def restrict_defect(self, fine_defect, length:float):
-    #     # from fine defect to this assembler as coarse defect
-
-    #     # fine size
-    #     ndof_fine = fine_defect.shape[0]
-    #     nnodes_fine = ndof_fine // 2
-    #     nelems_fine = nnodes_fine - 1
-
-    #     # coarse size
-    #     nelems_coarse = nelems_fine // 2
-    #     # assert(nelems_coarse == self.num_elements)
-    #     nnodes_coarse = nelems_coarse + 1
-    #     ndof_coarse = 2 * nnodes_coarse
-
-    #     # allocate final array
-    #     coarse_defect = np.zeros(ndof_coarse)
-    #     fine_weights = np.zeros(ndof_fine) # for global partition of unity normalization
-
-    #     # compute first the fine weights (I do this better way on GPU).. and other codes, this is lightweight implementation, don't care here
-    #     for ielem_c in range(nelems_coarse):
-    #         for i, inode_f in enumerate(range(2 * ielem_c, 2 * ielem_c + 3)):
-    #             fine_weights[2 * inode_f] += 1.0
-    #             fine_weights[2 * inode_f + 1] += 1.0
-
-    #     # begin by apply bcs to fine defect in (usually not necessary)
-    #     fine_defect[0] = 0.0
-    #     fine_defect[1] = 0.0
-    #     fine_defect[-2] = 0.0
-    #     fine_defect[-1] = 0.0
-
-    #     # loop through coarse elements to compute restricted defect
-    #     for ielem_c in range(nelems_coarse):
-    #         coarse_elem_dof = np.array([2 * _node + _dof for _node in [ielem_c, ielem_c + 1] for _dof in range(2)])
-            
-    #         # interpolate the w DOF first using FEA basis
-    #         for i, inode_f in enumerate(range(2 * ielem_c, 2 * ielem_c + 3)):
-    #             xi = -1.0 + 1.0 * i
-    #             nodal_in = fine_defect[2 * inode_f : (2 * inode_f + 2)] / fine_weights[2 * inode_f : (2 * inode_f + 2)]
-    #             coarse_out = interp_lagrange_transpose(xi, nodal_in)
-    #             coarse_defect[coarse_elem_dof] += coarse_out
-
-            
-    #     # apply bcs.. to coarse defect also
-    #     coarse_defect[0] = 0.0
-    #     coarse_defect[-2] = 0.0
-        
-    #     if self.clamped:        
-    #         coarse_defect[1] = 0.0
-    #         coarse_defect[-1] = 0.0
-
-    #     return coarse_defect

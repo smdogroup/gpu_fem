@@ -48,6 +48,10 @@ class TimoshenkoElement:
                 for j in range(2):
                     kelem[2+i, 2+j] += EI * wt * J * dpsi[i] * dpsi[j]
 
+        # import matplotlib.pyplot as plt
+        # plt.imshow(kelem)
+        # plt.show()
+
         # change order from [w1,w2,th1,th2] => [w1, th1, w2, th2]
         new_order = np.array([0, 2, 1, 3])
         kelem = kelem[new_order, :][:, new_order]
