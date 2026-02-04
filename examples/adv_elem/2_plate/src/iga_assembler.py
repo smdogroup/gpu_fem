@@ -41,6 +41,9 @@ class IGAPlateAssembler:
         self.num_elements = self.nxe**2
 
         # TODO : fix based on IGABeamAssemblerV2 to get proper mesh conv rate
+        self.dx_ctrl = self.length / (self.nnx - 1) # control point spacing
+        self.h_span = self.length / self.nxe # knot span length (integration interval)
+        self.dy_ctrl = self.width / (self.nnx - 1)
         # self.dx = self.length / (self.nnx - 1)
         # self.dy = self.width  / (self.nnx - 1)
 
@@ -100,8 +103,8 @@ class IGAPlateAssembler:
             for lnode, gnode in enumerate(loc_conn):
                 ix = gnode % self.nnx
                 iy = gnode // self.nnx
-                elem_xpts[3*lnode + 0] = ix * self.dx
-                elem_xpts[3*lnode + 1] = iy * self.dy
+                elem_xpts[3*lnode + 0] = ix * self.dx_ctrl
+                elem_xpts[3*lnode + 1] = iy * self.dy_ctrl
                 elem_xpts[3*lnode + 2] = 0.0
 
             kelem = self.element.get_kelem(
@@ -165,8 +168,8 @@ class IGAPlateAssembler:
                         self.data[colp,0,2] = 1.0
                 self.force[3*node + 0] = 0.0
 
-                # row 1: w_s1 = 0 on bottom/top
-                if on_bot or on_top:
+                # row 1: w_s1 = 0 on left
+                if on_left: # or on_top:
                     for colp in range(self.rowp[node], self.rowp[node+1]):
                         bc = self.cols[colp]
                         self.data[colp,1,:] = 0.0
@@ -174,8 +177,8 @@ class IGAPlateAssembler:
                             self.data[colp,1,1] = 1.0
                     self.force[3*node + 1] = 0.0
 
-                # row 2: w_s2 = 0 on left/right
-                if on_left or on_right:
+                # row 2: w_s2 = 0 on bottom
+                if on_bot: # or on_right:
                     for colp in range(self.rowp[node], self.rowp[node+1]):
                         bc = self.cols[colp]
                         self.data[colp,2,:] = 0.0
@@ -199,33 +202,82 @@ class IGAPlateAssembler:
 
         self.kmat = sp.bsr_matrix((self.data, self.cols, self.rowp), shape=(self.N, self.N))
 
+        # kmat_dense = self.kmat.toarray()
+        # plt.imshow(np.log(1 + np.abs(kmat_dense) + 1e-14))
+        # plt.show()
+        # print(f'{self.force=}')
+
     def direct_solve(self):
         self._assemble_system()
-        self.u = sp.linalg.spsolve(self.kmat, self.force)
+        self.u = sp.linalg.spsolve(self.kmat.tocsc(), self.force)
+        # self.u = np.linalg.solve(self.kmat.toarray(), self.force)
+
+        # kmat_inv = np.linalg.inv(self.kmat.toarray())
+        # plt.imshow(kmat_inv)
+        # plt.show()
+
+        # system is not being solved correctly..
+        # print(f"{self.u=}")
+        # resid = self.kmat.dot(self.u) - self.force
+        # print(f"{resid=}")
         return self.u
 
-    def plot_w(self, combine_split=True):
-        """Quick debug plot of w over the grid (imshow)."""
+    def plot_disp(self, combine_split=True):
+        """3D surface plot of w(x,y) on the CONTROL grid (debug)."""
         if self.u is None:
             raise RuntimeError("Run direct_solve() first.")
+
         dpn = self.dof_per_node
         U = self.u.reshape((self.nnodes, dpn))
 
-        if self.split_disp_bc and combine_split and dpn == 3:
-            w = U[:,0] + U[:,1] + U[:,2]
-        else:
-            w = U[:,0]
+        # print(f"{U=}")
 
-        W = w.reshape((self.nnx, self.nnx))
-        plt.figure()
-        plt.imshow(W, origin="lower", extent=[0, self.length, 0, self.width], aspect="equal")
-        plt.colorbar(label="w")
-        plt.xlabel("x")
-        plt.ylabel("y")
+        if self.split_disp_bc and combine_split and dpn == 3:
+            w = U[:, 0] + U[:, 1] + U[:, 2]
+        else:
+            w = U[:, 0]
+
+        # IMPORTANT: inode = ix + nnx*iy  -> W[iy, ix]
+        W = w.reshape((self.nnx, self.nnx))  # row=iy, col=ix
+
+        wmin = float(W.min())
+        wmax = float(W.max())
+        # print(f"w range: [{wmin:.6e}, {wmax:.6e}], ptp={wmax-wmin:.6e}")
+
+        # physical coordinates consistent with how you build elem_xpts
+        x = np.arange(self.nnx) * self.dx_ctrl
+        y = np.arange(self.nnx) * self.dy_ctrl
+        X, Y = np.meshgrid(x, y, indexing="xy")   # shapes (ny, nx)
+
+        fig = plt.figure(figsize=(9, 6))
+        ax = fig.add_subplot(111, projection="3d")
+
+        surf = ax.plot_surface(
+            X, Y, W,   # W must be (ny, nx) to match X,Y
+            cmap="viridis",
+            linewidth=0,
+            antialiased=True,
+            shade=True
+        )
+
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("w")
+        ax.view_init(elev=25, azim=-135)
+
+        # Don’t let aspect ratio blow up if deflection is tiny
+        zrange = max(1e-14, wmax - wmin)
+        # ax.set_box_aspect((self.length, self.width, zrange))
+
+        fig.colorbar(surf, ax=ax, shrink=0.6, pad=0.08, label="w")
+        plt.tight_layout()
         plt.show()
 
+
+
+
     def prolongate(self, coarse_soln):
-        return self.element.prolongate(coarse_soln, self.L)
+        return self.element.prolongate(coarse_soln)
     
     def restrict_defect(self, fine_defect):
-        return self.element.restrict_defect(fine_defect, self.L)
+        return self.element.restrict_defect(fine_defect)

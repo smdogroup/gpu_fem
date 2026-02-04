@@ -13,16 +13,23 @@ from elem import HierarchicIsogeometricDispElement9
 # from smoothers import BlockGaussSeidel, OnedimAddSchwarz, right_pcg2, right_pgmres2
 # from multigrid2 import vcycle_solve, VMG
 
+sys.path.append("../1_beam/src/")
+from multigrid2 import vcycle_solve, VMG
+from smoothers import BlockGaussSeidel
+
+sys.path.append("../../asw/_py_demo/_src/")
+from asw import TwodimAddSchwarz
+
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--elem", type=str, default='higd', help="--elem, options: tbd")
-parser.add_argument("--nxe", type=int, default=32, help="number of elements")
-parser.add_argument("--nxemin", type=int, default=16, help="min # elems multigrid")
+parser.add_argument("--nxe", type=int, default=16, help="number of elements")
+parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--omega", type=float, default=0.9, help="omega smoother coeff (sometimes needs to be lower)")
-parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
+parser.add_argument("--smoother", type=str, default='gs', help="--smooth : [gs, asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="run debug codes")
 parser.add_argument("--verify", action=argparse.BooleanOptionalAction, default=False, help="verify defln with simple load")
@@ -45,12 +52,15 @@ if args.elem == 'higd':
 # clamped = True
 clamped = False # simply supported
 
-if args.verify:
-    load_fcn = lambda x : 1.0 # simple load
-else:
-    # need non-simple load in general case (otherwise MG performance may be too benign for hermite elems)
-    # as each level can exactly solve it.. no iterative conv
-    load_fcn = lambda x,y : np.sin(4.0 * np.pi * x) * np.sin(4.0 * np.pi * y)
+load_fcn = lambda x,y : 1.0e2 # simple load
+
+# if args.verify:
+#     load_fcn = lambda x,y : 1.0 # simple load
+# else:
+#     m, n = 2, 3
+#     # need non-simple load in general case (otherwise MG performance may be too benign for hermite elems)
+#     # as each level can exactly solve it.. no iterative conv
+#     load_fcn = lambda x,y : np.sin(m * np.pi * x) * np.sin(n * np.pi * y)
 
 # ASSEMBLER = IGAPlateAssembler if is_iga else StandardBeamAssembler
 ASSEMBLER = IGAPlateAssembler
@@ -64,84 +74,85 @@ assembler = ASSEMBLER(
     load_fcn=load_fcn,
 )
 
-# if not('mg' in args.solve):
-#     assembler._assemble_system()
-#     # plt.imshow(assembler.kmat.toarray())
-#     # plt.show()
+if not('mg' in args.solve):
+    assembler._assemble_system()
+    # plt.imshow(assembler.kmat.toarray())
+    # plt.show()
 
-# # ================================
-# # make multigrid object (optional)
-# # ================================
+# ================================
+# make multigrid object (optional)
+# ================================
 
-# if 'mg' in args.solve:
-#     # make V-cycle solver
-#     nxe = args.nxe
-#     nxe_min = args.nxemin
-#     if args.debug:
-#         nxe_min = nxe // 2
-#     grids = []
-#     smoothers = []
-#     # double_smooth = True
-#     double_smooth = False
+if 'mg' in args.solve:
+    # make V-cycle solver
+    nxe = args.nxe
+    nxe_min = args.nxemin
+    if args.debug:
+        nxe_min = nxe // 2
+    grids = []
+    smoothers = []
+    # double_smooth = True
+    double_smooth = False
 
-#     nsmooth = args.nsmooth
-#     while (nxe >= nxe_min):
-#         print(f"{nxe=}")
-#         grid = ASSEMBLER(
-#             ELEMENT=ELEMENT,
-#             nxe=nxe,
-#             thick=args.thick,
-#             clamped=clamped,
-#             split_disp_bc=args.elem in ['hhd', 'higd'],
-#             load_fcn=load_fcn,
-#         )
-#         grid._assemble_system()
-#         grids += [grid]
-#         if args.smoother == 'gs':
-#             smoother = BlockGaussSeidel.from_assembler(
-#                 grid, omega=args.omega, iters=nsmooth
-#             )
-#         elif args.smoother == 'asw':
-#             omega = args.omega / 2.0 # since 2x smoothing
-#             smoother = OnedimAddSchwarz.from_assembler(
-#                 grid, omega=omega, iters=nsmooth, coupled_size=2
-#             )
-#         smoothers += [smoother]
-#         nxe = nxe // 2
-#         if double_smooth:
-#             nsmooth *= 2
+    nsmooth = args.nsmooth
+    while (nxe >= nxe_min):
+        print(f"{nxe=}")
+        grid = ASSEMBLER(
+            ELEMENT=ELEMENT,
+            nxe=nxe,
+            thick=args.thick,
+            clamped=clamped,
+            split_disp_bc=args.elem in ['hhd', 'higd'],
+            load_fcn=load_fcn,
+        )
+        grid._assemble_system()
+        grids += [grid]
+        if args.smoother == 'gs':
+            smoother = BlockGaussSeidel.from_assembler(
+                grid, omega=args.omega, iters=nsmooth
+            )
+        elif args.smoother == 'asw':
+            smoother = None
+            omega = args.omega / 2.0 # since 2x smoothing
+            smoother = TwodimAddSchwarz.from_assembler(
+                grid, omega=omega, iters=nsmooth, coupled_size=2
+            )
+        smoothers += [smoother]
+        nxe = nxe // 2
+        if double_smooth:
+            nsmooth *= 2
 
-#     vmg = VcycleSolver(
-#         grids=grids,
-#         smoothers=smoothers,
-#         plot=args.plot,
-#     )
+    # vmg = VcycleSolver(
+    #     grids=grids,
+    #     smoothers=smoothers,
+    #     plot=args.plot,
+    # )
 
 
-# # ============================
-# # linear solve
-# # ============================
+# ============================
+# linear solve
+# ============================
 
-# if args.solve == 'direct':
-#     assembler.direct_solve()
-# elif args.solve == 'vmg':
-#     # DEBUG
-#     if args.debug:
-#         assembler._assemble_system()
-#         assembler.u = vmg.solve(assembler.force)
+if args.solve == 'direct':
+    assembler.direct_solve()
+elif args.solve == 'vmg':
+    # DEBUG
+    # if args.debug:
+    #     assembler._assemble_system()
+    #     assembler.u = vmg.solve(assembler.force)
 
-#     # proper V-cycle solver
-#     if not args.debug:
-#         # smoothers = None # DEBUG
-#         # print("WARNING using internal GS smoother, not ASW/GS created above")
+    # proper V-cycle solver
+    if not args.debug:
+        # smoothers = None # DEBUG
+        # print("WARNING using internal GS smoother, not ASW/GS created above")
 
-#         assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
-#                                         #  line_search=not(args.elem == 'aig'))
-#                                         # line search sometimes hurts high cond # cases (high defects in prolong)
-#                                         # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
-#                                         line_search=False,
-#                                         # line_search=True,
-#                                         smoothers=smoothers)
+        assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
+                                        #  line_search=not(args.elem == 'aig'))
+                                        # line search sometimes hurts high cond # cases (high defects in prolong)
+                                        # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
+                                        line_search=False, # often need it turned off.. for best conv
+                                        # line_search=True,
+                                        smoothers=smoothers)
 
 # elif args.solve == 'kmg':
 #     vmg.n_cycles = 2
@@ -165,17 +176,17 @@ assembler = ASSEMBLER(
 #     )
 
 
-# idof = 0
-# # idof = 1
-# # idof = 2
+idof = 0
+# idof = 1
+# idof = 2
 
-# if args.plot:
-#     assembler.plot_disp(idof=idof)
+if args.plot:
+    assembler.plot_disp() #idof=idof)
 
 
-# # ==============================
-# # VERIFICATION
-# # ==============================
+# ==============================
+# VERIFICATION
+# ==============================
 
 # if args.verify:
 

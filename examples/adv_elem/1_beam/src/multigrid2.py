@@ -91,6 +91,8 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
     # print(f"{defects=}")
     # print(f"{}")
 
+    debug = False
+
     init_defect_norm = np.linalg.norm(defects[0])
     if can_print:
         print(f"V-cycle multigrid solve with {nlevels} grids:")
@@ -117,7 +119,7 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
 
             # # plot the defect after smoothing (DEBUG)
             # grids[i].u = defects[i].copy()
-            # grids[i].plot_disp(idof=1)
+            # grids[i].plot_disp()
 
             pre_defect_p1 = defects[i+1].copy()
 
@@ -130,9 +132,29 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
 
             # print(F"{i=} {solns[i].shape=}")
 
+            if debug:
+                print("DEBUG : before pre_smooth defect")
+                grids[i].u = pre_defect
+                grids[i].plot_disp()
+                print("DEBUG : pre_smooth defect")
+                grids[i].u = defects[i]
+                grids[i].plot_disp()
+
+        # DEBUG
+        if debug:
+            print("DEBUG : coarse defect")
+            grids[nlevels-1].u = defects[nlevels-1].copy()
+            grids[nlevels-1].plot_disp()
+
         # coarse grid solve
         if debug_print: print(f"\tcoarse solve on grid[{nlevels-1}]")
         solns[nlevels-1] = sp.sparse.linalg.spsolve(mats[nlevels-1].copy(), defects[nlevels-1])
+
+        # DEBUG
+        if debug:
+            print("DEBUG : coarse solve")
+            grids[nlevels-1].u = solns[nlevels-1].copy()
+            grids[nlevels-1].plot_disp()
 
         # prolong and post-smooth
         for i in range(nlevels-2, -1, -1):
@@ -141,6 +163,18 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
             if debug_print: print(f"\tprolongate [{i+1}]=>[{i}]")
             dx = grids[i].prolongate(solns[i+1])
             df = mats[i].dot(dx)
+
+            # if debug:
+                # print("DEBUG : prolong dx")
+                # grids[i].u = dx.copy()
+                # grids[i].plot_disp()
+
+            # compare to exact solve of defect here
+            # if debug:
+            #     print("DEBUG : exact dx_fine")
+            #     dx_exact = sp.sparse.linalg.spsolve(mats[i].copy(), defects[i])
+            #     grids[i].u = dx_exact.copy()
+            #     grids[i].plot_disp()
 
             # print(f"{dx.shape=}")
 
@@ -157,10 +191,11 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
             #     print(f"{elem_u_c=}")
 
             # # compare the solution the fine solution to prolongate solution (I think something is wrong with the theta DOFs)
-            fine_soln = sp.sparse.linalg.spsolve(mats[i].copy(), defects[i])
-            # debug_plot(dof_per_node, grids[i], vec1=dx, vec2=fine_soln)
-            # debug_plot(dof_per_node, grids[i], vec1=df, vec2=defects[i])
-            # defect_init = defects[i].copy()
+            # if debug:
+            #     fine_soln = sp.sparse.linalg.spsolve(mats[i].copy(), defects[i])
+            #     debug_plot(dof_per_node, grids[i], vec1=dx, vec2=fine_soln)
+            #     debug_plot(dof_per_node, grids[i], vec1=df, vec2=defects[i])
+            #     defect_init = defects[i].copy()
 
             # line search scaling of prolongation (since coarse grid less nodes, one DOF scaling not appropriate on default, 
             # can be off by 2x, 4x or some other constant usually)
@@ -184,6 +219,14 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
                 solns[i], defects[i] = block_gauss_seidel_smoother(mats[i], solns[i], defects[i], num_iter=num_iter, dof_per_node=dof_per_node)
             else:
                 solns[i], defects[i] = call_smoother(smoothers[i], mats[i], solns[i], defects[i])
+
+            if debug:
+                print("DEBUG : before post_smooth defect")
+                grids[i].u = post_init_defect
+                grids[i].plot_disp()
+                print("DEBUG : post_smooth defect")
+                grids[i].u = defects[i]
+                grids[i].plot_disp()
 
             # debug_plot(dof_per_node, grids[0], vec1=post_init_defect, vec2=defects[i])
 

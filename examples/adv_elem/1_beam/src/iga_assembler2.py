@@ -393,6 +393,24 @@ class IGABeamAssemblerV2:
             w_g[ig] = N[0] * w_ctrl[e] + N[1] * w_ctrl[e + 1] + N[2] * w_ctrl[e + 2]
 
         return float(np.max(np.abs(w_g)))
+    
+    def plot_disp(self, idof:int=0):
+        xvec = self.get_node_pts() # not same as control points
+        # xvec = self.control_pts
+        # print(f"{self.u=}")
+        dpn = self.dof_per_node
+        w = self.u[idof::dpn]
+        if self.split_disp_bc:
+            if dpn == 3: # hhd hermite hierarchic disp
+                w = self.u[0::3] + self.u[2::3] # wb + ws
+            elif dpn == 2: # higd iga hierarchic disp
+                w = self.u[0::2] + self.u[1::2] # wb + ws
+        plt.figure()
+        plt.plot(xvec, w)
+        plt.plot(xvec, np.zeros((self.nnodes,)), "k--")
+        plt.xlabel("x")
+        plt.ylabel("w(x)" if idof == 0 else "th(x)")
+        plt.show()  
 
     def prolongate(self, coarse_soln):
         return self.element.prolongate(coarse_soln, self.L)

@@ -96,6 +96,20 @@ class TwodimAddSchwarz:
 
         return
 
+    @classmethod
+    def from_assembler(cls, assembler, omega: float = 0.7, iters: int = 1, coupled_size: int = 2):
+        return cls(
+            assembler.kmat,
+            assembler.force if hasattr(assembler, "force") else assembler.F,
+            nx=assembler.nnx,
+            ny=assembler.nnx,
+            block_dim=assembler.dof_per_node,
+            coupled_size=coupled_size,
+            omega=omega,
+            iters=iters,
+        )
+
+
 
     def solve(self, rhs:np.ndarray):
         bs = self.block_dim
@@ -116,3 +130,28 @@ class TwodimAddSchwarz:
             defect = rhs - self.K.dot(soln)
 
         return soln
+
+    def smooth_defect(self, soln: np.ndarray, defect: np.ndarray):
+        bs = self.block_dim
+
+        for _ in range(self.iters):
+            dsoln = np.zeros_like(soln)
+
+            for iblock in range(self._num_blocks):
+                Kc_inv = self._blocks[iblock]
+
+                # gather local defect
+                Fc = np.concatenate([defect[bs*inode:bs*(inode+1)] for inode in self._sch_nodes[iblock]])
+
+                # local solve
+                uc = Kc_inv @ Fc
+
+                # scatter-add into dsoln
+                for i, inode in enumerate(self._sch_nodes[iblock]):
+                    dsoln[bs*inode:bs*(inode+1)] += self.omega * uc[bs*i:bs*(i+1)]
+
+            # update global soln/defect
+            soln += dsoln
+            defect -= self.K.dot(dsoln)
+
+        return

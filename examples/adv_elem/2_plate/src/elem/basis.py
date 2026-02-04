@@ -194,31 +194,77 @@ def quad_bernstein(xi):
     dN = np.array([-2*(1-xi), 2*(1-2*xi), 2*xi])
     return N, dN
 
-
-def get_iga2_basis(xi, left_bndry, right_bndry):
-    B, dB = quad_bernstein(xi)
-
-    # bndry adjustment and regular basis
-    # on GPU can code it up with ? ternary operators probably
-    N = 0.5 * np.array([B[0], np.sum(B) + B[1], B[2]])
-    N += 0.5 * left_bndry * np.array([B[0], -B[0], 0.0])
-    N += 0.5 * right_bndry * np.array([0.0, -B[2], B[2]])
-
-    # bndry adjustment and regular derivs
-    dN = 0.5 * np.array([dB[0], np.sum(dB) + dB[1], dB[2]])
-    dN += 0.5 * left_bndry * np.array([dB[0], -dB[0], 0.0])
-    dN += 0.5 * right_bndry * np.array([0.0, -dB[2], dB[2]])
-    return N, dN
-
 def get_quad_bernstein_hess(xi):
     return np.array([2.0, -4.0, 2.0])
 
-def get_iga2_hess(xi, left_bndry, right_bndry):
+def get_iga2_basis_all(xi, left_bndry: bool, right_bndry: bool):
+    # Bernstein + derivs
+    B, dB = quad_bernstein(xi)
     B2 = get_quad_bernstein_hess(xi)
-    N2 = 0.5 * np.array([B2[0], np.sum(B2) + B2[1], B2[2]])
-    N2 += 0.5 * left_bndry * np.array([B2[0], -B2[0], 0.0])
-    N2 += 0.5 * right_bndry * np.array([0.0, -B2[2], B2[2]])
-    return N2
+
+    # same linear maps applied to B, dB, B2
+    N  = 0.5 * np.array([B[0],  np.sum(B)  + B[1],  B[2]])
+    dN = 0.5 * np.array([dB[0], np.sum(dB) + dB[1], dB[2]])
+    d2N= 0.5 * np.array([B2[0], np.sum(B2) + B2[1], B2[2]])
+
+    if left_bndry:
+        N   += 0.5 * np.array([ B[0],  -B[0],  0.0])
+        dN  += 0.5 * np.array([ dB[0], -dB[0], 0.0])
+        d2N += 0.5 * np.array([ B2[0], -B2[0], 0.0])
+
+    if right_bndry:
+        N   += 0.5 * np.array([0.0, -B[2],  B[2]])
+        dN  += 0.5 * np.array([0.0, -dB[2], dB[2]])
+        d2N += 0.5 * np.array([0.0, -B2[2], B2[2]])
+
+    return N, dN, d2N
+
+def get_iga2_basis(xi, left_bndry, right_bndry):
+    N, dN, _ = get_iga2_basis_all(xi, left_bndry, right_bndry)
+    return N, dN
+
+def get_iga2_hess(xi, left_bndry, right_bndry):
+    _, _, d2N = get_iga2_basis_all(xi, left_bndry, right_bndry)
+    return d2N
+
+# def get_iga2_basis_2d(xi, eta, left_bndry, right_bndry, bot_bndry, top_bndry):
+#     N1, dN1 = get_iga2_basis(xi, left_bndry, right_bndry)
+#     N2, dN2 = get_iga2_basis(eta, bot_bndry, top_bndry)
+#     N = np.zeros(9)
+#     Nxi = np.zeros(9)
+#     Neta = np.zeros(9)
+#     for ii in range(9):
+#         i1, i2 = ii % 3; ii // 3
+#         N[ii] = N1[i1] * N2[i2]
+#         Nxi[ii] = dN1[i1] * N2[i2]
+#         Neta[ii] = N1[i1] * dN2[i2]
+
+#     return N, Nxi, Neta
+
+
+def get_iga2_basis_2d_all(xi, eta, left_bndry, right_bndry, bot_bndry, top_bndry):
+    Nx, dNx, d2Nx = get_iga2_basis_all(xi,  left_bndry, right_bndry)
+    Ny, dNy, d2Ny = get_iga2_basis_all(eta, bot_bndry,  top_bndry)
+
+    N      = np.zeros(9)
+    N_xi   = np.zeros(9)
+    N_eta  = np.zeros(9)
+    N_xixi = np.zeros(9)
+    N_etaeta = np.zeros(9)
+    N_xieta  = np.zeros(9)
+
+    for a in range(9):
+        i = a % 3
+        j = a // 3   # <-- you had a bug here (you overwrote ii)
+
+        N[a]        = Nx[i]   * Ny[j]
+        N_xi[a]     = dNx[i]  * Ny[j]
+        N_eta[a]    = Nx[i]   * dNy[j]
+        N_xixi[a]   = d2Nx[i] * Ny[j]
+        N_etaeta[a] = Nx[i]   * d2Ny[j]
+        N_xieta[a]  = dNx[i]  * dNy[j]
+
+    return N, N_xi, N_eta, N_xixi, N_etaeta, N_xieta
 
 
 # third order IGA
