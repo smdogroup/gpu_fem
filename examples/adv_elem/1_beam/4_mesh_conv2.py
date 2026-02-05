@@ -7,13 +7,17 @@ from elem import EulerBernoulliElement, TimoshenkoElement, HierarchicRotHermiteE
 # sys.path.append("src/elem")
 # from eb_elem import EulerBernoulliElement
 from multigrid import VcycleSolver
-from smoothers import BlockGaussSeidel, OnedimAddSchwarz, right_pcg2, right_pgmres2
+from smoothers import BlockGaussSeidel, OnedimAddSchwarz, right_pcg2, right_pgmres2, OneDimAddSchwarzVertex2Edges
 from multigrid2 import vcycle_solve, VMG
 
 # IGA elements
 from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement
 # from iga_assembler import IGABeamAssembler
 from iga_assembler2 import IGABeamAssemblerV2
+
+# special vertex-edge DeRham style element
+from elem import DeRhamIsogeometricElement
+from diga_assembler import DeRhamIGABeamAssembler
 
 import argparse
 parser = argparse.ArgumentParser()
@@ -29,7 +33,7 @@ args = parser.parse_args()
 nxe_vec = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
 # beam_types = ['eb', 'tsr', 'hhd', 'higd']
 # beam_types = ['eb', 'aig', 'ts', 'tsr', 'hhr', 'hhd', 'higd']
-beam_types = ['eb', 'tsr', 'ts', 'aig', 'hhr', 'hhd', 'higd']
+beam_types = ['eb', 'tsr', 'ts', 'aig', 'hhr', 'hhd', 'higd', 'drig']
 deflections = {key:[] for key in beam_types}
 
 for nxe in nxe_vec:
@@ -55,6 +59,10 @@ for nxe in nxe_vec:
             # ELEMENT = AsymptoticIsogeometricTimoshenkoElement(reduced_integrated=True)
             ELEMENT = AsymptoticIsogeometricTimoshenkoElement(reduced_integrated=False)
             is_iga = True
+        elif elem == 'drig':
+            # derham isogeometric element, special vertex-edge style IGA 2nd order basis that is auto locking-free!
+            ELEMENT = DeRhamIsogeometricElement()
+            is_iga = True
 
         # ================================
         # make beam assembler
@@ -67,6 +75,9 @@ for nxe in nxe_vec:
         clamped = False # simply supported
         # ASSEMBLER = IGABeamAssembler if is_iga else StandardBeamAssembler
         ASSEMBLER = IGABeamAssemblerV2 if is_iga else StandardBeamAssembler
+        if elem == 'drig':
+            ASSEMBLER = DeRhamIGABeamAssembler
+
         assembler = ASSEMBLER(
             ELEMENT=ELEMENT,
             nxe=nxe,
@@ -113,9 +124,16 @@ for nxe in nxe_vec:
                     )
                 elif args.smoother == 'asw':
                     omega = args.omega / 2.0 # since 2x smoothing
-                    smoother = OnedimAddSchwarz.from_assembler(
-                        grid, omega=omega, iters=nsmooth, coupled_size=2
-                    )
+                    if elem == 'drig': # needs custom schwarz smoother with vertex-edge based
+                        smoother = OneDimAddSchwarzVertex2Edges.from_assembler(
+                            grid, omega=omega, iters=nsmooth,
+                            # patch_type="vertex2edges",
+                            patch_type="2nodes3edges", # slightly better conv
+                        )
+                    else:
+                        smoother = OnedimAddSchwarz.from_assembler(
+                            grid, omega=omega, iters=nsmooth, coupled_size=2
+                        )
                 smoothers += [smoother]
                 _nxe = _nxe // 2
                 if double_smooth:
@@ -140,6 +158,8 @@ for nxe in nxe_vec:
             w = u[0::3] + u[2::3]
         elif elem in ['higd']:
             w = u[0::2] + u[1::2]
+        elif elem in ['drig']:
+            w = u[:assembler.nw]
         else:
             w = u[0::assembler.dof_per_node]
         pred_disp = np.max(w)
@@ -148,7 +168,7 @@ for nxe in nxe_vec:
         elif pred_disp <= 1e-12:
             pred_disp = np.nan
             
-        if is_iga:
+        if is_iga and not(elem == 'drig'):
             # trying to see if this makes a difference in IGA conv
             pred_disp = assembler.get_max_deflection_greville()
 
@@ -162,7 +182,7 @@ plt.style.use(niceplots.get_style())
 fig, ax = plt.subplots()
 
 # colors = ["#d95a72", "#f3d27d", "#3cc7a1", "#3b90b3"]
-colors = ["#d95a72", "#eb9a79", "#f3d27d", "#3cc7a1", "#3b90b3", "#1a4c60", "k"]
+colors = ["#d95a72", "#eb9a79", "#f3d27d", "#3cc7a1", "#3b90b3", "#1a4c60", "k", 'tab:gray']
 
 nxe_arr = np.array(nxe_vec, dtype=int)
 
@@ -212,5 +232,13 @@ ax.set_xticklabels(xlabels)
 #     else:
 #         ylabels.append(f"$10^{{{int(np.log10(y))}}}$")
 # ax.set_yticklabels(ylabels)
+ax.legend(
+    loc="lower center",
+    bbox_to_anchor=(0.5, 1.02),
+    ncol=4,
+    frameon=False,
+    fontsize=12   # ↓ shrink legend font only
+)
+plt.tight_layout()
 
 plt.savefig("beam-maxdisp-vs-nxe.png", dpi=400)

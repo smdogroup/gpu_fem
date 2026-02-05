@@ -134,7 +134,9 @@ if 'mg' in args.solve:
             omega = args.omega / 2.0 # since 2x smoothing
             if args.elem == 'drig': # needs custom schwarz smoother with vertex-edge based
                 smoother = OneDimAddSchwarzVertex2Edges.from_assembler(
-                    grid, omega=omega, iters=nsmooth
+                    grid, omega=omega, iters=nsmooth,
+                    # patch_type="vertex2edges",
+                    patch_type="2nodes3edges", # slightly better conv
                 )
             else:
                 smoother = OnedimAddSchwarz.from_assembler(
