@@ -3,7 +3,9 @@ import matplotlib.pyplot as plt
 import sys
 sys.path.append("src/")
 from iga_assembler import IGAPlateAssembler
-from elem import HierarchicIsogeometricDispElement9
+from drig_assembler import DeRhamIGAPlateAssembler
+from elem import HierarchicIsogeometricDispElement9, DeRhamIsogeometricPlateElement
+from asw_derham import TwoDimAddSchwarzDeRhamVertexEdges
 
 # from std_assembler import StandardBeamAssembler
 # from elem import EulerBernoulliElement, TimoshenkoElement, HierarchicRotHermiteElement, HierarchicDispHermiteElement
@@ -29,7 +31,7 @@ parser.add_argument("--thick", type=float, default=1e-3, help="number of element
 parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--omega", type=float, default=0.9, help="omega smoother coeff (sometimes needs to be lower)")
-parser.add_argument("--smoother", type=str, default='gs', help="--smooth : [gs, asw]")
+parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="run debug codes")
 parser.add_argument("--verify", action=argparse.BooleanOptionalAction, default=False, help="verify defln with simple load")
@@ -44,6 +46,9 @@ is_iga = False
 if args.elem == 'higd':
     ELEMENT = HierarchicIsogeometricDispElement9(reduced_integrated=False)
     is_iga = True
+elif args.elem == 'drig':
+    ELEMENT = DeRhamIsogeometricPlateElement()
+    is_iga = True
 
 # ================================
 # make plate assembler
@@ -54,6 +59,12 @@ clamped = False # simply supported
 
 load_fcn = lambda x,y : 1.0e2 # simple load
 
+# m, n = 2, 1
+# m, n = 2, 2
+
+# m, n = 3, 2
+# load_fcn = lambda x,y : np.sin(m * np.pi * x) * np.sin(n * np.pi * y)
+
 # if args.verify:
 #     load_fcn = lambda x,y : 1.0 # simple load
 # else:
@@ -63,7 +74,11 @@ load_fcn = lambda x,y : 1.0e2 # simple load
 #     load_fcn = lambda x,y : np.sin(m * np.pi * x) * np.sin(n * np.pi * y)
 
 # ASSEMBLER = IGAPlateAssembler if is_iga else StandardBeamAssembler
-ASSEMBLER = IGAPlateAssembler
+if args.elem == 'drig':
+    ASSEMBLER = DeRhamIGAPlateAssembler
+else:
+    ASSEMBLER = IGAPlateAssembler
+
 
 assembler = ASSEMBLER(
     ELEMENT=ELEMENT,
@@ -114,9 +129,15 @@ if 'mg' in args.solve:
         elif args.smoother == 'asw':
             smoother = None
             omega = args.omega / 2.0 # since 2x smoothing
-            smoother = TwodimAddSchwarz.from_assembler(
-                grid, omega=omega, iters=nsmooth, coupled_size=2
-            )
+            if args.elem == 'drig':
+                print("using Additive schwarz DeRham smoother")
+                smoother = TwoDimAddSchwarzDeRhamVertexEdges.from_assembler(
+                    grid, omega=omega, iters=nsmooth,
+                )
+            else:
+                smoother = TwodimAddSchwarz.from_assembler(
+                    grid, omega=omega, iters=nsmooth, coupled_size=2
+                )
         smoothers += [smoother]
         nxe = nxe // 2
         if double_smooth:
@@ -142,17 +163,17 @@ elif args.solve == 'vmg':
     #     assembler.u = vmg.solve(assembler.force)
 
     # proper V-cycle solver
-    if not args.debug:
-        # smoothers = None # DEBUG
-        # print("WARNING using internal GS smoother, not ASW/GS created above")
+    # if not args.debug:
+    #     # smoothers = None # DEBUG
+    #     # print("WARNING using internal GS smoother, not ASW/GS created above")
 
-        assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
-                                        #  line_search=not(args.elem == 'aig'))
-                                        # line search sometimes hurts high cond # cases (high defects in prolong)
-                                        # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
-                                        line_search=False, # often need it turned off.. for best conv
-                                        # line_search=True,
-                                        smoothers=smoothers)
+    assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
+                                    #  line_search=not(args.elem == 'aig'))
+                                    # line search sometimes hurts high cond # cases (high defects in prolong)
+                                    # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
+                                    # line_search=False, # often need it turned off.. for best conv
+                                    line_search = args.elem == 'drig',
+                                    smoothers=smoothers)
 
 # elif args.solve == 'kmg':
 #     vmg.n_cycles = 2

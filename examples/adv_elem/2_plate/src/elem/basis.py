@@ -69,6 +69,11 @@ def lagrange_grad(ibasis, xi, J:float):
         return 0.5 / J
     
 
+def get_lagrange_basis_01(xi):
+    N = np.array([1.0 - xi, xi])
+    dN = np.array([-1.0, 1.0])
+    return N, dN
+
 # ====================================
 # multigrid interpolations
 # ====================================

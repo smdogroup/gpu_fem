@@ -275,7 +275,6 @@ class IGAPlateAssembler:
 
 
 
-
     def prolongate(self, coarse_soln):
         return self.element.prolongate(coarse_soln)
     
