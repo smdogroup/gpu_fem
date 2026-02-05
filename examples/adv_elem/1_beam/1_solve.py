@@ -22,7 +22,7 @@ from diga_assembler import DeRhamIGABeamAssembler
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--elem", type=str, default='hhd', help="--beam, options: hyb, ts, ts-nd")
+parser.add_argument("--elem", type=str, default='drig', help="--beam, options: hyb, ts, ts-nd")
 parser.add_argument("--nxe", type=int, default=128, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=16, help="min # elems multigrid")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")

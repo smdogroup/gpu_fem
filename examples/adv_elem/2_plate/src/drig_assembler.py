@@ -37,6 +37,8 @@ class DeRhamIGAPlateAssembler:
         self.load_fcn = load_fcn
         self.clamped = bool(clamped)
 
+        self.element.clamped = clamped
+
         # DOF per node
         self.dof_per_node = 1
 

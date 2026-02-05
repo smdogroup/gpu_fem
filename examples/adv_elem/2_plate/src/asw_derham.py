@@ -47,7 +47,7 @@ class TwoDimAddSchwarzDeRhamVertexEdges:
         omega: float = 0.7,
         iters: int = 1,
         build_inverses: bool = True,
-        patch_type: str = "vertex_edges",
+        patch_type: str = "vertex_edges", # also other option is "wblock_vertex_edges"
         use_pinv_fallback: bool = True,
     ):
         assert sp.isspmatrix(K), "K must be a scipy sparse matrix."
@@ -63,6 +63,11 @@ class TwoDimAddSchwarzDeRhamVertexEdges:
         self.N = self.nw + self.ntx + self.nty
 
         assert self.K.shape == (self.N, self.N), f"K shape {self.K.shape} != {(self.N, self.N)}"
+
+        self.wblock_nx = 1 if patch_type == "vertex_edges" else 2
+        self.wblock_ny = 1 if patch_type == "vertex_edges" else 2
+        assert self.wblock_nx >= 1 and self.wblock_ny >= 1
+
 
         self.omega = float(omega)
         self.iters = int(iters)
@@ -113,7 +118,10 @@ class TwoDimAddSchwarzDeRhamVertexEdges:
     def _build_patches(self):
         if self.patch_type == "vertex_edges":
             return self._build_patches_vertex_edges()
+        if self.patch_type == "wblock_vertex_edges":
+            return self._build_patches_wblock_vertex_edges(self.wblock_nx, self.wblock_ny)
         raise ValueError(f"Unknown patch_type='{self.patch_type}'.")
+
 
     def _build_patches_vertex_edges(self):
         """
@@ -139,30 +147,98 @@ class TwoDimAddSchwarzDeRhamVertexEdges:
 
                 # thx neighbors (grid: nxtx x nytx)
                 # candidate (i,j) pairs on thx grid
+                # thx_cands = [
+                #     (iw,   jw),
+                #     (iw-1, jw),
+                #     (iw,   jw-1),
+                #     (iw-1, jw-1),
+                # ]
+                # NOTE : might be better to just do 2 local thx and 2 local thy like it says in other paper?
+                # NEED TO READ paper on better Schwarz subdomains just to check.. for 2d (see Ref. [7] of Benzaken?)
                 thx_cands = [
-                    (iw,   jw),
-                    (iw-1, jw),
-                    (iw,   jw-1),
-                    (iw-1, jw-1),
+                    (iw, jw), (iw-1, jw)
                 ]
+                # WORKS better and more like the paper
+                # still would like an option for a multiple w node patch
                 for (i, j) in thx_cands:
                     if self._in_bounds(i, j, self.nxtx, self.nytx):
                         dofs.append(off_tx + self._node(i, j, self.nxtx))
 
                 # thy neighbors (grid: nxty x nyty)
+                # thy_cands = [
+                #     (iw,   jw),
+                #     (iw,   jw-1),
+                #     (iw-1, jw),
+                #     (iw-1, jw-1),
+                # ]
                 thy_cands = [
-                    (iw,   jw),
-                    (iw,   jw-1),
-                    (iw-1, jw),
-                    (iw-1, jw-1),
+                    (iw, jw), 
+                    (iw, jw-1)
                 ]
                 for (i, j) in thy_cands:
                     if self._in_bounds(i, j, self.nxty, self.nyty):
                         dofs.append(off_ty + self._node(i, j, self.nxty))
 
+                # print(f"{w_gid=} {iw=} {jw=} : {dofs=}")
+
+                patches.append(np.array(sorted(set(dofs)), dtype=int))
+
+        # exit()
+        return patches
+    
+    def _build_patches_wblock_vertex_edges(self, bw: int, bh: int):
+        """
+        Patch is a bw x bh block of w-vertices (default bw=2,bh=2 -> 4 w nodes),
+        plus ALL thx/thy DOFs that touch ANY vertex in the block, using the same
+        local candidate rules you used in _build_patches_vertex_edges():
+
+        thx candidates per vertex: (iw, jw), (iw-1, jw)
+        thy candidates per vertex: (iw, jw), (iw, jw-1)
+
+        This creates a larger coupled subproblem without you hand-designing new stencils.
+        """
+        patches = []
+        off_tx = self.nw
+        off_ty = self.nw + self.ntx
+
+        # anchors are lower-left of the w-block
+        # we slide by 1 to get overlap (good for ASW)
+        for jw0 in range(self.nyw):
+            for iw0 in range(self.nxw):
+                dofs = []
+
+                # --- gather w vertices in the block ---
+                w_vertices = []
+                for dj in range(bh):
+                    for di in range(bw):
+                        iw = iw0 + di
+                        jw = jw0 + dj
+                        if self._in_bounds(iw, jw, self.nxw, self.nyw):
+                            w_gid = self._node(iw, jw, self.nxw)
+                            dofs.append(w_gid)
+                            w_vertices.append((iw, jw))
+
+                # If anchor near extreme corner and block truncates to nothing (shouldn’t happen),
+                # skip defensively.
+                if len(w_vertices) == 0:
+                    continue
+
+                # --- union of thx/thy touching ALL vertices in the w-block ---
+                for (iw, jw) in w_vertices:
+                    # thx grid: (nxtx, nytx)
+                    for (i, j) in ((iw, jw), (iw - 1, jw)):
+                        if self._in_bounds(i, j, self.nxtx, self.nytx):
+                            dofs.append(off_tx + self._node(i, j, self.nxtx))
+
+                    # thy grid: (nxty, nyty)
+                    for (i, j) in ((iw, jw), (iw, jw - 1)):
+                        if self._in_bounds(i, j, self.nxty, self.nyty):
+                            dofs.append(off_ty + self._node(i, j, self.nxty))
+
                 patches.append(np.array(sorted(set(dofs)), dtype=int))
 
         return patches
+
 
     # -------------------------
     # patch inverses

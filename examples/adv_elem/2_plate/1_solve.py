@@ -24,18 +24,27 @@ from asw import TwodimAddSchwarz
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--elem", type=str, default='higd', help="--elem, options: tbd")
-parser.add_argument("--nxe", type=int, default=16, help="number of elements")
+parser.add_argument("--elem", type=str, default='drig', help="--elem, options: tbd")
+parser.add_argument("--nxe", type=int, default=32, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
+parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
-parser.add_argument("--omega", type=float, default=0.9, help="omega smoother coeff (sometimes needs to be lower)")
+parser.add_argument("--omega", type=float, default=0.7, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="run debug codes")
 parser.add_argument("--verify", action=argparse.BooleanOptionalAction, default=False, help="verify defln with simple load")
 args = parser.parse_args()
+
+# NOTE : prefers slightly higher omega at lower thickness?
+# but won't converge if theta much larger than 0.5 at high thickness
+# can also use only 1 smoothing step for thick = 1e-3 (totally fine)
+
+# current smoother so cheap, similar cost to jacobi, not bad to just do 3 smoothing steps
+# with DeRham cohomology, same smoothing cost to low and high thick! Solves like Kirchoff at low thick
+# makes sure omega isn't too large otherwise perf can deteriorate, omega = 0.7 was best to me
 
 
 """ verify each beam element and solver type against truth """
@@ -128,11 +137,20 @@ if 'mg' in args.solve:
             )
         elif args.smoother == 'asw':
             smoother = None
-            omega = args.omega / 2.0 # since 2x smoothing
+            if args.coupled == 1:
+                omega = args.omega / 2.0 # because some 2x smoothing on thx, thy
+                patch_type = "vertex_edges"
+            elif args.coupled == 2:
+                omega = args.omega / 4.0 # because 2x smoothing than coupled == 1 schwarz (so ~4x smoothing on thx, thy)
+                patch_type = "wblock_vertex_edges"
+
             if args.elem == 'drig':
                 print("using Additive schwarz DeRham smoother")
                 smoother = TwoDimAddSchwarzDeRhamVertexEdges.from_assembler(
                     grid, omega=omega, iters=nsmooth,
+                    patch_type = patch_type,
+                    # patch_type="vertex_edges", # one w vertex and nearby 4 edges (2 of thx and 2 of thy)
+                    # patch_type="wblock_vertex_edges",
                 )
             else:
                 smoother = TwodimAddSchwarz.from_assembler(

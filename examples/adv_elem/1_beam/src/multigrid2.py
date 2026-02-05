@@ -166,18 +166,6 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
             dx = grids[i].prolongate(solns[i+1])
             df = mats[i].dot(dx)
 
-            if debug:
-                print("DEBUG : prolong dx")
-                grids[i].u = dx.copy()
-                grids[i].plot_disp()
-
-            # compare to exact solve of defect here
-            if debug:
-                print("DEBUG : exact dx_fine")
-                dx_exact = sp.sparse.linalg.spsolve(mats[i].copy(), defects[i])
-                grids[i].u = dx_exact.copy()
-                grids[i].plot_disp()
-
             # print(f"{dx.shape=}")
 
             # if debug_print: 
@@ -205,6 +193,18 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
                 omega = np.dot(dx, defects[i]) / np.dot(dx, df)
             else:
                 omega = 1.0
+
+            if debug:
+                print(f"DEBUG : prolong dx with {omega=:.4e}")
+                grids[i].u = omega * dx.copy()
+                grids[i].plot_disp()
+
+            # compare to exact solve of defect here
+            if debug:
+                print("DEBUG : exact dx_fine")
+                dx_exact = sp.sparse.linalg.spsolve(mats[i].copy(), defects[i])
+                grids[i].u = dx_exact.copy()
+                grids[i].plot_disp()
 
             # debug_plot(dof_per_node, grids[0], vec1=-omega * df, vec2=defects[i])
             

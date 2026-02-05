@@ -310,8 +310,59 @@ class DeRhamIsogeometricPlateElement:
 
         R /= counts
         return R
+    
+    def _build_P_p1(self, nxe_c: int) -> np.ndarray:
+        # """
+        # 1D P1 prolongation on nodal line (dyadic refinement).
+        # Coarse n_c = nxe_c + 1
+        # Fine   n_f = 2*nxe_c + 1
 
-    def _build_R_p1(self, nxe_c: int) -> np.ndarray:
+        # Constructed as P = 2*R^T (Galerkin-friendly), with a small boundary patch
+        # so it matches geometric linear interpolation at the first/last midpoints.
+        # """
+        # R = self._build_R_p1(nxe_c)          # (n_c, n_f)
+        # P = 2.0 * R.T                        # (n_f, n_c)
+
+        # n_c = nxe_c + 1
+        # n_f = 2 * nxe_c + 1
+
+        # # Patch the two boundary-adjacent odd points to be true linear interpolation
+        # # th_f[1]     = 0.5*(th_c[0] + th_c[1])
+        # # th_f[n_f-2] = 0.5*(th_c[n_c-2] + th_c[n_c-1])
+        # if n_c >= 2:
+        #     P[1, :] = 0.0
+        #     P[1, 0] = 0.5
+        #     P[1, 1] = 0.5
+
+        #     P[n_f - 2, :] = 0.0
+        #     P[n_f - 2, n_c - 2] = 0.5
+        #     P[n_f - 2, n_c - 1] = 0.5
+
+        # print(f"{P=}")
+
+        # return P
+    
+        """
+        Geometric 1D P1 prolongation matrix (dyadic refinement).
+        Coarse n_c = nxe_c + 1
+        Fine   n_f = 2*nxe_c + 1
+
+        th_f[2i]   = th_c[i]
+        th_f[2i+1] = 0.5*(th_c[i] + th_c[i+1])
+        """
+        n_c = nxe_c + 1
+        n_f = 2 * nxe_c + 1
+        P = np.zeros((n_f, n_c))
+
+        for i in range(nxe_c):
+            P[2*i,   i]   = 1.0
+            P[2*i+1, i]   = 0.5
+            P[2*i+1, i+1] = 0.5
+        P[2*nxe_c, nxe_c] = 1.0
+        return P
+
+
+    def _build_R_p1(self, nxe_c: int, is_prolong:bool=False) -> np.ndarray:
         """
         1D P1 restriction (full-weighting) on nodal line with n = nxe + 1 dofs.
         Fine nxe_f = 2*nxe_c => n_f = 2*nxe_c + 1
@@ -327,6 +378,13 @@ class DeRhamIsogeometricPlateElement:
             R[i, 2*i - 1] = 0.25
             R[i, 2*i]     = 0.50
             R[i, 2*i + 1] = 0.25
+        if is_prolong:
+            # divide by col sums
+            for j in range(n_f):
+                R[:, j] /= np.sum(R[:, j])
+            
+        # print(f"{R=}")
+        # exit()
         return R
 
     @staticmethod
@@ -404,8 +462,8 @@ class DeRhamIsogeometricPlateElement:
         # Build restriction operators and take P = R^T
         Rx2 = self._build_R_p2(nxe_c)
         Ry2 = self._build_R_p2(nye_c)
-        Rx1 = self._build_R_p1(nxe_c)
-        Ry1 = self._build_R_p1(nye_c)
+        Rx1 = self._build_P_p1(nxe_c).T
+        Ry1 = self._build_P_p1(nye_c).T
 
         # w: (p2,p2)
         Rw = self._kron2(Ry2, Rx2)
@@ -458,8 +516,8 @@ class DeRhamIsogeometricPlateElement:
         # restriction ops
         Rx2 = self._build_R_p2(nxe_c)
         Ry2 = self._build_R_p2(nye_c)
-        Rx1 = self._build_R_p1(nxe_c)
-        Ry1 = self._build_R_p1(nye_c)
+        Rx1 = self._build_R_p1(nxe_c, is_prolong=False)
+        Ry1 = self._build_R_p1(nye_c, is_prolong=False)
 
         Rw  = self._kron2(Ry2, Rx2)
         Rtx = self._kron2(Ry2, Rx1)
