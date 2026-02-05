@@ -256,6 +256,13 @@ class DeRhamIGABeamAssembler:
     #     plt.ylabel("w(x)" if idof == 0 else "th(x)")
     #     plt.show()     
 
+    def plot_disp(self):
+        xvec = np.linspace(0.0, self.L, self.nw)
+        w = self.u[:self.nw]
+        plt.figure()
+        plt.plot(xvec, w)
+        plt.show()
+
     def prolongate(self, coarse_soln):
         # takes coarse soln runs on fine grid so:
         nxe_c = self.nxe // 2

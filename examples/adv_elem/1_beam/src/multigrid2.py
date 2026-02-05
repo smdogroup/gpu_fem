@@ -79,6 +79,7 @@ def debug_plot(dof_per_node, grid, vec1, vec2):
 
 def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int=1, 
                  debug_print:bool=False, print_freq:int=1, double_smooth:bool=True, can_print:bool=True, 
+                 debug:bool=False,
                  line_search:bool=True, smoothers=None, rtol:float=1e-6):
     # grids are just assembler objects usually (no unified GRID object)
     nlevels = len(grids)
@@ -91,7 +92,8 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
     # print(f"{defects=}")
     # print(f"{}")
 
-    debug = False
+    # debug = True
+    # debug = False
 
     init_defect_norm = np.linalg.norm(defects[0])
     if can_print:
@@ -164,17 +166,17 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
             dx = grids[i].prolongate(solns[i+1])
             df = mats[i].dot(dx)
 
-            # if debug:
-                # print("DEBUG : prolong dx")
-                # grids[i].u = dx.copy()
-                # grids[i].plot_disp()
+            if debug:
+                print("DEBUG : prolong dx")
+                grids[i].u = dx.copy()
+                grids[i].plot_disp()
 
             # compare to exact solve of defect here
-            # if debug:
-            #     print("DEBUG : exact dx_fine")
-            #     dx_exact = sp.sparse.linalg.spsolve(mats[i].copy(), defects[i])
-            #     grids[i].u = dx_exact.copy()
-            #     grids[i].plot_disp()
+            if debug:
+                print("DEBUG : exact dx_fine")
+                dx_exact = sp.sparse.linalg.spsolve(mats[i].copy(), defects[i])
+                grids[i].u = dx_exact.copy()
+                grids[i].plot_disp()
 
             # print(f"{dx.shape=}")
 

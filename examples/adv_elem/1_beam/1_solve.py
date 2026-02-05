@@ -163,22 +163,24 @@ if args.solve == 'direct':
     assembler.direct_solve()
 elif args.solve == 'vmg':
     # DEBUG
-    if args.debug:
-        assembler._assemble_system()
-        assembler.u = vmg.solve(assembler.force)
+    # if args.debug:
+    #     assembler._assemble_system()
+    #     assembler.u = vmg.solve(assembler.force)
 
     # proper V-cycle solver
-    if not args.debug:
-        # smoothers = None # DEBUG
-        # print("WARNING using internal GS smoother, not ASW/GS created above")
+    # if not args.debug:
+    # smoothers = None # DEBUG
+    # print("WARNING using internal GS smoother, not ASW/GS created above")
 
-        assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
-                                        #  line_search=not(args.elem == 'aig'))
-                                        # line search sometimes hurts high cond # cases (high defects in prolong)
-                                        # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
-                                        line_search=False,
-                                        # line_search=True,
-                                        smoothers=smoothers)
+    assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
+                                    #  line_search=not(args.elem == 'aig'))
+                                    # line search sometimes hurts high cond # cases (high defects in prolong)
+                                    # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
+                                    # line_search=False,
+                                    line_search=args.elem == 'drig', # rarerly helps (but does help for drig elem!)
+                                    # line_search=True,
+                                    debug=args.debug,
+                                    smoothers=smoothers)
 
 elif args.solve == 'kmg':
     vmg.n_cycles = 2
