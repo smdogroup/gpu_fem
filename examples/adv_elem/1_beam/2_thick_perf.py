@@ -26,7 +26,7 @@ parser.add_argument("--nxe", type=int, default=128, help="number of elements")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=16, help="min # elems multigrid")
 parser.add_argument("--nsmooth", type=int, default=1, help="number of smoothing steps")
-parser.add_argument("--omega", type=float, default=0.9, help="omega smoother coeff (sometimes needs to be lower)")
+parser.add_argument("--omega", type=float, default=0.8, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
 args = parser.parse_args()
 
