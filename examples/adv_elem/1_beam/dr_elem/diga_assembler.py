@@ -3,7 +3,44 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-class DeRhamIGABeamAssembler:
+def second_order_quadrature():
+    rt35 = np.sqrt(3.0 / 5.0)
+    return [-rt35, 0.0, rt35], [5.0/9.0, 8.0/9.0, 5.0/9.0]
+
+
+def quad_bernstein(xi):
+    N = np.array([(1-xi)**2, 2*xi*(1-xi), xi**2])
+    dN = np.array([-2*(1-xi), 2*(1-2*xi), 2*xi])
+    return N, dN
+
+
+def get_iga2_basis(xi, left_bndry, right_bndry):
+    B, dB = quad_bernstein(xi)
+
+    # bndry adjustment and regular basis
+    # on GPU can code it up with ? ternary operators probably
+    N = 0.5 * np.array([B[0], np.sum(B) + B[1], B[2]])
+    N += 0.5 * left_bndry * np.array([B[0], -B[0], 0.0])
+    N += 0.5 * right_bndry * np.array([0.0, -B[2], B[2]])
+
+    # bndry adjustment and regular derivs
+    dN = 0.5 * np.array([dB[0], np.sum(dB) + dB[1], dB[2]])
+    dN += 0.5 * left_bndry * np.array([dB[0], -dB[0], 0.0])
+    dN += 0.5 * right_bndry * np.array([0.0, -dB[2], dB[2]])
+    return N, dN
+
+def get_lagrange_basis(xi):
+    N = np.array([0.5*(1-xi), 0.5*(1+xi)])
+    dN = np.array([-0.5, 0.5])
+    return N, dN
+
+def get_lagrange_basis_01(xi):
+    N = np.array([1.0 - xi, xi])
+    dN = np.array([-1.0, 1.0])
+    return N, dN
+
+
+class DeRhamIGABeamAssembler_V0:
     # uses 0-form and 1-forms in IGA for Timoshenko beam for DeRham diagram
     # like Nedelec elements with vertices for w and edges for theta
     # so fully compatible
@@ -19,6 +56,7 @@ class DeRhamIGABeamAssembler:
     def __init__(self, ELEMENT, nxe: int, E=70e9, nu=0.3, thick=1e-2, L=1.0,
                  load_fcn=lambda x: 1.0, clamped: bool = False, split_disp_bc:bool=None):
 
+        # split_disp_bc and ELEMENT parameters currently ignored..
         self.element = ELEMENT
         self.nxe = int(nxe)
         self.E = float(E)
@@ -26,8 +64,6 @@ class DeRhamIGABeamAssembler:
         self.thick = float(thick)
         self.L = float(L)
         self.load_fcn = load_fcn
-
-        self.dof_per_node = 1 # for MG compatibility, though this is Block-CSR not BSR style (difference cause vertex-edge based)
 
         self.kmat = None
         self.force = None
@@ -129,6 +165,74 @@ class DeRhamIGABeamAssembler:
         A_csr.data[p] += val
 
     # -----------------------------
+    # Element routine (yours)
+    # -----------------------------
+    def _get_kelem(self, E, nu, thick, elem_length, left_bndry: bool, right_bndry: bool):
+        pts, weights = second_order_quadrature()
+
+        # Return dense blocks for speed; assemble into CSR blocks.
+        Kww   = np.zeros((3, 3))
+        Kwth  = np.zeros((3, 2))
+        Kthw  = np.zeros((2, 3))
+        Kthth = np.zeros((2, 2))
+
+        EI = (thick**3) * E / 12.0
+        ks = 5.0 / 6.0
+        G  = E / (2.0 * (1.0 + nu))
+        ksGA = ks * G * thick
+        J = elem_length
+
+        for _xi, _wt in zip(pts, weights):
+            xi = 0.5 * (_xi + 1.0)
+            wt = 0.5 * _wt
+
+            Nv, dNv = get_iga2_basis(xi, left_bndry, right_bndry)  # (3,)
+            # Ne, dNe = get_lagrange_basis(xi)                       # (2,)
+            Ne, dNe = get_lagrange_basis_01(xi)
+
+            dNv = dNv / J
+            dNe = dNe / J
+
+            # shear: ksGA * (w_x - th)^2
+            c_shear = ksGA * wt * J
+            Kww  += c_shear * np.outer(dNv, dNv)
+            Kwth -= c_shear * np.outer(dNv, Ne)
+            Kthw -= c_shear * np.outer(Ne, dNv)
+            Kthth += c_shear * np.outer(Ne, Ne)
+
+            # bending: EI * (th_x)^2
+            c_bend = EI * wt * J
+            Kthth += c_bend * np.outer(dNe, dNe)
+
+        # Pack as 2x2 block for your calling code, but dense is easiest here
+        return Kww, Kwth, Kthw, Kthth
+
+    def _get_felem(self, elem_length: float, left_bndry: bool, right_bndry: bool, x0: float):
+        """
+        Simple consistent load vector for w only:
+          ∫ Nw(x) * q(x) dx
+        where q(x) = load_fcn(x)
+        """
+        pts, weights = second_order_quadrature()
+        fw = np.zeros(3)
+        fth = np.zeros(2)
+
+        J = elem_length
+        for _xi, _wt in zip(pts, weights):
+            xi = 0.5 * (_xi + 1.0)
+            wt = 0.5 * _wt
+
+            Nv, _dNv = get_iga2_basis(xi, left_bndry, right_bndry)
+
+            # map xi in [0,1] to physical x in [x0, x0+L_e]
+            x = x0 + xi * elem_length
+            q = float(self.load_fcn(x))
+
+            fw += (q * Nv) * (wt * J)
+
+        return fw, fth
+
+    # -----------------------------
     # Full assembly
     # -----------------------------
     def _assemble_system(self):
@@ -148,14 +252,14 @@ class DeRhamIGABeamAssembler:
             left_b  = (e == 0)
             right_b = (e == self.nxe - 1)
 
-            Kww, Kwth, Kthw, Kthth = self.element.get_kelem(
+            Kww, Kwth, Kthw, Kthth = self._get_kelem(
                 E=self.E, nu=self.nu, thick=self.thick,
                 elem_length=self.dx_ctrl,
                 left_bndry=left_b, right_bndry=right_b
             )
 
             x0 = e * self.dx_ctrl
-            fw, fth = self.element.get_felem(self.load_fcn, self.dx_ctrl, left_b, right_b, x0)
+            fw, fth = self._get_felem(self.dx_ctrl, left_b, right_b, x0)
 
             # ----- scatter-add stiffness -----
             # ww
@@ -256,12 +360,8 @@ class DeRhamIGABeamAssembler:
     #     plt.ylabel("w(x)" if idof == 0 else "th(x)")
     #     plt.show()     
 
-    def prolongate(self, coarse_soln):
-        # takes coarse soln runs on fine grid so:
-        nxe_c = self.nxe // 2
-        return self.element.prolongate(coarse_soln, nxe_c)
+    # def prolongate(self, coarse_soln):
+    #     return self.element.prolongate(coarse_soln, self.L)
     
-    def restrict_defect(self, fine_defect):
-        # runs on coarse grid, takes defect from fine grid so:
-        nxe_c = self.nxe
-        return self.element.restrict_defect(fine_defect, nxe_c)
+    # def restrict_defect(self, fine_defect):
+    #     return self.element.restrict_defect(fine_defect, self.L)

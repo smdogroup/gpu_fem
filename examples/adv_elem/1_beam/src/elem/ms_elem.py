@@ -2,8 +2,13 @@ import numpy as np
 from .basis import third_order_quadrature, zero_order_quadrature, second_order_quadrature
 from .basis import get_iga2_basis
 
-class DeRhamIsogeometricElement2:
+class MixedShearIsogeometricElement:
     """
+    # mixed finite element formulation with shear strain variable, IGA
+    
+    # https://www.numdam.org/item/M2AN_1997__31_4_517_0/
+    # Preconditioning discrete approximations of the Reissner-Mindlin plate model
+
     # De Rham (cohomology) IGA plate element
     # based on paper: https://www.sciencedirect.com/science/article/abs/pii/S0045782511003215
     # "An isogeometric method for the Reissner-Mindlin plate bending problem" by Veiga
@@ -19,10 +24,9 @@ class DeRhamIsogeometricElement2:
     """
 
     # 2nd order IGA with De Rham mixed variational formulation
-    def __init__(self, reduced_integrated:bool=False):              
+    def __init__(self):              
         self.dof_per_node = 3
         self.nodes_per_elem = 3
-        self.reduced_integrated = reduced_integrated
         self.clamped = True
         self.ORDER = 2 # 2nd order IGA
 
@@ -30,11 +34,6 @@ class DeRhamIsogeometricElement2:
         # quadratic element with 2 DOF per node
         pts, weights = third_order_quadrature()
         # pts, weights = second_order_quadrature()
-
-        if self.reduced_integrated:
-            shear_pts, shear_wts = zero_order_quadrature()
-        else:
-            shear_pts, shear_wts = third_order_quadrature()
 
         kelem = np.zeros((9, 9))
         EI = E * thick**3 / 12.0
@@ -49,31 +48,27 @@ class DeRhamIsogeometricElement2:
             # IGA quadpts are [0,1] not [-1,1] so slight adjustment here
             xi = 0.5 * (_xi + 1)
             wt = 0.5 * _wt # for smaller window of xi
-            _, dN = get_iga2_basis(xi, left_bndry, right_bndry)
-            dN /= J
-            for i in range(3):
-                for j in range(3):
-                    kelem[3+i, 3+j] += EI * wt * J * dN[i] * dN[j]
-
-        # trv shear + shear consistency energy
-        for _xi, _wt in zip(shear_pts, shear_wts):
-            # IGA quadpts are [0,1] not [-1,1] so slight adjustment here
-            xi = 0.5 * (_xi + 1)
-            wt = 0.5 * _wt # for smaller window of xi
             N, dN = get_iga2_basis(xi, left_bndry, right_bndry)
             dN /= J
 
+            # from ref https://www.numdam.org/item/M2AN_1997__31_4_517_0.pdf
+            # eqns 1.4-1.6 give the system of eqns of new mixed variational weak form
             for i in range(3):
                 for j in range(3):
                     c_shear = ksGA * wt * J * thick**2 # boosted now...
-                    # trv shear energy = int kSGA * gam*(dth - dw') dx
-                    kelem[3+j, 6+i] += c_shear * N[i] * N[j] # (dth, gam)
-                    kelem[j, 6+i] -= c_shear * N[i] * dN[j]  # (dw, gam)
 
-                    # this second part technically shows up in consistency constraint
-                    kelem[6+i, j] += ksGA * wt * J * N[i] * dN[j] # (dgam, w)
-                    kelem[6+i, 3+j] -= ksGA * wt * J * N[i] * N[j] # (dgam, th)
-                    kelem[6+i, 6+j] += ksGA * wt * J * thick**2 * N[i] * N[j] # (dgam,gam)
+                    # dw row eqn is int gamma * dw' - g * dw [dx]
+                    kelem[i, 6+j] += c_shear * N[i] * dN[j]
+
+                    # dth row eqn is int EI * th_{,x} * dth_{,x} - gamma * dth [dx]
+                    kelem[3+i, 3+j] += EI * wt * J * dN[i] * dN[j]
+                    kelem[3+i, 6+j] -= c_shear * N[i] * N[j]
+
+                    # dgam equation
+                    kelem[6+i, j] -= ksGA * wt * J * N[i] * dN[j] # (dgam, w)
+                    kelem[6+i, 3+j] += ksGA * wt * J * N[i] * N[j] # (dgam, th)
+                    kelem[6+i, 6+j] -= ksGA * wt * J * thick**2 * N[i] * N[j] # (dgam,gam)
+                    
 
         # import matplotlib.pyplot as plt
         # plt.imshow(np.log(np.abs(kelem) + 1e-14))
@@ -99,7 +94,7 @@ class DeRhamIsogeometricElement2:
             load_mag = mag(xval)
             N, _ = get_iga2_basis(xi, left_bndry, right_bndry)
             for i in range(3):
-                felem[3 * i] += load_mag * wt * J * N[i]
+                felem[3 * i + 0] += load_mag * wt * J * N[i]
         return felem
     
     def _build_restriction_matrix(self, nxe_c):

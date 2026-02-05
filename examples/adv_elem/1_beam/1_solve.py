@@ -7,14 +7,18 @@ from elem import EulerBernoulliElement, TimoshenkoElement, HierarchicRotHermiteE
 # sys.path.append("src/elem")
 # from eb_elem import EulerBernoulliElement
 from multigrid import VcycleSolver
-from smoothers import BlockGaussSeidel, OnedimAddSchwarz, right_pcg2, right_pgmres2
+from smoothers import BlockGaussSeidel, OnedimAddSchwarz, right_pcg2, right_pgmres2, OneDimAddSchwarzVertex2Edges
 from multigrid2 import vcycle_solve, VMG
 
 # IGA elements
-from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement, DeRhamIsogeometricElement2
+from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement, MixedShearIsogeometricElement
 from elem import AsymptoticIsogeometricTimoshenkoElementV2
 # from iga_assembler import IGABeamAssembler
 from iga_assembler2 import IGABeamAssemblerV2
+
+# special vertex-edge DeRham style element
+from elem import DeRhamIsogeometricElement
+from diga_assembler import DeRhamIGABeamAssembler
 
 import argparse
 parser = argparse.ArgumentParser()
@@ -53,8 +57,12 @@ elif args.elem == 'aig':
 elif args.elem == 'higd':
     ELEMENT = HierarchicIsogeometricDispElement(reduced_integrated=False)
     is_iga = True
+elif args.elem == 'msig':
+    ELEMENT = MixedShearIsogeometricElement()
+    is_iga = True
 elif args.elem == 'drig':
-    ELEMENT = DeRhamIsogeometricElement2(reduced_integrated=False)
+    # derham isogeometric element, special vertex-edge style IGA 2nd order basis that is auto locking-free!
+    ELEMENT = DeRhamIsogeometricElement()
     is_iga = True
 
 # ================================
@@ -73,6 +81,8 @@ else:
 
 # ASSEMBLER = IGABeamAssembler if is_iga else StandardBeamAssembler
 ASSEMBLER = IGABeamAssemblerV2 if is_iga else StandardBeamAssembler
+if args.elem == 'drig':
+    ASSEMBLER = DeRhamIGABeamAssembler
 
 assembler = ASSEMBLER(
     ELEMENT=ELEMENT,
@@ -122,9 +132,15 @@ if 'mg' in args.solve:
             )
         elif args.smoother == 'asw':
             omega = args.omega / 2.0 # since 2x smoothing
-            smoother = OnedimAddSchwarz.from_assembler(
-                grid, omega=omega, iters=nsmooth, coupled_size=2
-            )
+            if args.elem == 'drig': # needs custom schwarz smoother with vertex-edge based
+                smoother = OneDimAddSchwarzVertex2Edges.from_assembler(
+                    grid, omega=omega, iters=nsmooth
+                )
+            else:
+                smoother = OnedimAddSchwarz.from_assembler(
+                    grid, omega=omega, iters=nsmooth, coupled_size=2
+                )
+
         smoothers += [smoother]
         nxe = nxe // 2
         if double_smooth:
@@ -210,6 +226,8 @@ if args.verify:
         w = u[0::3] + u[2::3]
     elif args.elem in ['higd']:
         w = u[0::2] + u[1::2]
+    elif args.elem == 'drig':
+        w = u[:assembler.nw]
     else:
         w = u[0::assembler.dof_per_node]
     pred_disp = np.max(w)
@@ -232,11 +250,13 @@ else:
         w = u[0::3] + u[2::3]
     elif args.elem in ['higd']:
         w = u[0::2] + u[1::2]
+    elif args.elem == 'drig':
+        w = u[:assembler.nw]
     else:
         w = u[0::assembler.dof_per_node]
     pred_disp = np.max(w)
 
-    if is_iga:
+    if is_iga and not(args.elem == 'drig'):
         # trying to see if this makes a difference in IGA conv
         pred_disp = assembler.get_max_deflection_greville()
     print(f"{pred_disp=}")

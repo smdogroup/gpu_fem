@@ -8,4 +8,7 @@ from .hhd_elem import HierarchicDispHermiteElement
 from .aig_elem import AsymptoticIsogeometricTimoshenkoElement
 from .aig_elem2 import AsymptoticIsogeometricTimoshenkoElementV2
 from .higd_elem import HierarchicIsogeometricDispElement
-from .drig_elem import DeRhamIsogeometricElement2
+from .ms_elem import MixedShearIsogeometricElement
+
+# special vertex-edge style DeRham iga element
+from .derham import DeRhamIsogeometricElement
