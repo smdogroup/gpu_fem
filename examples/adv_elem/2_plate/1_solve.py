@@ -173,6 +173,7 @@ elif args.solve == 'vmg':
                                     # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
                                     # line_search=False, # often need it turned off.. for best conv
                                     line_search = args.elem == 'drig',
+                                    debug=args.debug,
                                     smoothers=smoothers)
 
 # elif args.solve == 'kmg':
