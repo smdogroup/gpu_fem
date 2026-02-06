@@ -24,6 +24,7 @@ class DeRhamIGAPlateAssembler:
         load_fcn=lambda x, y: 1.0,
         clamped: bool = False,
         split_disp_bc:bool=False,
+        bdf_file:str=""
     ):
         self.element = ELEMENT(clamped=clamped) if callable(ELEMENT) else ELEMENT
         self.nxe = int(nxe)

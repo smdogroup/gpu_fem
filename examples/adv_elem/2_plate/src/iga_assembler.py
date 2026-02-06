@@ -18,6 +18,7 @@ class IGAPlateAssembler:
         load_fcn=lambda x, y: 1.0,
         clamped:bool=False,
         split_disp_bc:bool=False,
+        bdf_file:str=""
     ):
         self.element = ELEMENT
         self.nxe = int(nxe)

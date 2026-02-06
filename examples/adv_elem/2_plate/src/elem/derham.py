@@ -2,7 +2,7 @@ import numpy as np
 import scipy.sparse as sp
 
 # You already have these in your codebase (based on your snippets)
-from .basis import second_order_quadrature
+from .basis import second_order_quadrature, zero_order_quadrature, first_order_quadrature
 from .basis import get_iga2_basis, get_lagrange_basis_01
 
 
@@ -22,8 +22,9 @@ class DeRhamIsogeometricPlateElement:
       thy : (ix,iy) over {0..2}x{0..1}  -> 6
     """
 
-    def __init__(self, clamped: bool = False):
+    def __init__(self, reduced_integrated:bool=False, clamped: bool = False):
         self.dof_per_node = 1  # you store fields in separate blocks (block-CSR style)
+        self.reduced_integrated = reduced_integrated
         self.clamped = bool(clamped)
 
     # ---- tensor helpers ------------------------------------------------------
@@ -66,6 +67,12 @@ class DeRhamIsogeometricPlateElement:
             x = x0 + xi * dx,   y = y0 + eta * dy,  with xi,eta in [0,1]
         """
         pts, wts = second_order_quadrature()  # length 3
+        if self.reduced_integrated:
+            # shear_pts, shear_wts = zero_order_quadrature()
+            shear_pts, shear_wts = first_order_quadrature()
+        else:
+            shear_pts, shear_wts = second_order_quadrature()
+
         n_w = 9
         n_tx = 6
         n_ty = 6
@@ -144,23 +151,6 @@ class DeRhamIsogeometricPlateElement:
                 Nty_y = Nty_eta * eta_y
 
                 # =========================
-                # Shear: ksGA * [ (w_x - thx)^2 + (w_y - thy)^2 ]
-                # =========================
-                cS = ksGA * wt
-
-                # (w_x - thx)^2
-                Kww   += cS * np.outer(Nw_x, Nw_x)
-                Kwtx  -= cS * np.outer(Nw_x, Ntx)
-                Ktxw  -= cS * np.outer(Ntx,  Nw_x)
-                Ktxtx += cS * np.outer(Ntx,  Ntx)
-
-                # (w_y - thy)^2
-                Kww   += cS * np.outer(Nw_y, Nw_y)
-                Kwty  -= cS * np.outer(Nw_y, Nty)
-                Ktyw  -= cS * np.outer(Nty,  Nw_y)
-                Ktyty += cS * np.outer(Nty,  Nty)
-
-                # =========================
                 # Bending: (kappa^T Db kappa)
                 # kappa = [thx_x, thy_y, thx_y + thy_x]
                 # =========================
@@ -202,6 +192,69 @@ class DeRhamIsogeometricPlateElement:
                 # k3 coupling: D33 * (thx_y + thy_x)^2 => cross term 2*D33*(thx_y)*(thy_x)
                 Ktxty += cB * (D33 * np.outer(k3_tx, k3_ty))
                 Ktytx += cB * (D33 * np.outer(k3_ty, k3_tx))
+
+        nshear = len(shear_pts)
+        for jj in range(nshear):
+            _eta = shear_pts[jj]
+            w_eta = shear_wts[jj]
+            eta = 0.5 * (_eta + 1.0)
+            w_eta *= 0.5
+
+            # 1D y-bases
+            Ny2, dNy2 = self._iga2_1d(eta, bot_bndry, top_bndry)  # (3,)
+            Ny1, dNy1 = self._p1_1d(eta)                          # (2,)
+
+            for ii in range(nshear):
+                _xi = shear_pts[ii]
+                w_xi = shear_wts[ii]
+                xi = 0.5 * (_xi + 1.0)
+                w_xi *= 0.5
+
+                wt = (w_xi * w_eta) * J  # already includes mapping from [-1,1]^2 to [0,1]^2 via 0.5 factors above
+
+                # 1D x-bases
+                Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)  # (3,)
+                Nx1, dNx1 = self._p1_1d(xi)                              # (2,)
+
+                # --- w basis: (2,2) => 3x3 = 9
+                Nw, Nw_xi, Nw_eta = self._tensor_product_basis_22(
+                    xi, eta, (Nx2, dNx2), (Ny2, dNy2)
+                )
+                # physical derivs
+                Nw_x = Nw_xi * xi_x
+                Nw_y = Nw_eta * eta_y
+
+                # --- thx basis: (1,2) => 2x3 = 6
+                Ntx, Ntx_xi, Ntx_eta = self._tensor_product_basis_22(
+                    xi, eta, (Nx1, dNx1), (Ny2, dNy2)
+                )
+                Ntx_x = Ntx_xi * xi_x
+                Ntx_y = Ntx_eta * eta_y
+
+                # --- thy basis: (2,1) => 3x2 = 6
+                Nty, Nty_xi, Nty_eta = self._tensor_product_basis_22(
+                    xi, eta, (Nx2, dNx2), (Ny1, dNy1)
+                )
+                Nty_x = Nty_xi * xi_x
+                Nty_y = Nty_eta * eta_y
+
+                # =========================
+                # Shear: ksGA * [ (w_x - thx)^2 + (w_y - thy)^2 ]
+                # =========================
+                cS = ksGA * wt
+
+                # (w_x - thx)^2
+                Kww   += cS * np.outer(Nw_x, Nw_x)
+                Kwtx  -= cS * np.outer(Nw_x, Ntx)
+                Ktxw  -= cS * np.outer(Ntx,  Nw_x)
+                Ktxtx += cS * np.outer(Ntx,  Ntx)
+
+                # (w_y - thy)^2
+                Kww   += cS * np.outer(Nw_y, Nw_y)
+                Kwty  -= cS * np.outer(Nw_y, Nty)
+                Ktyw  -= cS * np.outer(Nty,  Nw_y)
+                Ktyty += cS * np.outer(Nty,  Nty)
+
 
         # pack as full 3x3 block
         return (Kww, Kwtx, Kwty,
