@@ -1,0 +1,423 @@
+import numpy as np
+
+from .basis import second_order_quadrature, first_order_quadrature, zero_order_quadrature
+from .basis import get_iga2_basis, get_lagrange_basis_01
+
+
+class DeRhamIsogeometricCylinderElement:
+    """
+    De Rham IGA cylinder element on (x,y) param domain:
+      x = axial
+      y = hoop arc-length s = r*phi   (your derived formulas assume this)
+
+    Unknowns (field blocks):
+      w   : radial displacement (H1, p=2x2)            -> 9 dofs  (p2,p2)
+      u   : axial displacement  (H1, p=2x2)            -> 9 dofs  (p2,p2)
+      v   : hoop displacement   (y-edge space)         -> 6 dofs  (p2,p1)
+      thx : rotation about hoop? (y-edge space)        -> 6 dofs  (p2,p1)
+      thy : rotation about axial (x-edge space)        -> 6 dofs  (p1,p2)
+
+    This choice preserves exact discrete shear cancellation:
+      2*e13 = w_x + thy
+      2*e23 = w_y - v/r - thx   (y = s so w_y is w_s)
+
+    Your derived strains implemented:
+
+    Bending:
+      k11      = thy_x
+      k22      = -thx_y + w/r^2 + v_y/r
+      2*k12    = v_x/r + thy_y - thx_x
+
+    Membrane:
+      e11      = u_x
+      e22      = v_y + w/r
+      2*e12    = v_x + u_y
+
+    Transverse shear:
+      2*e13    = w_x + thy
+      2*e23    = w_y - v/r - thx
+
+    NOTE:
+      - Here y is assumed to be arc-length s. If you ever switch to y=phi,
+        you MUST insert 1/r factors into y-derivatives accordingly.
+      - “opposite support” for u vs v is BC/assembler logic, not element stiffness.
+        The element just provides K; apply different essential BCs in your projector.
+    """
+
+    def __init__(self, r: float, reduced_integrated: bool = False, clamped: bool = False):
+        self.dof_per_node = 1  # separate field blocks
+        self.r = float(r)
+        self.reduced_integrated = bool(reduced_integrated)
+        self.clamped = bool(clamped)
+
+    # ---- tensor helpers ------------------------------------------------------
+    @staticmethod
+    def _tensor_product_basis(xi, eta, bx, by):
+        Nx, dNx = bx
+        Ny, dNy = by
+        N    = np.kron(Ny, Nx)
+        Nxi  = np.kron(Ny, dNx)
+        Neta = np.kron(dNy, Nx)
+        return N, Nxi, Neta
+
+    @staticmethod
+    def _iga2_1d(x, left, right):
+        return get_iga2_basis(x, left, right)  # (N(3,), dN(3,))
+
+    @staticmethod
+    def _p1_1d(x):
+        return get_lagrange_basis_01(x)  # (N(2,), dN(2,))
+
+    def get_kelem(
+        self,
+        E: float,
+        nu: float,
+        thick: float,
+        dx: float,
+        dy: float,
+        left_bndry: bool,
+        right_bndry: bool,
+        bot_bndry: bool,
+        top_bndry: bool,
+    ):
+        """
+        Returns 5x5 block stiffness (dense) for local dofs ordered:
+          [ w(9), u(9), v(6), thx(6), thy(6) ]
+        """
+        pts, wts = second_order_quadrature()
+        if self.reduced_integrated:
+            shear_pts, shear_wts = first_order_quadrature()
+            # shear_pts, shear_wts = zero_order_quadrature()
+        else:
+            shear_pts, shear_wts = second_order_quadrature()
+
+        r = self.r
+
+        # sizes
+        n_w   = 9   # (p2,p2)
+        n_u   = 9   # (p2,p2)
+        n_v   = 6   # (p2,p1)
+        n_thx = 6   # (p2,p1)
+        n_thy = 6   # (p1,p2)
+
+        # allocate 5x5 blocks: (w,u,v,thx,thy)
+        Kww   = np.zeros((n_w,   n_w))
+        Kwu   = np.zeros((n_w,   n_u))
+        Kwv   = np.zeros((n_w,   n_v))
+        Kwtx  = np.zeros((n_w,   n_thx))
+        Kwty  = np.zeros((n_w,   n_thy))
+
+        Kuw   = np.zeros((n_u,   n_w))
+        Kuu   = np.zeros((n_u,   n_u))
+        Kuv   = np.zeros((n_u,   n_v))
+        Kutx  = np.zeros((n_u,   n_thx))
+        Kuty  = np.zeros((n_u,   n_thy))
+
+        Kvw   = np.zeros((n_v,   n_w))
+        Kvu   = np.zeros((n_v,   n_u))
+        Kvv   = np.zeros((n_v,   n_v))
+        Kvtx  = np.zeros((n_v,   n_thx))
+        Kvty  = np.zeros((n_v,   n_thy))
+
+        Ktxw  = np.zeros((n_thx, n_w))
+        Ktxu  = np.zeros((n_thx, n_u))
+        Ktxv  = np.zeros((n_thx, n_v))
+        Ktxtx = np.zeros((n_thx, n_thx))
+        Ktxty = np.zeros((n_thx, n_thy))
+
+        Ktyw  = np.zeros((n_thy, n_w))
+        Ktyu  = np.zeros((n_thy, n_u))
+        Ktyv  = np.zeros((n_thy, n_v))
+        Ktytx = np.zeros((n_thy, n_thx))
+        Ktyty = np.zeros((n_thy, n_thy))
+
+        # -------------------
+        # material matrices
+        # -------------------
+        # bending (plane stress-like) matrix
+        EI = E * thick**3 / (12.0 * (1.0 - nu**2))
+        Db = EI * np.array([
+            [1.0, nu, 0.0],
+            [nu,  1.0, 0.0],
+            [0.0, 0.0, (1.0 - nu) / 2.0],
+        ])
+
+        # membrane matrix (same form, with A = E t /(1-nu^2))
+        A0 = E * thick / (1.0 - nu**2)
+        Dm = A0 * np.array([
+            [1.0, nu, 0.0],
+            [nu,  1.0, 0.0],
+            [0.0, 0.0, (1.0 - nu) / 2.0],
+        ])
+
+        # transverse shear (isotropic)
+        ks = 5.0 / 6.0
+        G  = E / (2.0 * (1.0 + nu))
+        Ds = (ks * G * thick) * np.eye(2)
+
+        # affine map scaling
+        J = dx * dy
+        xi_x  = 1.0 / dx
+        eta_y = 1.0 / dy
+
+        # ==========================================================
+        # BENDING: kappa^T Db kappa
+        # kappa = [k11, k22, 2*k12]  (engineering shear curvature)
+        #
+        # k11     = thy_x
+        # k22     = -thx_y + w/r^2 + v_y/r
+        # 2*k12   = v_x/r + thy_y - thx_x
+        # ==========================================================
+        for jj in range(3):
+            _eta = pts[jj]
+            w_eta = wts[jj] * 0.5
+            eta = 0.5 * (_eta + 1.0)
+
+            Ny2, dNy2 = self._iga2_1d(eta, bot_bndry, top_bndry)  # p2
+            Ny1, dNy1 = self._p1_1d(eta)                          # p1
+
+            for ii in range(3):
+                _xi = pts[ii]
+                w_xi = wts[ii] * 0.5
+                xi = 0.5 * (_xi + 1.0)
+
+                wt = (w_xi * w_eta) * J
+
+                Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)  # p2
+                Nx1, dNx1 = self._p1_1d(xi)                              # p1
+
+                # w, u : (p2,p2)
+                Nw, Nw_xi, Nw_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
+                Nw_x = Nw_xi * xi_x
+                Nw_y = Nw_eta * eta_y
+
+                Nu, Nu_xi, Nu_eta = Nw, Nw_xi, Nw_eta
+                Nu_x = Nw_x
+                Nu_y = Nw_y
+
+                # v, thx : (p2,p1)
+                Nv, Nv_xi, Nv_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny1, dNy1))
+                Nv_x = Nv_xi * xi_x
+                Nv_y = Nv_eta * eta_y
+
+                Ntx, Ntx_xi, Ntx_eta = Nv, Nv_xi, Nv_eta
+                Ntx_x = Nv_x
+                Ntx_y = Nv_y
+
+                # thy : (p1,p2)
+                Nty, Nty_xi, Nty_eta = self._tensor_product_basis(xi, eta, (Nx1, dNx1), (Ny2, dNy2))
+                Nty_x = Nty_xi * xi_x
+                Nty_y = Nty_eta * eta_y
+
+                # k11 = thy_x
+                k11_thy = Nty_x
+
+                # k22 = -thx_y + w/r^2 + v_y/r
+                k22_w   = (1.0 / (r * r)) * Nw
+                k22_thx = -Ntx_y
+                k22_v   = (1.0 / r) * Nv_y
+
+                # 2*k12 = v_x/r + thy_y - thx_x
+                k12_v   = (1.0 / r) * Nv_x
+                k12_thy = Nty_y
+                k12_thx = -Ntx_x
+
+                # assemble with Db, using outer-products
+                D11, D12, D22, D33 = Db[0, 0], Db[0, 1], Db[1, 1], Db[2, 2]
+                cB = wt
+
+                # k11-k11
+                Ktyty += cB * (D11 * np.outer(k11_thy, k11_thy))
+
+                # k22-k22 (w,v,thx)
+                Kww   += cB * (D22 * np.outer(k22_w,   k22_w))
+                Kvv   += cB * (D22 * np.outer(k22_v,   k22_v))
+                Ktxtx += cB * (D22 * np.outer(k22_thx, k22_thx))
+
+                Kwv   += cB * (D22 * np.outer(k22_w,   k22_v))
+                Kvw   += cB * (D22 * np.outer(k22_v,   k22_w))
+                Kwtx  += cB * (D22 * np.outer(k22_w,   k22_thx))
+                Ktxw  += cB * (D22 * np.outer(k22_thx, k22_w))
+                Kvtx  += cB * (D22 * np.outer(k22_v,   k22_thx))
+                Ktxv  += cB * (D22 * np.outer(k22_thx, k22_v))
+
+                # k12-k12 (v,thx,thy)
+                Kvv   += cB * (D33 * np.outer(k12_v,   k12_v))
+                Ktxtx += cB * (D33 * np.outer(k12_thx, k12_thx))
+                Ktyty += cB * (D33 * np.outer(k12_thy, k12_thy))
+
+                Kvtx  += cB * (D33 * np.outer(k12_v,   k12_thx))
+                Ktxv  += cB * (D33 * np.outer(k12_thx, k12_v))
+                Kvty  += cB * (D33 * np.outer(k12_v,   k12_thy))
+                Ktyv  += cB * (D33 * np.outer(k12_thy, k12_v))
+                Ktxty += cB * (D33 * np.outer(k12_thx, k12_thy))
+                Ktytx += cB * (D33 * np.outer(k12_thy, k12_thx))
+
+                # k11-k22 coupling via D12 (thy with w,v,thx)
+                Kwty  += cB * (D12 * np.outer(k22_w,   k11_thy))
+                Ktyw  += cB * (D12 * np.outer(k11_thy, k22_w))
+
+                Kvty  += cB * (D12 * np.outer(k22_v,   k11_thy))
+                Ktyv  += cB * (D12 * np.outer(k11_thy, k22_v))
+
+                Ktxty += cB * (D12 * np.outer(k22_thx, k11_thy))
+                Ktytx += cB * (D12 * np.outer(k11_thy, k22_thx))
+
+                # (Optionally) you could also include D12 coupling between k11 and k12
+                # if your kappa ordering is [k11,k22,2k12] and Db uses (1,3) = 0 for isotropic,
+                # so there is no coupling: Db[0,2]=Db[1,2]=0.  Nothing to add.
+
+        # ==========================================================
+        # SHEAR: gamma^T Ds gamma, where gamma = [2e13, 2e23]
+        #
+        # 2e13 = w_x + thy
+        # 2e23 = w_y - v/r - thx
+        # ==========================================================
+        ns = len(shear_pts)
+        for jj in range(ns):
+            _eta = shear_pts[jj]
+            w_eta = shear_wts[jj] * 0.5
+            eta = 0.5 * (_eta + 1.0)
+
+            Ny2, dNy2 = self._iga2_1d(eta, bot_bndry, top_bndry)
+            Ny1, dNy1 = self._p1_1d(eta)
+
+            for ii in range(ns):
+                _xi = shear_pts[ii]
+                w_xi = shear_wts[ii] * 0.5
+                xi = 0.5 * (_xi + 1.0)
+
+                wt = (w_xi * w_eta) * J
+                cS = wt  # Ds handled below
+
+                Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)
+                Nx1, dNx1 = self._p1_1d(xi)
+
+                # bases
+                Nw, Nw_xi, Nw_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
+                Nw_x = Nw_xi * xi_x
+                Nw_y = Nw_eta * eta_y
+
+                Nv, Nv_xi, Nv_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny1, dNy1))
+                Ntx = Nv
+                Nty, Nty_xi, Nty_eta = self._tensor_product_basis(xi, eta, (Nx1, dNx1), (Ny2, dNy2))
+
+                # gamma1 = w_x + thy
+                g1_w   = Nw_x
+                g1_thy = Nty
+
+                # gamma2 = w_y - v/r - thx
+                g2_w   = Nw_y
+                g2_v   = -(1.0 / r) * Nv
+                g2_thx = -Ntx
+
+                # Assemble: [g1,g2]^T Ds [g1,g2]
+                # Ds is diagonal isotropic here
+                Ds11 = Ds[0, 0]
+                Ds22 = Ds[1, 1]
+
+                # g1
+                Kww   += cS * (Ds11 * np.outer(g1_w,   g1_w))
+                Kwty  += cS * (Ds11 * np.outer(g1_w,   g1_thy))
+                Ktyw  += cS * (Ds11 * np.outer(g1_thy, g1_w))
+                Ktyty += cS * (Ds11 * np.outer(g1_thy, g1_thy))
+
+                # g2
+                Kww   += cS * (Ds22 * np.outer(g2_w,   g2_w))
+                Kvv   += cS * (Ds22 * np.outer(g2_v,   g2_v))
+                Ktxtx += cS * (Ds22 * np.outer(g2_thx, g2_thx))
+
+                Kwv   += cS * (Ds22 * np.outer(g2_w,   g2_v))
+                Kvw   += cS * (Ds22 * np.outer(g2_v,   g2_w))
+
+                Kwtx  += cS * (Ds22 * np.outer(g2_w,   g2_thx))
+                Ktxw  += cS * (Ds22 * np.outer(g2_thx, g2_w))
+
+                Kvtx  += cS * (Ds22 * np.outer(g2_v,   g2_thx))
+                Ktxv  += cS * (Ds22 * np.outer(g2_thx, g2_v))
+
+        # ==========================================================
+        # MEMBRANE: eps^T Dm eps, with eps = [e11, e22, 2e12]
+        #
+        # e11   = u_x
+        # e22   = v_y + w/r
+        # 2e12  = v_x + u_y
+        # ==========================================================
+        for jj in range(3):
+            _eta = pts[jj]
+            w_eta = wts[jj] * 0.5
+            eta = 0.5 * (_eta + 1.0)
+
+            Ny2, dNy2 = self._iga2_1d(eta, bot_bndry, top_bndry)
+            Ny1, dNy1 = self._p1_1d(eta)
+
+            for ii in range(3):
+                _xi = pts[ii]
+                w_xi = wts[ii] * 0.5
+                xi = 0.5 * (_xi + 1.0)
+
+                wt = (w_xi * w_eta) * J
+                cM = wt
+
+                Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)
+
+                # w,u (p2,p2)
+                Nw, Nw_xi, Nw_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
+                Nw_x = Nw_xi * xi_x
+                Nw_y = Nw_eta * eta_y
+
+                Nu, Nu_xi, Nu_eta = Nw, Nw_xi, Nw_eta
+                Nu_x = Nw_x
+                Nu_y = Nw_y
+
+                # v (p2,p1)
+                Nv, Nv_xi, Nv_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny1, dNy1))
+                Nv_x = Nv_xi * xi_x
+                Nv_y = Nv_eta * eta_y
+
+                # e11 = u_x
+                e11_u = Nu_x
+
+                # e22 = v_y + w/r
+                e22_v = Nv_y
+                e22_w = (1.0 / r) * Nw
+
+                # 2e12 = v_x + u_y
+                e12_v = Nv_x
+                e12_u = Nu_y
+
+                # Assemble eps^T Dm eps with eps = [e11, e22, 2e12]
+                D11, D12, D22, D33 = Dm[0, 0], Dm[0, 1], Dm[1, 1], Dm[2, 2]
+
+                # e11-e11
+                Kuu += cM * (D11 * np.outer(e11_u, e11_u))
+
+                # e22-e22
+                Kvv += cM * (D22 * np.outer(e22_v, e22_v))
+                Kww += cM * (D22 * np.outer(e22_w, e22_w))
+                Kvw += cM * (D22 * np.outer(e22_v, e22_w))
+                Kwv += cM * (D22 * np.outer(e22_w, e22_v))
+
+                # (2e12)-(2e12)
+                Kvv += cM * (D33 * np.outer(e12_v, e12_v))
+                Kuu += cM * (D33 * np.outer(e12_u, e12_u))
+                Kvu += cM * (D33 * np.outer(e12_v, e12_u))
+                Kuv += cM * (D33 * np.outer(e12_u, e12_v))
+
+                # e11-e22 coupling (nu terms): between u_x and (v_y + w/r)
+                Kvu += cM * (D12 * np.outer(e22_v, e11_u))
+                Kuv += cM * (D12 * np.outer(e11_u, e22_v))
+
+                Kwu += cM * (D12 * np.outer(e22_w, e11_u))
+                Kuw += cM * (D12 * np.outer(e11_u, e22_w))
+
+                # Note: Dm has no coupling between normal and shear for isotropic (Dm[0,2]=Dm[1,2]=0).
+
+        # Pack 5x5 block (w, u, v, thx, thy)
+        return (
+            Kww,  Kwu,  Kwv,  Kwtx,  Kwty,
+            Kuw,  Kuu,  Kuv,  Kutx,  Kuty,
+            Kvw,  Kvu,  Kvv,  Kvtx,  Kvty,
+            Ktxw, Ktxu, Ktxv, Ktxtx, Ktxty,
+            Ktyw, Ktyu, Ktyv, Ktytx, Ktyty
+        )

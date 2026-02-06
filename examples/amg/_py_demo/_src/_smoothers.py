@@ -63,7 +63,7 @@ def gauss_seidel_csr_transpose(A, b, x0, num_iter=1):
 
 def block_gauss_seidel_6dof(A, b: np.ndarray, x0: np.ndarray, num_iter=1):
     x = x0.copy()
-    ndof = 6
+    ndof = block_dim = A.data.shape[-1]
     n = A.shape[0] // ndof
 
     for it in range(num_iter):
@@ -105,7 +105,7 @@ def block_gauss_seidel_6dof_transpose(A, b: np.ndarray, x0: np.ndarray, num_iter
     Returns updated solution vector x
     """
     x = x0.copy()
-    ndof = 6
+    ndof = block_dim = A.data.shape[-1]
     n = A.shape[0] // ndof
 
     for it in range(num_iter):

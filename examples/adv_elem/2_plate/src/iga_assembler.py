@@ -88,7 +88,7 @@ class IGAPlateAssembler:
 
         self.rowp, self.cols, self.nnzb = build_csr_from_conn(self.conn, self.nnodes)
 
-    def _assemble_system(self):
+    def _assemble_system(self, bcs:bool=True):
         dpn = self.dof_per_node
         self.data = np.zeros((self.nnzb, dpn, dpn), dtype=np.double)
         self.force = np.zeros(self.N)
@@ -139,67 +139,68 @@ class IGAPlateAssembler:
             np.add.at(self.force, loc_dofs, felem)
 
         # ---- BCs ----
-        if self.split_disp_bc:
-            # expects dpn=3: [w_b, w_s1, w_s2]
-            assert dpn == 3
+        if bcs:
+            if self.split_disp_bc:
+                # expects dpn=3: [w_b, w_s1, w_s2]
+                assert dpn == 3
 
-            for node in self.bcs:
-                ix = node % self.nnx
-                iy = node // self.nnx
-                on_left  = (ix == 0)
-                on_right = (ix == self.nnx - 1)
-                on_bot   = (iy == 0)
-                on_top   = (iy == self.nnx - 1)
+                for node in self.bcs:
+                    ix = node % self.nnx
+                    iy = node // self.nnx
+                    on_left  = (ix == 0)
+                    on_right = (ix == self.nnx - 1)
+                    on_bot   = (iy == 0)
+                    on_top   = (iy == self.nnx - 1)
 
-                # bottom-left corner: pin all 3 (clean gauge fix)
-                if on_left and on_bot:
+                    # bottom-left corner: pin all 3 (clean gauge fix)
+                    if on_left and on_bot:
+                        for colp in range(self.rowp[node], self.rowp[node+1]):
+                            bc = self.cols[colp]
+                            self.data[colp,:,:] = np.eye(3) if (bc == node) else 0.0
+                        self.force[3*node:3*node+3] = 0.0
+                        continue
+
+                    # row 0: w_b + w_s1 + w_s2 = 0
                     for colp in range(self.rowp[node], self.rowp[node+1]):
                         bc = self.cols[colp]
-                        self.data[colp,:,:] = np.eye(3) if (bc == node) else 0.0
-                    self.force[3*node:3*node+3] = 0.0
-                    continue
-
-                # row 0: w_b + w_s1 + w_s2 = 0
-                for colp in range(self.rowp[node], self.rowp[node+1]):
-                    bc = self.cols[colp]
-                    self.data[colp,0,:] = 0.0
-                    if bc == node:
-                        self.data[colp,0,0] = 1.0
-                        self.data[colp,0,1] = 1.0
-                        self.data[colp,0,2] = 1.0
-                self.force[3*node + 0] = 0.0
-
-                # row 1: w_s1 = 0 on left
-                if on_left: # or on_top:
-                    for colp in range(self.rowp[node], self.rowp[node+1]):
-                        bc = self.cols[colp]
-                        self.data[colp,1,:] = 0.0
+                        self.data[colp,0,:] = 0.0
                         if bc == node:
-                            self.data[colp,1,1] = 1.0
-                    self.force[3*node + 1] = 0.0
+                            self.data[colp,0,0] = 1.0
+                            self.data[colp,0,1] = 1.0
+                            self.data[colp,0,2] = 1.0
+                    self.force[3*node + 0] = 0.0
 
-                # row 2: w_s2 = 0 on bottom
-                if on_bot: # or on_right:
-                    for colp in range(self.rowp[node], self.rowp[node+1]):
-                        bc = self.cols[colp]
-                        self.data[colp,2,:] = 0.0
-                        if bc == node:
-                            self.data[colp,2,2] = 1.0
-                    self.force[3*node + 2] = 0.0
+                    # row 1: w_s1 = 0 on left
+                    if on_left: # or on_top:
+                        for colp in range(self.rowp[node], self.rowp[node+1]):
+                            bc = self.cols[colp]
+                            self.data[colp,1,:] = 0.0
+                            if bc == node:
+                                self.data[colp,1,1] = 1.0
+                        self.force[3*node + 1] = 0.0
 
-        else:
-            # simple SS: w=0 on boundary (idof 0), leave rotations free
-            # (if you later want clamped, change idofs below to range(dpn))
-            for node in self.bcs:
-                idofs = [0]
-                for idof in idofs:
-                    for colp in range(self.rowp[node], self.rowp[node+1]):
-                        bc = self.cols[colp]
-                        for jdof in range(dpn):
-                            self.data[colp,idof,jdof] = 0.0
-                        if bc == node:
-                            self.data[colp,idof,idof] = 1.0
-                    self.force[dpn*node + idof] = 0.0
+                    # row 2: w_s2 = 0 on bottom
+                    if on_bot: # or on_right:
+                        for colp in range(self.rowp[node], self.rowp[node+1]):
+                            bc = self.cols[colp]
+                            self.data[colp,2,:] = 0.0
+                            if bc == node:
+                                self.data[colp,2,2] = 1.0
+                        self.force[3*node + 2] = 0.0
+
+            else:
+                # simple SS: w=0 on boundary (idof 0), leave rotations free
+                # (if you later want clamped, change idofs below to range(dpn))
+                for node in self.bcs:
+                    idofs = [0]
+                    for idof in idofs:
+                        for colp in range(self.rowp[node], self.rowp[node+1]):
+                            bc = self.cols[colp]
+                            for jdof in range(dpn):
+                                self.data[colp,idof,jdof] = 0.0
+                            if bc == node:
+                                self.data[colp,idof,idof] = 1.0
+                        self.force[dpn*node + idof] = 0.0
 
         self.kmat = sp.bsr_matrix((self.data, self.cols, self.rowp), shape=(self.N, self.N))
 

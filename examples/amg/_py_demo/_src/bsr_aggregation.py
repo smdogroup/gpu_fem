@@ -2,7 +2,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
-from smoothers import block_gauss_seidel_6dof, block_gauss_seidel_6dof_transpose
+from _smoothers import block_gauss_seidel_6dof, block_gauss_seidel_6dof_transpose
 
 def strength_matrix_bsr(A:sp.bsr_matrix, threshold:float=0.25):
     """
@@ -122,42 +122,77 @@ def greedy_serial_aggregation_bsr(A:sp.bsr_matrix, threshold:float=0.25):
 #     return Bpred
 
 
-def get_rigid_body_modes(xpts, th:float=1.0):
+def get_rigid_body_modes(xpts, th:float=1.0, vpn:int=6, th_flip:bool=False):
     """get rigid body modes of particular mesh"""
 
     _x = xpts[0::3]; _y = xpts[1::3]; _z = xpts[2::3]
     nnodes = _x.shape[0]
 
-    Bpred = np.zeros((nnodes, 6, 6))
+    
 
-    # first three modes just as translation
-    for imode in range(3):
-        Bpred[:, imode, imode] = 1.0
+    if vpn == 6:
 
-    # vw mode 3
-    Bpred[:, 1, 3] = -th * _z
-    Bpred[:, 2, 3] = th * _y
-    Bpred[:, 3, 3] = th
+        Bpred = np.zeros((nnodes, 6, 6))
 
-    # uw mode 4
-    Bpred[:, 0, 4] = th * _z
-    Bpred[:, 2, 4] = -th * _x
-    Bpred[:, 4, 4] = th
+        # first three modes just as translation
+        for imode in range(3):
+            Bpred[:, imode, imode] = 1.0
 
-    # uv mode 5
-    Bpred[:, 0, 5] = -th * _y
-    Bpred[:, 1, 5] = th * _x
-    Bpred[:, 5, 5] = th
+        # vw mode 3
+        Bpred[:, 1, 3] = -th * _z
+        Bpred[:, 2, 3] = th * _y
+        Bpred[:, 3, 3] = th
+
+        # uw mode 4
+        Bpred[:, 0, 4] = th * _z
+        Bpred[:, 2, 4] = -th * _x
+        Bpred[:, 4, 4] = th
+
+        # uv mode 5
+        Bpred[:, 0, 5] = -th * _y
+        Bpred[:, 1, 5] = th * _x
+        Bpred[:, 5, 5] = th
+
+    elif vpn == 3 and not th_flip:
+
+        Bpred = np.zeros((nnodes, 3, 3))
+
+        # w for plate
+        Bpred[:, 0, 0] = 1.0
+
+        # thx mode
+        Bpred[:, 0, 1] = th * _y
+        Bpred[:, 1, 1] = th
+
+        # uw mode 4
+        Bpred[:, 0, 2] = -th * _x
+        Bpred[:, 2, 2] = th
+
+    elif vpn == 3 and th_flip:
+        # means that shear strains are instead (w_{,x} + th_x) and (w_{,y} + th_y)
+
+        Bpred = np.zeros((nnodes, 3, 3))
+
+        # w for plate
+        Bpred[:, 0, 0] = 1.0
+
+        # thx mode
+        Bpred[:, 0, 1] = th * _x
+        Bpred[:, 1, 1] = -th
+
+        # uw mode 4
+        Bpred[:, 0, 2] = th * _y
+        Bpred[:, 2, 2] = -th
     
     return Bpred
 
-def get_coarse_rigid_body_modes(B:np.ndarray, xpts:np.ndarray, aggregate_ind:np.ndarray):
+def get_coarse_rigid_body_modes(B:np.ndarray, xpts:np.ndarray, aggregate_ind:np.ndarray, vpn:int=6):
     """helper method for constructing tentative prolongator"""
     # nnodes = aggregate_ind.shape[0]
     num_agg = np.max(aggregate_ind) + 1
 
     # 2) compute coarse rigid body modes R for aggregates (average over nodes)
-    R = np.zeros((num_agg, 6, 6))
+    R = np.zeros((num_agg, vpn, vpn))
     xpts_c = np.zeros((num_agg, 3))
     for iagg in range(num_agg):
         agg_nodes = aggregate_ind == iagg
@@ -168,7 +203,7 @@ def get_coarse_rigid_body_modes(B:np.ndarray, xpts:np.ndarray, aggregate_ind:np.
         xpts_c[iagg] = np.mean(xpts[agg_nodes], axis=0)
     return R, xpts_c
 
-def tentative_prolongator_bsr(B: np.ndarray, aggregate_ind: np.ndarray, bc_flags:np.ndarray):
+def tentative_prolongator_bsr(B: np.ndarray, aggregate_ind: np.ndarray, bc_flags:np.ndarray, vpn:int=6):
     nnodes = aggregate_ind.shape[0]
     num_agg = np.max(aggregate_ind) + 1
 
@@ -180,11 +215,9 @@ def tentative_prolongator_bsr(B: np.ndarray, aggregate_ind: np.ndarray, bc_flags
     # B = get_rigid_body_modes(xpts.reshape(3 * nnodes))  # (nnodes, 6, 6)
     # R, xpts_c = get_coarse_rigid_body_modes(B, xpts, aggregate_ind)
     # print(f"{R[0]=}")
-    R = np.zeros((num_agg, 6, 6))
+    R = np.zeros((num_agg, vpn, vpn))
 
-    print(f"{B.shape=}")
-
-    data = np.zeros((nnodes, 6, 6))
+    data = np.zeros((nnodes, vpn, vpn))
 
     # QR decomposition of B * Qk = Rk (which also discovers aggregate coarse rigid body modes)
     for iagg in range(num_agg):
@@ -192,13 +225,13 @@ def tentative_prolongator_bsr(B: np.ndarray, aggregate_ind: np.ndarray, bc_flags
         nk = np.sum(agg_mask)
 
         # Stack rigid body modes for this aggregate
-        Bk = B[agg_mask].reshape(nk * 6, 6)
+        Bk = B[agg_mask].reshape(nk * vpn, vpn)
 
         # Thin QR factorization
         Qk, Rk = np.linalg.qr(Bk, mode="reduced")
 
         # Qk^T Qk = I   → tentative prolongator
-        data[agg_mask] = Qk.reshape(nk, 6, 6)
+        data[agg_mask] = Qk.reshape(nk, vpn, vpn)
 
         # Store Rk if you need the coarse nullspace
         R[iagg] = Rk
@@ -206,12 +239,12 @@ def tentative_prolongator_bsr(B: np.ndarray, aggregate_ind: np.ndarray, bc_flags
     # since tentative prolongator has only one block nonzero per fine node
     # was missing this before, need this with AMG (otherwise will get NZ deflection in fine prolong)
     for inode in range(nnodes):
-        for ii in range(6):
-            idof = 6 * inode + ii
+        for ii in range(vpn):
+            idof = vpn * inode + ii
             if bc_flags[idof]: # apply dirichlet bcs
                 data[inode,ii,:] = 0.0
 
-    P0 = sp.bsr_matrix((data, cols, rowp), blocksize=(6, 6))
+    P0 = sp.bsr_matrix((data, cols, rowp), blocksize=(vpn, vpn))
     return P0, R
 
 def get_bc_flags_bsr(A: sp.bsr_matrix, tol=1e-14) -> np.ndarray:
@@ -465,7 +498,7 @@ class DirectCSRSolver:
 class AMG_BSRSolver:
     """general multilevel AMG solver..."""
     def __init__(self, A_free:sp.bsr_matrix, A:sp.bsr_matrix, B:np.ndarray, threshold:float=0.25,
-                 omega:float=0.7, pre_smooth=1, post_smooth=1, level:int=0, near_kernel:bool=True):
+                 omega:float=0.7, pre_smooth=1, post_smooth=1, level:int=0, ncyc:int=1, near_kernel:bool=True):
         """
         A : fine-grid operator (CSR) without bcs
         A : fine-grid operator (CSR) with bcs
@@ -481,6 +514,8 @@ class AMG_BSRSolver:
         bs = self.A_free.data.shape[-1]
         nnodes = self.A_free.shape[0] // bs
         self.B = B
+        self.ncyc = ncyc # how many inner AMG cycles before Krylov step
+        self.iters = 0 # count how many AMG cycles used
 
         # compute node aggregate sets
         # make sure to use unconstrained matrix for aggregation indicators originally
@@ -494,7 +529,8 @@ class AMG_BSRSolver:
         # print(f"{bc_flags=}")
 
         # create tentative prolongator then smooth it
-        self.T, self.Bc = tentative_prolongator_bsr(self.B, aggregate_ind, bc_flags)
+        block_dim = A.data.shape[-1]
+        self.T, self.Bc = tentative_prolongator_bsr(self.B, aggregate_ind, bc_flags, vpn=block_dim)
         self.P = smooth_prolongator_bsr(self.T, A, self.Bc, bc_flags, omega=omega, near_kernel=near_kernel) # single damped jacobi step, so only one step of fillin
         # self.P = self.T # DEBUG
         self.R = self.P.T # sym matrix so restriction is transpose prolong
@@ -605,28 +641,36 @@ class AMG_BSRSolver:
         """
         x = np.zeros_like(rhs)
 
-        # Pre-smoothing (forward GS)
-        if self.pre_smooth > 0:
-            x = block_gauss_seidel_6dof(self.A, rhs, x0=x,
-                                        num_iter=self.pre_smooth)
+        self.iters += self.ncyc
 
-        # # Coarse-grid correction
-        r = rhs - self.A.dot(x)
-        rc = self.R.dot(r)
-        ec = self.coarse_solver.solve(rc)
-        xc = self.P.dot(ec)
+        for _ in range(self.ncyc):
 
-        # now do line-search update of this
-        # fc = self.A.dot(xc)
-        # omega_LS = np.dot(rhs, xc) / np.dot(xc, fc)
-        # print(f"{omega_LS=}")
-        # x += omega_LS * xc
-        # just results in omega_LS = 1 from AMG
-        x += xc
+            # Pre-smoothing (forward GS)
+            if self.pre_smooth > 0:
+                x = block_gauss_seidel_6dof(self.A, rhs, x0=x,
+                                            num_iter=self.pre_smooth)
 
-        # Post-smoothing (backward GS, applied to x!)
-        if self.post_smooth > 0:
-            x = block_gauss_seidel_6dof_transpose(self.A, rhs, x0=x,
+            # # Coarse-grid correction
+            r = rhs - self.A.dot(x)
+            rc = self.R.dot(r)
+            ec = self.coarse_solver.solve(rc)
+            xc = self.P.dot(ec)
+
+            # now do line-search update of this
+            # fc = self.A.dot(xc)
+            # omega_LS = np.dot(rhs, xc) / np.dot(xc, fc)
+            # print(f"{omega_LS=}")
+            # x += omega_LS * xc
+            # just results in omega_LS = 1 from AMG
+            x += xc
+
+            # Post-smoothing (backward GS, applied to x!)
+            if self.post_smooth > 0:
+                x = block_gauss_seidel_6dof_transpose(self.A, rhs, x0=x,
                                                 num_iter=self.post_smooth)
 
         return x
+    
+    @property
+    def total_vcycles(self) -> int:
+        return self.iters

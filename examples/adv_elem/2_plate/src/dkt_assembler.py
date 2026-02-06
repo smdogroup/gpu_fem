@@ -44,6 +44,10 @@ class DKTPlateAssembler:
         self.ndof = 3 * self.nnodes
         self.nelems = nxe**2 * 2
 
+        # uniform grid spacing
+        self.dx = self.length / self.nxe
+        self.dy = self.width / self.nxe
+
 
     def _assemble_stiffness_matrix_csr(self, nxe, E, thick, nu):
         """Assemble global stiffness matrix (CSR) for unit-square regular grid with DKT triangles."""
@@ -124,7 +128,7 @@ class DKTPlateAssembler:
         bcs = self.element._get_bcs(nxe)
         return self._apply_bcs_helper(bcs, K, F)
     
-    def _assemble_system(self):
+    def _assemble_system(self, bcs:bool=True):
         
         self.kmat = self._assemble_stiffness_matrix_csr(self.nxe, self.E, self.thick, self.nu)
         # self.kmat = self._assemble_stiffness_matrix_bsr(self.nxe, self.E, self.thick, self.nu)
@@ -134,9 +138,35 @@ class DKTPlateAssembler:
         self.int_nnodes = (self.nxe-1)**2
         self.force[0::3] += self.load_fcn(0.5, 0.5) / self.int_nnodes * 1.9 # assumes const load here
 
-        self.kmat, self.force = self.apply_bcs(self.nxe, self.kmat, self.force)
+        if bcs:  self.kmat, self.force = self.apply_bcs(self.nxe, self.kmat, self.force)
         self.kmat = self.kmat.tobsr(blocksize=(3,3))
         return
+    
+    def get_xpts(self) -> np.ndarray:
+        """
+        Return global nodal coordinates as a flat (3*nnodes,) array:
+
+            [x1, y1, z1,  x2, y2, z2,  ...]
+
+        Structured Q1 grid on [0,length] x [0,width], z = 0.
+        Node ordering matches assembler connectivity:
+            inode = ix + nnx * iy
+        """
+        xyz = np.zeros(3 * self.nnodes, dtype=np.double)
+
+        for inode in range(self.nnodes):
+            ix = inode % self.nnx
+            iy = inode // self.nnx
+
+            x = ix * self.dx
+            y = iy * self.dy
+            z = 0.0
+
+            xyz[3*inode + 0] = x
+            xyz[3*inode + 1] = y
+            xyz[3*inode + 2] = z
+
+        return xyz
     
     def direct_solve(self):
         self._assemble_system()

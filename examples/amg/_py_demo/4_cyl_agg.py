@@ -16,7 +16,7 @@ from __linalg import right_pgmres, right_pcg
 sys.path.append("_src/")
 from csr_aggregation import plot_plate_aggregation
 from bsr_aggregation import greedy_serial_aggregation_bsr, tentative_prolongator_bsr, smooth_prolongator_bsr
-from smoothers import block_gauss_seidel_6dof
+from _smoothers import block_gauss_seidel_6dof
 from bsr_aggregation import AMG_BSRSolver
 
 # ====================================================

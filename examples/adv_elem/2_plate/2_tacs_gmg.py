@@ -8,27 +8,20 @@ from elem import HierarchicIsogeometricDispElement9, DeRhamIsogeometricPlateElem
 from elem import DiscreteKirchoffLoveTrianglePlateElement, ReissnerMindlinPlateElement
 from dkt_assembler import DKTPlateAssembler
 from std_assembler import StandardPlateAssembler
+from tacs_assembler import TACSAssembler
 
 from asw_derham import TwoDimAddSchwarzDeRhamVertexEdges
 
-# from std_assembler import StandardBeamAssembler
-# from elem import EulerBernoulliElement, TimoshenkoElement, HierarchicRotHermiteElement, HierarchicDispHermiteElement
-# # sys.path.append("src/elem")
-# # from eb_elem import EulerBernoulliElement
-# from multigrid import VcycleSolver
-# from smoothers import BlockGaussSeidel, OnedimAddSchwarz, right_pcg2, right_pgmres2
-# from multigrid2 import vcycle_solve, VMG
-
 sys.path.append("../1_beam/src/")
 from multigrid2 import vcycle_solve, VMG
-from smoothers import BlockGaussSeidel
+from smoothers import BlockGaussSeidel, right_pgmres2
 
 sys.path.append("../../asw/_py_demo/_src/")
 from asw import TwodimAddSchwarz
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--elem", type=str, default='drig', help="--elem, options: tbd")
+parser.add_argument("--elem", type=str, default='mitc', help="--elem, options: tbd")
 parser.add_argument("--nxe", type=int, default=32, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
 parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
@@ -62,9 +55,6 @@ if args.elem == 'higd':
 elif args.elem == 'drig':
     ELEMENT = DeRhamIsogeometricPlateElement()
     is_iga = True
-elif args.elem == 'drigr':
-    ELEMENT = DeRhamIsogeometricPlateElement(reduced_integrated=True)
-    is_iga = True
 elif args.elem == 'dkt':
     ELEMENT = DiscreteKirchoffLoveTrianglePlateElement()
 elif args.elem == 'rm':
@@ -75,6 +65,8 @@ elif args.elem == 'rmr':
     ELEMENT = ReissnerMindlinPlateElement(reduced_integrated=True)
     if args.nsmooth < 4:
         print("need much more nsmooth like 4 for Reissner-Mindlin element")
+elif args.elem == 'mitc':
+    ELEMENT = None
 
 # ================================
 # make plate assembler
@@ -100,10 +92,12 @@ load_fcn = lambda x,y : 1.0e2 # simple load
 #     load_fcn = lambda x,y : np.sin(m * np.pi * x) * np.sin(n * np.pi * y)
 
 # ASSEMBLER = IGAPlateAssembler if is_iga else StandardBeamAssembler
-if args.elem in ['drig', 'drigr']:
+if args.elem == 'drig':
     ASSEMBLER = DeRhamIGAPlateAssembler
 elif args.elem == 'dkt':
     ASSEMBLER = DKTPlateAssembler
+elif args.elem == 'mitc':
+    ASSEMBLER = TACSAssembler
 elif is_iga:
     ASSEMBLER = IGAPlateAssembler
 else:
@@ -117,6 +111,7 @@ assembler = ASSEMBLER(
     clamped=clamped,
     split_disp_bc=args.elem in ['hhd', 'higd'],
     load_fcn=load_fcn,
+    bdf_file=f"out/plate{args.nxe}.bdf"
 )
 
 if not('mg' in args.solve):
@@ -149,6 +144,7 @@ if 'mg' in args.solve:
             clamped=clamped,
             split_disp_bc=args.elem in ['hhd', 'higd'],
             load_fcn=load_fcn,
+            bdf_file=f"out/plate{nxe}.bdf"
         )
         grid._assemble_system()
         grids += [grid]
@@ -165,7 +161,7 @@ if 'mg' in args.solve:
                 omega = args.omega / 4.0 # because 2x smoothing than coupled == 1 schwarz (so ~4x smoothing on thx, thy)
                 patch_type = "wblock_vertex_edges"
 
-            if args.elem in ['drig', 'drigr']:
+            if args.elem == 'drig':
                 print("using Additive schwarz DeRham smoother")
                 smoother = TwoDimAddSchwarzDeRhamVertexEdges.from_assembler(
                     grid, omega=omega, iters=nsmooth,
@@ -182,12 +178,6 @@ if 'mg' in args.solve:
         if double_smooth:
             nsmooth *= 2
 
-    # vmg = VcycleSolver(
-    #     grids=grids,
-    #     smoothers=smoothers,
-    #     plot=args.plot,
-    # )
-
 
 # ============================
 # linear solve
@@ -196,47 +186,36 @@ if 'mg' in args.solve:
 if args.solve == 'direct':
     assembler.direct_solve()
 elif args.solve == 'vmg':
-    # DEBUG
-    # if args.debug:
-    #     assembler._assemble_system()
-    #     assembler.u = vmg.solve(assembler.force)
-
-    # proper V-cycle solver
-    # if not args.debug:
-    #     # smoothers = None # DEBUG
-    #     # print("WARNING using internal GS smoother, not ASW/GS created above")
 
     assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
                                     #  line_search=not(args.elem == 'aig'))
                                     # line search sometimes hurts high cond # cases (high defects in prolong)
                                     # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
                                     # line_search=False, # often need it turned off.. for best conv
-                                    line_search = args.elem in ['drig', 'drigr'],
+                                    # line_search = args.elem in ['drig', 'mitc'],
+                                    line_search = args.elem in ['drig'],
                                     debug=args.debug,
-                                    # nvcycles=100,
-                                    nvcycles=1000,
                                     smoothers=smoothers)
 
-# elif args.solve == 'kmg':
-#     vmg.n_cycles = 2
-#     vmg.print = False
+elif args.solve == 'kmg':
 
-#     vmg2 = VMG(grids, args.nsmooth, 2)
-    
-#     # assembler.u, nsteps = right_pcg2(
-#     #     A=assembler.kmat, b=assembler.force,
-#     #     max_iter=200, M=vmg
-#     # )
+    vmg2 = VMG(
+        grids, nsmooth=args.nsmooth, 
+        ncyc=1, # fewer total v-cycles often..
+        # ncyc=2,
+        smoothers=smoothers, line_search=args.elem in ['drig', 'drigr']
+    )
+    pc = vmg2
+    assembler._assemble_system()
 
-#     # pc = vmg
-#     pc = vmg2
-#     # pc = None
-#     assembler._assemble_system()
+    assembler.u, nsteps = right_pgmres2(
+        A=assembler.kmat, b=assembler.force,
+        restart=100, M=pc, #M=vmg,
+        rtol=1e-6,
+    )
 
-#     assembler.u, nsteps = right_pgmres2(
-#         A=assembler.kmat, b=assembler.force,
-#         restart=100, M=pc, #M=vmg
-#     )
+    total_vcyc = vmg2.total_vcycles
+    print(f"{total_vcyc=}")
 
 
 idof = 0

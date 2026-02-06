@@ -108,13 +108,13 @@ class ReissnerMindlinPlateElement:
 
                 Bs = np.zeros((2, self.ndof))
 
-                # gamma_xz = w_x - thx
+                # gamma_xz = w_x + thx
                 Bs[0, 0::3] = Nx
-                Bs[0, 1::3] = -N
+                Bs[0, 1::3] = N
 
-                # gamma_yz = w_y - thy
+                # gamma_yz = w_y + thy
                 Bs[1, 0::3] = Ny
-                Bs[1, 2::3] = -N
+                Bs[1, 2::3] = N
 
                 kelem += (Bs.T @ Ds @ Bs) * (wt * J)
 

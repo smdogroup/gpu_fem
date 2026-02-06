@@ -86,7 +86,7 @@ def right_pcg2(A, b, x0=None, rtol=1e-8, atol=1e-7, max_iter=1000, M=None):
     return x, k+1
 
 
-def right_pgmres2(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None):
+def right_pgmres2(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None, rtol:float=1e-6):
     """
     Right-precond Modified Gram-Schmidt GMRES
     
@@ -123,6 +123,7 @@ def right_pgmres2(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None):
     x = x0.copy()
     r = b - (A @ x)
     beta = np.linalg.norm(r)
+    init_defect_nrm = beta
     # print(f"{beta=}")
     
     if beta < tol:
@@ -182,7 +183,7 @@ def right_pgmres2(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None):
             if (jj % 4 == 0): print(f"GMRES [{jj}] : {g[j+1]=}")
 
             # Check convergence
-            if abs(g[j+1]) < tol:
+            if abs(g[j+1]) <= (tol + init_defect_nrm * rtol):
                 # print(f"g break at iteration {jj}")
                 break
 
@@ -197,7 +198,7 @@ def right_pgmres2(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None):
         # Compute new residual
         r = b - (A @ x)
         beta = np.linalg.norm(r)
-        if beta < tol:
+        if beta < (tol + init_defect_nrm * rtol):
             break
     
     print(f"GMRES final resid {beta=}")

@@ -250,12 +250,28 @@ def vcycle_solve(grids:list, nvcycles:int=100, pre_smooth:int=1, post_smooth:int
     
 
 class VMG:
-    def __init__(self, grids, nsmooth:int, ncyc:int):
+    def __init__(self, grids, nsmooth:int, ncyc:int, smoothers:list, line_search:bool):
         self.grids = grids
         self.nsmooth = nsmooth
         self.ncyc = ncyc
+        self.iters = 0
+        self.smoothers = smoothers
+        self.line_search = line_search
 
     def solve(self, rhs:np.ndarray):
         self.grids[0].force = rhs.copy()
-        soln,ncyc = vcycle_solve(self.grids, self.ncyc, self.nsmooth, self.nsmooth, print_freq=self.ncyc+1, can_print=False)
+        soln,ncyc = vcycle_solve(
+            self.grids, 
+            self.ncyc, 
+            self.nsmooth, self.nsmooth, 
+            print_freq=self.ncyc+1, 
+            can_print=False,
+            line_search=self.line_search,
+            smoothers=self.smoothers,
+        )
+        self.iters += ncyc
         return soln
+    
+    @property
+    def total_vcycles(self) -> int:
+        return self.iters 

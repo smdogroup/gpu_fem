@@ -133,7 +133,7 @@ class StandardPlateAssembler:
                         self.data[colp, idof, idof] = 1.0
                 self.force[dpn * node + idof] = 0.0
 
-    def _assemble_system(self):
+    def _assemble_system(self, bcs:bool=True):
         dpn = self.dof_per_node
         self.data = np.zeros((self.nnzb, dpn, dpn), dtype=np.double)
         self.force = np.zeros(self.N, dtype=np.double)
@@ -163,10 +163,36 @@ class StandardPlateAssembler:
             np.add.at(self.force, loc_dofs, felem)
 
         # BCs
-        self._apply_bcs(dpn)
+        if bcs: self._apply_bcs(dpn)
 
         # Build global BSR
         self.kmat = sp.bsr_matrix((self.data, self.cols, self.rowp), shape=(self.N, self.N))
+
+    def get_xpts(self) -> np.ndarray:
+        """
+        Return global nodal coordinates as a flat (3*nnodes,) array:
+
+            [x1, y1, z1,  x2, y2, z2,  ...]
+
+        Structured Q1 grid on [0,length] x [0,width], z = 0.
+        Node ordering matches assembler connectivity:
+            inode = ix + nnx * iy
+        """
+        xyz = np.zeros(3 * self.nnodes, dtype=np.double)
+
+        for inode in range(self.nnodes):
+            ix = inode % self.nnx
+            iy = inode // self.nnx
+
+            x = ix * self.dx
+            y = iy * self.dy
+            z = 0.0
+
+            xyz[3*inode + 0] = x
+            xyz[3*inode + 1] = y
+            xyz[3*inode + 2] = z
+
+        return xyz
 
     def direct_solve(self):
         self._assemble_system()

@@ -2,7 +2,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
-from smoothers import gauss_seidel_csr, gauss_seidel_csr_transpose
+from _smoothers import gauss_seidel_csr, gauss_seidel_csr_transpose
 
 def strength_matrix_csr(A:sp.csr_matrix, threshold:float=0.25):
     """
