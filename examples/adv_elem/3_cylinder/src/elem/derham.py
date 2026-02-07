@@ -1,5 +1,5 @@
 import numpy as np
-
+import sys
 from .basis import second_order_quadrature, first_order_quadrature, zero_order_quadrature
 from .basis import get_iga2_basis, get_lagrange_basis_01
 
@@ -160,6 +160,21 @@ class DeRhamIsogeometricCylinderElement:
         xi_x  = 1.0 / dx
         eta_y = 1.0 / dy
 
+        # turns off curvature terms so it should solve cylinder as plate..
+        # debug_mem_off = True
+        debug_mem_off = False
+
+        # debug_curv_off = True
+        debug_curv_off = False
+
+        half_eng_strains = True
+        # half_eng_strains = False
+
+        load = "bend"
+        load = "mem"
+        load = "both"
+
+
         # ==========================================================
         # BENDING: kappa^T Db kappa
         # kappa = [k11, k22, 2*k12]  (engineering shear curvature)
@@ -221,6 +236,18 @@ class DeRhamIsogeometricCylinderElement:
                 k12_v   = (1.0 / r) * Nv_x
                 k12_thy = Nty_y
                 k12_thx = -Ntx_x
+
+                if debug_curv_off:
+                    # turns off all radial curvature terms so cylinder becomes like plate
+                    k22_w = 0.0
+                    k22_v = 0.0
+                    k12_v = 0.0
+
+                # DEBUG should be 1/2 here..
+                if half_eng_strains:
+                    k12_v *= 0.5
+                    k12_thy *= 0.5
+                    k12_thx *= 0.5
 
                 # assemble with Db, using outer-products
                 D11, D12, D22, D33 = Db[0, 0], Db[0, 1], Db[1, 1], Db[2, 2]
@@ -311,6 +338,10 @@ class DeRhamIsogeometricCylinderElement:
                 g2_v   = -(1.0 / r) * Nv
                 g2_thx = -Ntx
 
+                if debug_curv_off:
+                    # turns off all radial curvature terms so cylinder becomes like plate
+                    g2_v = 0.0
+
                 # Assemble: [g1,g2]^T Ds [g1,g2]
                 # Ds is diagonal isotropic here
                 Ds11 = Ds[0, 0]
@@ -386,6 +417,22 @@ class DeRhamIsogeometricCylinderElement:
                 e12_v = Nv_x
                 e12_u = Nu_y
 
+                # DEBUG
+                if half_eng_strains:
+                    e12_v *= 0.5
+                    e12_u *= 0.5
+
+                if debug_mem_off:
+                    # turn off curvature and membrane strains to debug as plate
+                    e11_u = 0.0
+                    e22_v = 0.0
+                    e12_v = 0.0
+                    e12_u = 0.0
+
+                if debug_curv_off:
+                    # curvature term
+                    e22_w = 0.0
+                    
                 # Assemble eps^T Dm eps with eps = [e11, e22, 2e12]
                 D11, D12, D22, D33 = Dm[0, 0], Dm[0, 1], Dm[1, 1], Dm[2, 2]
 
@@ -421,3 +468,59 @@ class DeRhamIsogeometricCylinderElement:
             Ktxw, Ktxu, Ktxv, Ktxtx, Ktxty,
             Ktyw, Ktyu, Ktyv, Ktytx, Ktyty
         )
+    
+
+    def get_felem(
+        self,
+        load_fcn,     # callable q(x,y)
+        x0: float,
+        y0: float,
+        dx: float,
+        dy: float,
+        left_bndry: bool,
+        right_bndry: bool,
+        bot_bndry: bool,
+        top_bndry: bool,
+    ):
+        """
+        Consistent load vector for q(x,y) acting on w only:
+            f_w = ∫ Nw q dA
+        """
+        pts, wts = second_order_quadrature()
+        fw = np.zeros(9)
+        ftx = np.zeros(6)
+        fty = np.zeros(6)
+        fu = np.zeros(9)
+        fv = np.zeros(6)
+
+        J = dx * dy
+
+        for jj in range(3):
+            _eta = pts[jj]
+            w_eta = 0.5 * wts[jj]
+            eta = 0.5 * (_eta + 1.0)
+
+            Ny2, dNy2 = self._iga2_1d(eta, bot_bndry, top_bndry)
+
+            for ii in range(3):
+                _xi = pts[ii]
+                w_xi = 0.5 * wts[ii]
+                xi = 0.5 * (_xi + 1.0)
+
+                wt = (w_xi * w_eta) * J
+
+                Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)
+
+                # w basis
+                # Nw, _, _ = self._tensor_product_basis_22(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
+
+                Nw, _, _ = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
+
+                xq = x0 + xi * dx
+                yq = y0 + eta * dy
+                q = float(load_fcn(xq, yq))
+
+                fw += (q * Nw) * wt
+                # fu += q * Nw * wt
+
+        return fw, fu, fv, ftx, fty
