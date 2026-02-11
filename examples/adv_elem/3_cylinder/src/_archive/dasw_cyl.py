@@ -160,7 +160,7 @@ class TwoDimAddSchwarzDeRhamCylinderVertexEdges:
 
                 # --- u + thy on (nx_thy, ny_thy) ---
                 # Note: u-grid has nx_thy = nxe+1, so iw==nx_w-1 may be out-of-bounds -> auto-truncated.
-                uthy_cands = [(iw, jw), (iw - 1, jw)]
+                uthy_cands = [(iw, jw), (iw, jw - 1)]
                 for (i, j) in uthy_cands:
                     if self._in_bounds(i, j, self.nx_thy, self.ny_thy):
                         gid = self._node(i, j, self.nx_thy)
@@ -168,7 +168,7 @@ class TwoDimAddSchwarzDeRhamCylinderVertexEdges:
                         dofs.append(self.off_thy + gid)  # thy
 
                 # --- v + thx on (nx_thx, ny_thx) ---
-                vthx_cands = [(iw, jw), (iw, jw - 1)]
+                vthx_cands = [(iw, jw), (iw - 1, jw)]
                 for (i, j) in vthx_cands:
                     if self._in_bounds(i, j, self.nx_thx, self.ny_thx):
                         gid = self._node(i, j, self.nx_thx)
@@ -214,14 +214,14 @@ class TwoDimAddSchwarzDeRhamCylinderVertexEdges:
                 # --- union of u/thy and v/thx touching all vertices ---
                 for (iw, jw) in w_vertices:
                     # u + thy (same grid nx_thy x ny_thy)
-                    for (i, j) in ((iw, jw), (iw - 1, jw)):
+                    for (i, j) in ((iw, jw), (iw, jw - 1)):
                         if self._in_bounds(i, j, self.nx_thy, self.ny_thy):
                             gid = self._node(i, j, self.nx_thy)
                             dofs.append(self.off_u + gid)
                             dofs.append(self.off_thy + gid)
 
                     # v + thx (same grid nx_thx x ny_thx)
-                    for (i, j) in ((iw, jw), (iw, jw - 1)):
+                    for (i, j) in ((iw, jw), (iw - 1, jw)):
                         if self._in_bounds(i, j, self.nx_thx, self.ny_thx):
                             gid = self._node(i, j, self.nx_thx)
                             dofs.append(self.off_v + gid)

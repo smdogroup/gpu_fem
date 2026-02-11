@@ -4,7 +4,7 @@ from .basis import second_order_quadrature, first_order_quadrature, zero_order_q
 from .basis import get_iga2_basis, get_lagrange_basis_01
 
 
-class DeRhamIsogeometricCylinderElement:
+class DeRhamIsogeometricCylinderElement_V0:
     """
     De Rham IGA cylinder element on (x,y) param domain:
       x = axial
@@ -44,12 +44,11 @@ class DeRhamIsogeometricCylinderElement:
         The element just provides K; apply different essential BCs in your projector.
     """
 
-    def __init__(self, r: float, reduced_integrated: bool = False, clamped: bool = False, axial_factor:float=0.0):
+    def __init__(self, r: float, reduced_integrated: bool = False, clamped: bool = False):
         self.dof_per_node = 1  # separate field blocks
         self.r = float(r)
         self.reduced_integrated = bool(reduced_integrated)
         self.clamped = bool(clamped)
-        self.axial_factor = float(axial_factor)
 
     # ---- tensor helpers ------------------------------------------------------
     @staticmethod
@@ -96,7 +95,7 @@ class DeRhamIsogeometricCylinderElement:
 
         # sizes
         n_w   = 9   # (p2,p2)
-        n_u   = 6   # (p1,p2)
+        n_u   = 9   # (p2,p2)
         n_v   = 6   # (p2,p1)
         n_thx = 6   # (p2,p1)
         n_thy = 6   # (p1,p2)
@@ -165,11 +164,11 @@ class DeRhamIsogeometricCylinderElement:
         # debug_mem_off = True
         debug_mem_off = False
 
-        debug_curv_off = True
-        # debug_curv_off = False
+        # debug_curv_off = True
+        debug_curv_off = False
 
-        # half_eng_strains = True
-        half_eng_strains = False
+        half_eng_strains = True
+        # half_eng_strains = False
 
         load = "bend"
         load = "mem"
@@ -207,6 +206,10 @@ class DeRhamIsogeometricCylinderElement:
                 Nw_x = Nw_xi * xi_x
                 Nw_y = Nw_eta * eta_y
 
+                Nu, Nu_xi, Nu_eta = Nw, Nw_xi, Nw_eta
+                Nu_x = Nw_x
+                Nu_y = Nw_y
+
                 # v, thx : (p2,p1)
                 Nv, Nv_xi, Nv_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny1, dNy1))
                 Nv_x = Nv_xi * xi_x
@@ -216,14 +219,10 @@ class DeRhamIsogeometricCylinderElement:
                 Ntx_x = Nv_x
                 Ntx_y = Nv_y
 
-                # u, thy : (p1,p2)
+                # thy : (p1,p2)
                 Nty, Nty_xi, Nty_eta = self._tensor_product_basis(xi, eta, (Nx1, dNx1), (Ny2, dNy2))
                 Nty_x = Nty_xi * xi_x
                 Nty_y = Nty_eta * eta_y
-
-                Nu, Nu_xi, Nu_eta = Nty, Nty_xi, Nty_eta
-                Nu_x = Nty_x
-                Nu_y = Nty_y
 
                 # k11 = thy_x
                 k11_thy = Nty_x
@@ -392,22 +391,20 @@ class DeRhamIsogeometricCylinderElement:
                 cM = wt
 
                 Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)
-                Nx1, dNx1 = self._p1_1d(xi)
 
-                # w (p2,p2)
+                # w,u (p2,p2)
                 Nw, Nw_xi, Nw_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
                 Nw_x = Nw_xi * xi_x
                 Nw_y = Nw_eta * eta_y
+
+                Nu, Nu_xi, Nu_eta = Nw, Nw_xi, Nw_eta
+                Nu_x = Nw_x
+                Nu_y = Nw_y
 
                 # v (p2,p1)
                 Nv, Nv_xi, Nv_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny1, dNy1))
                 Nv_x = Nv_xi * xi_x
                 Nv_y = Nv_eta * eta_y
-
-                # u (p1, p2)
-                Nu, Nu_xi, Nu_eta = self._tensor_product_basis(xi, eta, (Nx1, dNx1), (Ny2, dNy2))
-                Nu_x = Nu_xi * xi_x
-                Nu_y = Nu_eta * eta_y
 
                 # e11 = u_x
                 e11_u = Nu_x
@@ -493,7 +490,7 @@ class DeRhamIsogeometricCylinderElement:
         fw = np.zeros(9)
         ftx = np.zeros(6)
         fty = np.zeros(6)
-        fu = np.zeros(6)
+        fu = np.zeros(9)
         fv = np.zeros(6)
 
         J = dx * dy
@@ -513,296 +510,17 @@ class DeRhamIsogeometricCylinderElement:
                 wt = (w_xi * w_eta) * J
 
                 Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)
-                Nx1, dNx1 = self._p1_1d(xi)
 
                 # w basis
                 # Nw, _, _ = self._tensor_product_basis_22(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
 
                 Nw, _, _ = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
 
-                Nu, _, _ = self._tensor_product_basis(xi, eta, (Nx1, dNx1), (Ny2, dNy2))
-
                 xq = x0 + xi * dx
                 yq = y0 + eta * dy
                 q = float(load_fcn(xq, yq))
 
                 fw += (q * Nw) * wt
-                fu += (q * Nu) * wt * self.axial_factor
+                # fu += q * Nw * wt
 
         return fw, fu, fv, ftx, fty
-
-    # -------------------------------------------------------------------------
-    # Multigrid transfers (dyadic refinement) for [w, u, v, thx, thy]
-    # -------------------------------------------------------------------------
-    def _build_R_p2(self, nxe_c: int) -> np.ndarray:
-        """
-        Your quadratic (p=2) restriction on a 1D line with n = nxe + 2 dofs.
-        Copied conceptually from your 1D DeRham element.
-        """
-        n_w_c = nxe_c + 2
-        nxe_f = 2 * nxe_c
-        n_w_f = nxe_f + 2
-
-        R = np.zeros((n_w_c, n_w_f))
-        counts = 1e-14 * np.ones((n_w_c, n_w_f))
-
-        for ielem_c in range(nxe_c):
-            left_felem = 2 * ielem_c
-            l_mat = np.array([
-                [0.75, 0.25, 0.0],
-                [0.25, 0.75, 0.75],
-                [0.0,  0.0,  0.25],
-            ])
-            if ielem_c == 0:
-                l_mat[0, :2] = np.array([1.0, 0.5])
-                l_mat[1, :2] = np.array([0.0, 0.5])
-            if ielem_c == nxe_c - 1:
-                l_mat[1, 2] = 0.5
-                l_mat[2, 2] = 0.5
-
-            l_nz = l_mat / (l_mat + 1e-14)
-            R[ielem_c:ielem_c+3, left_felem:left_felem+3] += l_mat
-            counts[ielem_c:ielem_c+3, left_felem:left_felem+3] += l_nz
-
-            right_felem = 2 * ielem_c + 1
-            r_mat = np.array([
-                [0.25, 0.0,  0.0],
-                [0.75, 0.75, 0.25],
-                [0.0,  0.25, 0.75],
-            ])
-            if ielem_c == 0:
-                r_mat[0, 0] = 0.5
-                r_mat[1, 0] = 0.5
-            if ielem_c == nxe_c - 1:
-                r_mat[1, 1:] = np.array([0.5, 0.0])
-                r_mat[2, 1:] = np.array([0.5, 1.0])
-
-            r_nz = r_mat / (r_mat + 1e-14)
-            R[ielem_c:ielem_c+3, right_felem:right_felem+3] += r_mat
-            counts[ielem_c:ielem_c+3, right_felem:right_felem+3] += r_nz
-
-        R /= counts
-        return R
-    
-    def _build_P_p1(self, nxe_c: int) -> np.ndarray:    
-        """
-        Geometric 1D P1 prolongation matrix (dyadic refinement).
-        Coarse n_c = nxe_c + 1
-        Fine   n_f = 2*nxe_c + 1
-
-        th_f[2i]   = th_c[i]
-        th_f[2i+1] = 0.5*(th_c[i] + th_c[i+1])
-        """
-        n_c = nxe_c + 1
-        n_f = 2 * nxe_c + 1
-        P = np.zeros((n_f, n_c))
-
-        for i in range(nxe_c):
-            P[2*i,   i]   = 1.0
-            P[2*i+1, i]   = 0.5
-            P[2*i+1, i+1] = 0.5
-        P[2*nxe_c, nxe_c] = 1.0
-        return P
-
-
-    def _build_R_p1(self, nxe_c: int, is_prolong:bool=False) -> np.ndarray:
-        """
-        1D P1 restriction (full-weighting) on nodal line with n = nxe + 1 dofs.
-        Fine nxe_f = 2*nxe_c => n_f = 2*nxe_c + 1
-        """
-        n_c = nxe_c + 1
-        n_f = 2 * nxe_c + 1
-        R = np.zeros((n_c, n_f))
-
-        # injection at ends
-        R[0, 0] = 1.0
-        R[-1, -1] = 1.0
-        for i in range(1, n_c - 1):
-            R[i, 2*i - 1] = 0.25
-            R[i, 2*i]     = 0.50
-            R[i, 2*i + 1] = 0.25
-        if is_prolong:
-            # divide by col sums
-            for j in range(n_f):
-                R[:, j] /= np.sum(R[:, j])
-            
-        # print(f"{R=}")
-        # exit()
-        return R
-
-    @staticmethod
-    def _kron2(Ry: np.ndarray, Rx: np.ndarray) -> np.ndarray:
-        # (nyc,n yf) kron (nxc,n xf) -> (nxc*nyc, nxf*nyf)
-        return np.kron(Ry, Rx)
-
-    # boundary application on vectors [w, u, v, thx, thy]
-    def apply_bcs_2d(self, u: np.ndarray, nxw: int, nyw: int, nxtx: int, nytx: int, nxty: int, nyty: int):
-        """
-        Strong essential BC projector/substitution:
-          - Simply supported (default): w = 0 on boundary
-          - Clamped: w=0, (u,v)=(0,0) and theta=(0,0) on boundary
-        """
-        u = np.asarray(u)
-        nw = nxw * nyw
-        ntx = nxtx * nytx
-        nty = nxty * nyty
-        nu, nv = nty, ntx
-
-        # reference to array data (so no need to copy over, can set into subarrays)
-        w = u[:nw]
-        U = u[nw:(nw+nu)]
-        V = u[(nw+nu):(nw+nu+nv)]
-        tx = u[(nw+nu+nv):(nw+nu+nv+ntx)]
-        ty = u[(nw+nu+nv+ntx):]
-
-        def on_bndry(i, j, nx, ny):
-            return (i == 0) or (i == nx-1) or (j == 0) or (j == ny-1)
-
-        # w boundary
-        for j in range(nyw):
-            for i in range(nxw):
-                if on_bndry(i, j, nxw, nyw):
-                    w[i + nxw*j] = 0.0
-
-        if self.clamped:
-            # thx boundary on its grid
-            for j in range(nytx):
-                for i in range(nxtx):
-                    if on_bndry(i, j, nxtx, nytx):
-                        tx[i + nxtx*j] = 0.0
-                        V[i + nxtx*j] = 0.0
-            # thy boundary on its grid
-            for j in range(nyty):
-                for i in range(nxty):
-                    if on_bndry(i, j, nxty, nyty):
-                        ty[i + nxty*j] = 0.0
-                        U[i + nxty*j] = 0.0
-        
-        else:
-            # u boundary: on x=0 edge
-            for j in range(nyty):
-                for i in range(nxty):
-                    if i == 0:
-                        U[i + nxty*j] = 0.0
-
-            # v boundary: on y=0 edge
-            for j in range(nytx):
-                for i in range(nxtx):
-                    if j == 0:
-                        V[i + nxtx*j] = 0.0
-
-        out = np.concatenate([w, U, V, tx, ty])
-        return out
-
-    def prolongate(self, u_c: np.ndarray, nxe_c: int, nye_c: int) -> np.ndarray:
-        """
-        u = [w, u, v, thx, thy]
-        sizes:
-          w   : (nxe+2) x (nye+2)
-          u   : (nxe+1) x (nye+2)
-          v   : (nxe+2) x (nxe+1)
-          thx : (nxe+2) x (nye+1)
-          thy : (nxe+1) x (nye+2)
-        """
-        u_c = np.asarray(u_c)
-
-        nxw_c, nyw_c = nxe_c + 2, nye_c + 2
-        nxtx_c, nytx_c = nxe_c + 2, nye_c + 1
-        nxty_c, nyty_c = nxe_c + 1, nye_c + 2
-
-        nw_c = nxw_c * nyw_c
-        ntx_c = nxtx_c * nytx_c
-        nty_c = nxty_c * nyty_c
-        nu_c = nty_c
-        nv_c = ntx_c
-        assert u_c.size == nw_c + nu_c + nv_c + ntx_c + nty_c
-
-        w_c = u_c[:nw_c]
-        U_c = u_c[nw_c:(nw_c+nu_c)]
-        V_c = u_c[(nw_c+nu_c):(nw_c+nu_c+nv_c)]
-        tx_c = u_c[(nw_c+nu_c+nv_c):(nw_c+nu_c+nv_c+ntx_c)]
-        ty_c = u_c[(nw_c+nu_c+nv_c+ntx_c):]
-
-        # Build restriction operators and take P = R^T
-        Rx2 = self._build_R_p2(nxe_c)
-        Ry2 = self._build_R_p2(nye_c)
-        Rx1 = self._build_P_p1(nxe_c).T
-        Ry1 = self._build_P_p1(nye_c).T
-
-        # w: (p2,p2)
-        Rw = self._kron2(Ry2, Rx2)
-        Pw = Rw.T
-
-        # thx: (p2 in x, p1 in y)
-        Rtx = self._kron2(Ry1, Rx2)
-        Ptx = Rtx.T
-
-        # thy: (p1 in x, p2 in y)
-        Rty = self._kron2(Ry2, Rx1)
-        Pty = Rty.T
-
-        w_f  = Pw @ w_c
-        U_f  = Pty @ U_c
-        V_f  = Ptx @ V_c
-        tx_f = Ptx @ tx_c
-        ty_f = Pty @ ty_c
-
-        # sizes fine
-        nxe_f, nye_f = 2*nxe_c, 2*nye_c
-        nxw_f, nyw_f = nxe_f + 2, nye_f + 2
-        nxtx_f, nytx_f = nxe_f + 2, nye_f + 1
-        nxty_f, nyty_f = nxe_f + 1, nye_f + 2
-
-        u_f = np.concatenate([w_f, U_f, V_f, tx_f, ty_f])
-        u_f = self.apply_bcs_2d(u_f, nxw_f, nyw_f, nxtx_f, nytx_f, nxty_f, nyty_f) #, mode="prolong")
-        return u_f
-
-    def restrict_defect(self, r_f: np.ndarray, nxe_c: int, nye_c: int) -> np.ndarray:
-        """
-        Restrict fine defect -> coarse defect for dyadic refinement.
-        Fine has nxe_f=2*nxe_c, nye_f=2*nye_c.
-        """
-        r_f = np.asarray(r_f)
-
-        nxe_f, nye_f = 2*nxe_c, 2*nye_c
-
-        nxw_f, nyw_f = nxe_f + 2, nye_f + 2
-        nxtx_f, nytx_f = nxe_f + 2, nye_f + 1
-        nxty_f, nyty_f = nxe_f + 1, nye_f + 2
-
-        nw_f = nxw_f * nyw_f
-        ntx_f = nxtx_f * nytx_f
-        nty_f = nxty_f * nyty_f
-        nu_f = nty_f
-        nv_f = ntx_f
-        assert r_f.size == nw_f + nu_f + nv_f + ntx_f + nty_f
-
-        w_f = r_f[:nw_f]
-        U_f = r_f[nw_f:(nw_f+nu_f)]
-        V_f = r_f[(nw_f+nu_f):(nw_f+nu_f+nv_f)]
-        tx_f = r_f[(nw_f+nu_f+nv_f):(nw_f+nu_f+nv_f+ntx_f)]
-        ty_f = r_f[(nw_f+nu_f+nv_f+ntx_f):]
-
-        # restriction ops
-        Rx2 = self._build_R_p2(nxe_c)
-        Ry2 = self._build_R_p2(nye_c)
-        Rx1 = self._build_R_p1(nxe_c, is_prolong=False)
-        Ry1 = self._build_R_p1(nye_c, is_prolong=False)
-
-        Rw  = self._kron2(Ry2, Rx2)
-        Rtx = self._kron2(Ry2, Rx1)
-        Rty = self._kron2(Ry1, Rx2)
-
-        w_c  = Rw  @ w_f
-        U_c  = Rty @ U_f
-        V_c  = Rtx @ V_f
-        tx_c = Rtx @ tx_f
-        ty_c = Rty @ ty_f
-
-        nxw_c, nyw_c = nxe_c + 2, nye_c + 2
-        nxtx_c, nytx_c = nxe_c + 1, nye_c + 2
-        nxty_c, nyty_c = nxe_c + 2, nye_c + 1
-
-        r_c = np.concatenate([w_c, U_c, V_c, tx_c, ty_c])
-        r_c = self.apply_bcs_2d(r_c, nxw_c, nyw_c, nxtx_c, nytx_c, nxty_c, nyty_c) #, mode="restrict")
-        return r_c

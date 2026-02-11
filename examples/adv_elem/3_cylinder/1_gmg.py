@@ -20,12 +20,12 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--elem", type=str, default='drig', help="--elem, options: tbd")
 parser.add_argument("--nxe", type=int, default=16, help="number of elements") # 32
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
-parser.add_argument("--coupled", type=int, default=1, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
-parser.add_argument("--thick", type=float, default=1e-2, help="shell thickness")
-parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
+parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
+parser.add_argument("--thick", type=float, default=1e-3, help="shell thickness")
+parser.add_argument("--radius", type=float, default=2.0/np.pi, help="cylinder radius")
 parser.add_argument("--length", type=float, default=1.0, help="cylinder length")
 # parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
-parser.add_argument("--solve", type=str, default='direct', help="--solve : [direct, vmg, kmg]")
+parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--omega", type=float, default=0.7, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
@@ -129,12 +129,12 @@ if args.solve == 'direct':
     assembler.direct_solve()
 elif args.solve == 'vmg':
 
-    # DEVEL_DEBUG = True
-    DEVEL_DEBUG = False
+    DEVEL_DEBUG = args.debug
 
     if DEVEL_DEBUG:
         assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
-                                        line_search=False, # often need it turned off.. for best conv
+                                        # line_search=False, # often need it turned off.. for best conv
+                                        line_search = args.elem in ['drig', 'drigr'],
                                         debug=True,
                                         nvcycles=1000,
                                         rtol=1e-6,
@@ -143,6 +143,7 @@ elif args.solve == 'vmg':
         assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
                                         # line_search=False, # often need it turned off.. for best conv
                                         line_search = args.elem in ['drig', 'drigr'],
+                                        # line_search=False,
                                         debug=args.debug,
                                         nvcycles=400,
                                         rtol=1e-6,
@@ -185,7 +186,8 @@ mode="w"
 
 assembler.plot_disp(
     # disp_mag=0.2,
-    disp_mag=0.4,
+    # disp_mag=0.3 * R,
+    disp_mag=0.4 * R,
     # disp_mag=1.0, # same as radius (as multiple of inf-norm or max value)
     # disp_mag=2.0,
     # disp_mag=5.0,
