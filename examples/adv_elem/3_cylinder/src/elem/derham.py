@@ -44,11 +44,12 @@ class DeRhamIsogeometricCylinderElement:
         The element just provides K; apply different essential BCs in your projector.
     """
 
-    def __init__(self, r: float, reduced_integrated: bool = False, clamped: bool = False):
+    def __init__(self, r: float, reduced_integrated: bool = False, clamped: bool = False, axial_factor:float=0.0):
         self.dof_per_node = 1  # separate field blocks
         self.r = float(r)
         self.reduced_integrated = bool(reduced_integrated)
         self.clamped = bool(clamped)
+        self.axial_factor = float(axial_factor)
 
     # ---- tensor helpers ------------------------------------------------------
     @staticmethod
@@ -512,17 +513,20 @@ class DeRhamIsogeometricCylinderElement:
                 wt = (w_xi * w_eta) * J
 
                 Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)
+                Nx1, dNx1 = self._p1_1d(xi)
 
                 # w basis
                 # Nw, _, _ = self._tensor_product_basis_22(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
 
                 Nw, _, _ = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
 
+                Nu, _, _ = self._tensor_product_basis(xi, eta, (Nx1, dNx1), (Ny2, dNy2))
+
                 xq = x0 + xi * dx
                 yq = y0 + eta * dy
                 q = float(load_fcn(xq, yq))
 
                 fw += (q * Nw) * wt
-                # fu += q * Nw * wt
+                fu += (q * Nu) * wt * self.axial_factor
 
         return fw, fu, fv, ftx, fty

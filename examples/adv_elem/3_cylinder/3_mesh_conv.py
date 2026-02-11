@@ -126,7 +126,9 @@ load_fcn = lambda x, s: 1.0
 
 def build_element(elem):
     if elem == "drig_cyl":
-        ELEMENT = DeRhamIsogeometricCylinderElement(r=R)
+        axial_factor = 0.0
+        # axial_factor = 0.3
+        ELEMENT = DeRhamIsogeometricCylinderElement(r=R, reduced_integrated=False, axial_factor=axial_factor)
         is_iga = True
     else:
         raise ValueError(f"Unknown elem type: {elem}")

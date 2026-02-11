@@ -32,10 +32,10 @@ L = args.length
 # larger radius can lead to weird locking behavior
 
 
-# version = 0
-version = 1
+axial_factor = 0.0
+# axial_factor = 0.3
 
-ELEMENT = DeRhamIsogeometricCylinderElement(r=R)
+ELEMENT = DeRhamIsogeometricCylinderElement(r=R, reduced_integrated=False, axial_factor=axial_factor)
 ASSEMBLER = DeRhamIGACylinderAssembler
 
 
