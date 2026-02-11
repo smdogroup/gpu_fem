@@ -58,7 +58,9 @@ class DeRhamIGACylinderAssembler:
         self.Ly = hoop_length
         self.load_fcn = load_fcn
         self.clamped = bool(clamped)
+        self.dof_per_node = 5
 
+        # copy clamped input to element
         self.element.clamped = self.clamped
 
         # -----------------------------
@@ -653,6 +655,15 @@ class DeRhamIGACylinderAssembler:
         # print(f"{rel_nrm=:.4e} of direct solve")
 
         return self.u
+    
+    def prolongate(self, coarse_soln: np.ndarray):
+        nxe_c = self.nxe // 2
+        nye_c = self.nye // 2
+        return self.element.prolongate(coarse_soln, nxe_c, nye_c)
+
+    def restrict_defect(self, fine_defect: np.ndarray):
+        # called on coarse grid object; pass its (nxe,nye) as coarse sizes
+        return self.element.restrict_defect(fine_defect, self.nxe, self.nye)
 
     # Also: plot reshape is flipped; fix it:
     def plot_disp(self, disp_mag: float = 0.2, mode: str = "w", deform: str = "w"):

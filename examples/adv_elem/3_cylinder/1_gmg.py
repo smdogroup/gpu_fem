@@ -4,14 +4,23 @@ sys.path.append("src/")
 from elem import DeRhamIsogeometricCylinderElement
 from drig_assembler import DeRhamIGACylinderAssembler
 
+# sys.path.append("../2_plate/src/")
+# from asw_derham import TwoDimAddSchwarzDeRhamVertexEdges
+from dasw_cyl import TwoDimAddSchwarzDeRhamCylinderVertexEdges
+
+sys.path.append("../1_beam/src/")
+from multigrid2 import vcycle_solve, VMG
+from smoothers import BlockGaussSeidel, right_pcg2, right_pgmres2
+
+sys.path.append("../../asw/_py_demo/_src/")
+from asw import TwodimAddSchwarz
 
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--elem", type=str, default='drig', help="--elem, options: tbd")
-parser.add_argument("--nxe", type=int, default=32, help="number of elements")
-# parser.add_argument("--nxe", type=int, default=16, help="number of elements")
+parser.add_argument("--nxe", type=int, default=16, help="number of elements") # 32
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
-parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
+parser.add_argument("--coupled", type=int, default=1, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
 parser.add_argument("--thick", type=float, default=1e-2, help="shell thickness")
 parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
 parser.add_argument("--length", type=float, default=1.0, help="cylinder length")
@@ -28,17 +37,18 @@ args = parser.parse_args()
 # t/R leads to potential membrane locking
 R = args.radius
 L = args.length
-
-# larger radius can lead to weird locking behavior
-
-
+# clamped = True
+clamped = False
 axial_factor = 0.0
 # axial_factor = 0.3
+# larger radius can lead to weird locking behavior
+
+assert args.elem == 'drig' # only this element created right now
 
 ELEMENT = DeRhamIsogeometricCylinderElement(r=R, reduced_integrated=False, axial_factor=axial_factor)
 ASSEMBLER = DeRhamIGACylinderAssembler
 
-
+# standard assembler construction
 assembler = ASSEMBLER(
     ELEMENT,
     nxe=args.nxe,
@@ -48,11 +58,121 @@ assembler = ASSEMBLER(
     hoop_length=np.pi*0.5*R, # quarter-cylinder
     radius=R,
     load_fcn = lambda x,s : 1.0,
-    # clamped=False,
-    clamped=True,
+    clamped=clamped,
 )
 
-assembler.direct_solve()
+
+
+if 'mg' in args.solve:
+    # make V-cycle solver
+    nxe = args.nxe
+    nxe_min = args.nxemin
+    if args.debug:
+        nxe_min = nxe // 2
+    grids = []
+    smoothers = []
+    # double_smooth = True
+    double_smooth = False
+
+    nsmooth = args.nsmooth
+    while (nxe >= nxe_min):
+        grid = ASSEMBLER(
+            ELEMENT,
+            nxe=nxe,
+            E=70e9, nu=0.3, thick=args.thick,
+            length=L,
+            # hoop_length=np.pi, # half-cylinder
+            hoop_length=np.pi*0.5*R, # quarter-cylinder
+            radius=R,
+            load_fcn = lambda x,s : 1.0,
+            clamped=clamped,
+        )
+        print(f"{nxe=} with {grid.force.shape=}")
+        grid._assemble_system()
+        grids += [grid]
+        if args.smoother == 'gs':
+            smoother = BlockGaussSeidel.from_assembler(
+                grid, omega=args.omega, iters=nsmooth
+            )
+        elif args.smoother == 'asw':
+            smoother = None
+            if args.coupled == 1:
+                omega = args.omega / 2.0 # because some 2x smoothing on thx, thy
+                patch_type = "vertex_edges"
+            elif args.coupled == 2:
+                omega = args.omega / 4.0 # because 2x smoothing than coupled == 1 schwarz (so ~4x smoothing on thx, thy)
+                patch_type = "wblock_vertex_edges"
+
+            if args.elem in ['drig', 'drigr']:
+                print("using Additive schwarz DeRham smoother")
+                smoother = TwoDimAddSchwarzDeRhamCylinderVertexEdges.from_assembler(
+                    grid, omega=omega, iters=nsmooth,
+                    patch_type = patch_type,
+                    # patch_type="vertex_edges", # one w vertex and nearby 4 edges (2 of thx and 2 of thy)
+                    # patch_type="wblock_vertex_edges",
+                )
+            else:
+                smoother = TwodimAddSchwarz.from_assembler(
+                    grid, omega=omega, iters=nsmooth, coupled_size=2
+                )
+        smoothers += [smoother]
+        nxe = nxe // 2
+        if double_smooth:
+            nsmooth *= 2
+
+
+# ============================
+# linear solve
+# ============================
+
+if args.solve == 'direct':
+    assembler.direct_solve()
+elif args.solve == 'vmg':
+
+    # DEVEL_DEBUG = True
+    DEVEL_DEBUG = False
+
+    if DEVEL_DEBUG:
+        assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
+                                        line_search=False, # often need it turned off.. for best conv
+                                        debug=True,
+                                        nvcycles=1000,
+                                        rtol=1e-6,
+                                        smoothers=smoothers)
+    else:
+        assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
+                                        # line_search=False, # often need it turned off.. for best conv
+                                        line_search = args.elem in ['drig', 'drigr'],
+                                        debug=args.debug,
+                                        nvcycles=400,
+                                        rtol=1e-6,
+                                        smoothers=smoothers)
+
+elif args.solve == 'kmg':
+
+    vmg2 = VMG(
+        grids, nsmooth=args.nsmooth, 
+        ncyc=1, # fewer total v-cycles often..
+        # ncyc=2,
+        smoothers=smoothers, line_search=args.elem in ['drig', 'drigr']
+    )
+    pc = vmg2
+    assembler._assemble_system()
+
+    assembler.u, nsteps = right_pgmres2(
+        A=assembler.kmat, b=assembler.force,
+        restart=100, M=pc, #M=vmg,
+        rtol=1e-6,
+    )
+
+    total_vcyc = vmg2.total_vcycles
+    print(f"{total_vcyc=}")
+
+
+
+# ===============================
+# PLOT
+# ===============================
 
 mode="w"
 # mode="u"
