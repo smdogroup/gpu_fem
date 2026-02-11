@@ -95,7 +95,7 @@ class DeRhamIsogeometricCylinderElement:
 
         # sizes
         n_w   = 9   # (p2,p2)
-        n_u   = 9   # (p2,p2)
+        n_u   = 6   # (p1,p2)
         n_v   = 6   # (p2,p1)
         n_thx = 6   # (p2,p1)
         n_thy = 6   # (p1,p2)
@@ -164,11 +164,11 @@ class DeRhamIsogeometricCylinderElement:
         # debug_mem_off = True
         debug_mem_off = False
 
-        # debug_curv_off = True
-        debug_curv_off = False
+        debug_curv_off = True
+        # debug_curv_off = False
 
-        half_eng_strains = True
-        # half_eng_strains = False
+        # half_eng_strains = True
+        half_eng_strains = False
 
         load = "bend"
         load = "mem"
@@ -206,10 +206,6 @@ class DeRhamIsogeometricCylinderElement:
                 Nw_x = Nw_xi * xi_x
                 Nw_y = Nw_eta * eta_y
 
-                Nu, Nu_xi, Nu_eta = Nw, Nw_xi, Nw_eta
-                Nu_x = Nw_x
-                Nu_y = Nw_y
-
                 # v, thx : (p2,p1)
                 Nv, Nv_xi, Nv_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny1, dNy1))
                 Nv_x = Nv_xi * xi_x
@@ -219,10 +215,14 @@ class DeRhamIsogeometricCylinderElement:
                 Ntx_x = Nv_x
                 Ntx_y = Nv_y
 
-                # thy : (p1,p2)
+                # u, thy : (p1,p2)
                 Nty, Nty_xi, Nty_eta = self._tensor_product_basis(xi, eta, (Nx1, dNx1), (Ny2, dNy2))
                 Nty_x = Nty_xi * xi_x
                 Nty_y = Nty_eta * eta_y
+
+                Nu, Nu_xi, Nu_eta = Nty, Nty_xi, Nty_eta
+                Nu_x = Nty_x
+                Nu_y = Nty_y
 
                 # k11 = thy_x
                 k11_thy = Nty_x
@@ -391,20 +391,22 @@ class DeRhamIsogeometricCylinderElement:
                 cM = wt
 
                 Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)
+                Nx1, dNx1 = self._p1_1d(xi)
 
-                # w,u (p2,p2)
+                # w (p2,p2)
                 Nw, Nw_xi, Nw_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
                 Nw_x = Nw_xi * xi_x
                 Nw_y = Nw_eta * eta_y
-
-                Nu, Nu_xi, Nu_eta = Nw, Nw_xi, Nw_eta
-                Nu_x = Nw_x
-                Nu_y = Nw_y
 
                 # v (p2,p1)
                 Nv, Nv_xi, Nv_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny1, dNy1))
                 Nv_x = Nv_xi * xi_x
                 Nv_y = Nv_eta * eta_y
+
+                # u (p1, p2)
+                Nu, Nu_xi, Nu_eta = self._tensor_product_basis(xi, eta, (Nx1, dNx1), (Ny2, dNy2))
+                Nu_x = Nu_xi * xi_x
+                Nu_y = Nu_eta * eta_y
 
                 # e11 = u_x
                 e11_u = Nu_x
@@ -490,7 +492,7 @@ class DeRhamIsogeometricCylinderElement:
         fw = np.zeros(9)
         ftx = np.zeros(6)
         fty = np.zeros(6)
-        fu = np.zeros(9)
+        fu = np.zeros(6)
         fv = np.zeros(6)
 
         J = dx * dy

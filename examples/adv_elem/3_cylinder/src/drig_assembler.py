@@ -16,7 +16,7 @@ class DeRhamIGACylinderAssembler:
 
     Field spaces (matching your DeRhamIsogeometricCylinderElement docstring):
       w   : (p2,p2)  -> 3x3 per elem
-      u   : (p2,p2)  -> 3x3 per elem
+      u   : (p1,p2)  -> 2x3 per elem
       v   : (p2,p1)  -> 3x2 per elem
       thx : (p2,p1)  -> 3x2 per elem
       thy : (p1,p2)  -> 2x3 per elem
@@ -44,7 +44,6 @@ class DeRhamIGACylinderAssembler:
         hoop_length:float=np.pi, # semi-cylinder
         load_fcn=lambda x, s: 0.0,    # radial load on w (optional)
         clamped: bool = False,
-        bdf_file: str = "",
     ):
         self.element = ELEMENT(clamped=clamped) if callable(ELEMENT) else ELEMENT
 
@@ -52,7 +51,7 @@ class DeRhamIGACylinderAssembler:
         self.nye = int(nye if nye is not None else nxe)
 
         self.E = float(E)
-        self.nu = float(nu)
+        self.nu_poiss = float(nu)   # material Poisson
         self.thick = float(thick)
         self.Lx = float(length)
         self.radius = float(radius)
@@ -79,7 +78,7 @@ class DeRhamIGACylinderAssembler:
 
         # counts
         self.nw   = self.nx_w * self.ny_w
-        self.nu  = self.nx_w * self.ny_w
+        self.nu  = self.nx_thy * self.ny_thy
         self.nv   = self.nx_thx * self.ny_thx
         self.nthx = self.nx_thx * self.ny_thx
         self.nthy = self.nx_thy  * self.ny_thy
@@ -140,7 +139,7 @@ class DeRhamIGACylinderAssembler:
         for ey in range(self.nye):
             for ex in range(self.nxe):
 
-                # ---- w, u : 3x3 on (nx_w, ny_w)  (NO WRAP)
+                # ---- w : 3x3 on (nx_w, ny_w)  (NO WRAP)
                 wloc = []
                 for ly in range(3):
                     jy = ey + ly
@@ -148,7 +147,7 @@ class DeRhamIGACylinderAssembler:
                         ix = ex + lx
                         wloc.append(self._node(ix, jy, self.nx_w))
                 conn_w.append(wloc)
-                conn_u.append(list(wloc))
+                # conn_u.append(list(wloc))
 
                 # ---- v, thx : 3x2 on (nx_thx, ny_thx)  (NO WRAP)
                 vloc = []
@@ -160,50 +159,101 @@ class DeRhamIGACylinderAssembler:
                 conn_v.append(vloc)
                 conn_thx.append(list(vloc))
 
-                # ---- thy : 2x3 on (nx_thy, ny_thy)  (NO WRAP)
+                # ---- u, thy : 2x3 on (nx_thy, ny_thy)  (NO WRAP)
                 tyloc = []
                 for ly in range(3):
                     jy = ey + ly
                     for lx in range(2):
                         ix = ex + lx
                         tyloc.append(self._node(ix, jy, self.nx_thy))
-                conn_thy.append(tyloc)
+                conn_u.append(tyloc)
+                conn_thy.append(list(tyloc))
+                
 
         return conn_w, conn_u, conn_v, conn_thx, conn_thy
 
     def _build_bcs(self):
         """
-        Simply supported cylindrical arc (open hoop):
-        - enforce w = 0 on ALL 4 sides in (x,s)
-        - do NOT enforce rotations (thx, thy) to zero (that's clamped)
-        - u and v are constrained on two edges
+        Boundary conditions for an open-hoop cylindrical patch in (x,s).
+
+        Modes:
+        - self.clamped == True  (Fully clamped on ALL 4 sides):
+            constrain w, u, v, thx, thy on all boundary nodes
+        - self.clamped == False (Simply supported-style, as you had):
+            constrain w on all 4 sides
+            constrain u on x=0 edge
+            constrain v on y=0 edge
+            rotations are NOT constrained
+
+        Notes:
+        - This assumes your global ordering is [w, u, v, thx, thy] with offsets
+            self.off_w, self.off_u, self.off_v, self.off_thx, self.off_thy.
+        - Uses each field’s own grid (nx_*, ny_*) and node map (_node).
         """
         bcs = []
 
         def on_bndry(i, j, nx, ny):
             return (i == 0) or (i == nx - 1) or (j == 0) or (j == ny - 1)
 
-        # w boundary: all edges
-        for j in range(self.ny_w):
-            for i in range(self.nx_w):
-                if on_bndry(i, j, self.nx_w, self.ny_w):
-                    bcs.append(self.off_w + self._node(i, j, self.nx_w))
+        # -------------------------
+        # Fully clamped: all fields on all sides
+        # -------------------------
+        if self.clamped:
+            # w
+            for j in range(self.ny_w):
+                for i in range(self.nx_w):
+                    if on_bndry(i, j, self.nx_w, self.ny_w):
+                        bcs.append(self.off_w + self._node(i, j, self.nx_w))
 
-        # Minimal anchors for rigid modes in membrane (keep these even for simply-supported)
-        # u boundary: on x edge
-        for j in range(self.ny_w):
-            for i in range(self.nx_w):
-                if i == 0:
-                    bcs.append(self.off_u + self._node(i, j, self.nx_w))
+            # u
+            for j in range(self.ny_thy):
+                for i in range(self.nx_thy):
+                    if on_bndry(i, j, self.nx_thy, self.ny_thy):
+                        bcs.append(self.off_u + self._node(i, j, self.nx_thy))
 
-        # v boundary: on y edge
-        for j in range(self.ny_thx):
-            for i in range(self.nx_thx):
-                if j == 0:
-                    bcs.append(self.off_v + self._node(i, j, self.nx_thx))
-        # print(f"{bcs=} {self.off_u=} {self.off_v=}")
+            # v
+            for j in range(self.ny_thx):
+                for i in range(self.nx_thx):
+                    if on_bndry(i, j, self.nx_thx, self.ny_thx):
+                        bcs.append(self.off_v + self._node(i, j, self.nx_thx))
+
+            # thx
+            for j in range(self.ny_thx):
+                for i in range(self.nx_thx):
+                    if on_bndry(i, j, self.nx_thx, self.ny_thx):
+                        bcs.append(self.off_thx + self._node(i, j, self.nx_thx))
+
+            # thy
+            for j in range(self.ny_thy):
+                for i in range(self.nx_thy):
+                    if on_bndry(i, j, self.nx_thy, self.ny_thy):
+                        bcs.append(self.off_thy + self._node(i, j, self.nx_thy))
+
+        # -------------------------
+        # Simply supported (your original intent)
+        # -------------------------
+        else:
+
+            # w boundary: all edges
+            for j in range(self.ny_w):
+                for i in range(self.nx_w):
+                    if on_bndry(i, j, self.nx_w, self.ny_w):
+                        bcs.append(self.off_w + self._node(i, j, self.nx_w))
+
+            # u boundary: on x=0 edge
+            for j in range(self.ny_thy):
+                for i in range(self.nx_thy):
+                    if i == 0:
+                        bcs.append(self.off_u + self._node(i, j, self.nx_thy))
+
+            # v boundary: on y=0 edge
+            for j in range(self.ny_thx):
+                for i in range(self.nx_thx):
+                    if j == 0:
+                        bcs.append(self.off_v + self._node(i, j, self.nx_thx))
 
         return sorted(set(bcs))
+
 
     # -------------------------------------------------------------------------
     # CSR pattern helpers
@@ -275,35 +325,52 @@ class DeRhamIGACylinderAssembler:
 
         # --- w rows
         self.ww_rowp,   self.ww_cols,   self.ww_nnz   = self._build_pattern_from_stencil(self.nw,  (self.nx_w, self.ny_w), (self.nx_w, self.ny_w), (-2, 2), (-2, 2), periodic_y=per)
-        self.wu_rowp,   self.wu_cols,   self.wu_nnz   = self._build_pattern_from_stencil(self.nw,  (self.nx_w, self.ny_w), (self.nx_w, self.ny_w), (-2, 2), (-2, 2), periodic_y=per)
+        self.wu_rowp,   self.wu_cols,   self.wu_nnz   = self._build_pattern_from_stencil(self.nw,  (self.nx_w, self.ny_w), (self.nx_thy, self.ny_thy), (-2, 1), (-2, 2), periodic_y=per)
         self.wv_rowp,   self.wv_cols,   self.wv_nnz   = self._build_pattern_from_stencil(self.nw,  (self.nx_w, self.ny_w), (self.nx_thx, self.ny_thx), (-2, 2), (-2, 1), periodic_y=per)
         self.wthx_rowp, self.wthx_cols, self.wthx_nnz = self._build_pattern_from_stencil(self.nw,  (self.nx_w, self.ny_w), (self.nx_thx, self.ny_thx), (-2, 2), (-2, 1), periodic_y=per)
         self.wthy_rowp, self.wthy_cols, self.wthy_nnz = self._build_pattern_from_stencil(self.nw,  (self.nx_w, self.ny_w), (self.nx_thy,  self.ny_thy ), (-2, 1), (-2, 2), periodic_y=per)
 
         # --- u rows
-        self.uw_rowp,   self.uw_cols,   self.uw_nnz   = self._build_pattern_from_stencil(self.nu, (self.nx_w, self.ny_w), (self.nx_w, self.ny_w), (-2, 2), (-2, 2), periodic_y=per)
-        self.uu_rowp,   self.uu_cols,   self.uu_nnz   = self._build_pattern_from_stencil(self.nu, (self.nx_w, self.ny_w), (self.nx_w, self.ny_w), (-2, 2), (-2, 2), periodic_y=per)
-        self.uv_rowp,   self.uv_cols,   self.uv_nnz   = self._build_pattern_from_stencil(self.nu, (self.nx_w, self.ny_w), (self.nx_thx, self.ny_thx), (-2, 2), (-2, 1), periodic_y=per)
-        self.uthx_rowp, self.uthx_cols, self.uthx_nnz = self._build_pattern_from_stencil(self.nu, (self.nx_w, self.ny_w), (self.nx_thx, self.ny_thx), (-2, 2), (-2, 1), periodic_y=per)
-        self.uthy_rowp, self.uthy_cols, self.uthy_nnz = self._build_pattern_from_stencil(self.nu, (self.nx_w, self.ny_w), (self.nx_thy,  self.ny_thy ), (-2, 1), (-2, 2), periodic_y=per)
+                # --- u rows  (u is on (nx_thy, ny_thy) now)
+        self.uw_rowp,   self.uw_cols,   self.uw_nnz   = self._build_pattern_from_stencil(
+            self.nu, (self.nx_thy, self.ny_thy), (self.nx_w,   self.ny_w),   (-1, 2), (-2, 2), periodic_y=per
+        )
+        self.uu_rowp,   self.uu_cols,   self.uu_nnz   = self._build_pattern_from_stencil(
+            self.nu, (self.nx_thy, self.ny_thy), (self.nx_thy, self.ny_thy), (-1, 1), (-2, 2), periodic_y=per
+        )
+        self.uv_rowp,   self.uv_cols,   self.uv_nnz   = self._build_pattern_from_stencil(
+            self.nu, (self.nx_thy, self.ny_thy), (self.nx_thx, self.ny_thx), (-1, 2), (-2, 1), periodic_y=per
+        )
+        self.uthx_rowp, self.uthx_cols, self.uthx_nnz = self._build_pattern_from_stencil(
+            self.nu, (self.nx_thy, self.ny_thy), (self.nx_thx, self.ny_thx), (-1, 2), (-2, 1), periodic_y=per
+        )
+        self.uthy_rowp, self.uthy_cols, self.uthy_nnz = self._build_pattern_from_stencil(
+            self.nu, (self.nx_thy, self.ny_thy), (self.nx_thy, self.ny_thy), (-1, 1), (-2, 2), periodic_y=per
+        )
 
         # --- v rows
         self.vw_rowp,   self.vw_cols,   self.vw_nnz   = self._build_pattern_from_stencil(self.nv,  (self.nx_thx, self.ny_thx), (self.nx_w, self.ny_w), (-2, 2), (-1, 2), periodic_y=per)
-        self.vu_rowp,   self.vu_cols,   self.vu_nnz   = self._build_pattern_from_stencil(self.nv,  (self.nx_thx, self.ny_thx), (self.nx_w, self.ny_w), (-2, 2), (-1, 2), periodic_y=per)
+        self.vu_rowp,   self.vu_cols,   self.vu_nnz   = self._build_pattern_from_stencil(
+            self.nv, (self.nx_thx, self.ny_thx), (self.nx_thy, self.ny_thy), (-2, 1), (-1, 2), periodic_y=per
+        )
         self.vv_rowp,   self.vv_cols,   self.vv_nnz   = self._build_pattern_from_stencil(self.nv,  (self.nx_thx, self.ny_thx), (self.nx_thx, self.ny_thx), (-2, 2), (-1, 1), periodic_y=per)
         self.vthx_rowp, self.vthx_cols, self.vthx_nnz = self._build_pattern_from_stencil(self.nv,  (self.nx_thx, self.ny_thx), (self.nx_thx, self.ny_thx), (-2, 2), (-1, 1), periodic_y=per)
         self.vthy_rowp, self.vthy_cols, self.vthy_nnz = self._build_pattern_from_stencil(self.nv,  (self.nx_thx, self.ny_thx), (self.nx_thy,  self.ny_thy ), (-2, 1), (-1, 2), periodic_y=per)
 
         # --- thx rows
         self.thxw_rowp,   self.thxw_cols,   self.thxw_nnz   = self._build_pattern_from_stencil(self.nthx, (self.nx_thx, self.ny_thx), (self.nx_w, self.ny_w), (-2, 2), (-1, 2), periodic_y=per)
-        self.thxu_rowp,   self.thxu_cols,   self.thxu_nnz   = self._build_pattern_from_stencil(self.nthx, (self.nx_thx, self.ny_thx), (self.nx_w, self.ny_w), (-2, 2), (-1, 2), periodic_y=per)
+        self.thxu_rowp,   self.thxu_cols,   self.thxu_nnz   = self._build_pattern_from_stencil(
+            self.nthx, (self.nx_thx, self.ny_thx), (self.nx_thy, self.ny_thy), (-2, 1), (-1, 2), periodic_y=per
+        )
         self.thxv_rowp,   self.thxv_cols,   self.thxv_nnz   = self._build_pattern_from_stencil(self.nthx, (self.nx_thx, self.ny_thx), (self.nx_thx, self.ny_thx), (-2, 2), (-1, 1), periodic_y=per)
         self.thxthx_rowp, self.thxthx_cols, self.thxthx_nnz = self._build_pattern_from_stencil(self.nthx, (self.nx_thx, self.ny_thx), (self.nx_thx, self.ny_thx), (-2, 2), (-1, 1), periodic_y=per)
         self.thxthy_rowp, self.thxthy_cols, self.thxthy_nnz = self._build_pattern_from_stencil(self.nthx, (self.nx_thx, self.ny_thx), (self.nx_thy,  self.ny_thy ), (-2, 1), (-1, 2), periodic_y=per)
 
         # --- thy rows
         self.thyw_rowp,   self.thyw_cols,   self.thyw_nnz   = self._build_pattern_from_stencil(self.nthy, (self.nx_thy,  self.ny_thy ), (self.nx_w, self.ny_w), (-1, 2), (-2, 2), periodic_y=per)
-        self.thyu_rowp,   self.thyu_cols,   self.thyu_nnz   = self._build_pattern_from_stencil(self.nthy, (self.nx_thy,  self.ny_thy ), (self.nx_w, self.ny_w), (-1, 2), (-2, 2), periodic_y=per)
+        self.thyu_rowp,   self.thyu_cols,   self.thyu_nnz   = self._build_pattern_from_stencil(
+            self.nthy, (self.nx_thy, self.ny_thy), (self.nx_thy, self.ny_thy), (-1, 1), (-2, 2), periodic_y=per
+        )
         self.thyv_rowp,   self.thyv_cols,   self.thyv_nnz   = self._build_pattern_from_stencil(self.nthy, (self.nx_thy,  self.ny_thy ), (self.nx_thx, self.ny_thx), (-1, 2), (-2, 1), periodic_y=per)
         self.thythx_rowp, self.thythx_cols, self.thythx_nnz = self._build_pattern_from_stencil(self.nthy, (self.nx_thy,  self.ny_thy ), (self.nx_thx, self.ny_thx), (-1, 2), (-2, 1), periodic_y=per)
         self.thythy_rowp, self.thythy_cols, self.thythy_nnz = self._build_pattern_from_stencil(self.nthy, (self.nx_thy,  self.ny_thy ), (self.nx_thy,  self.ny_thy ), (-1, 1), (-2, 2), periodic_y=per)
@@ -392,7 +459,7 @@ class DeRhamIGACylinderAssembler:
         for ey in range(self.nye):
             for ex in range(self.nxe):
                 w_dofs   = self.conn_w[elem_id]    # 9
-                u_dofs   = self.conn_u[elem_id]    # 9
+                u_dofs   = self.conn_u[elem_id]    # 6
                 v_dofs   = self.conn_v[elem_id]    # 6
                 thx_dofs = self.conn_thx[elem_id]  # 6
                 thy_dofs = self.conn_thy[elem_id]  # 6
@@ -416,7 +483,7 @@ class DeRhamIGACylinderAssembler:
                     Ktxw, Ktxu, Ktxv, Ktxtx, Ktxty,
                     Ktyw, Ktyu, Ktyv, Ktytx, Ktyty
                 ) = self.element.get_kelem(
-                    E=self.E, nu=self.nu, thick=self.thick,
+                    E=self.E, nu=self.nu_poiss, thick=self.thick,
                     dx=self.dx, dy=self.dy,
                     left_bndry=left_b, right_bndry=right_b,
                     bot_bndry=bot_b, top_bndry=top_b
@@ -424,7 +491,7 @@ class DeRhamIGACylinderAssembler:
 
                 # RHS (optional)
                 fw = np.zeros(9)
-                fu = np.zeros(9)
+                fu = np.zeros(6)
                 fv = np.zeros(6)
                 fthx = np.zeros(6)
                 fthy = np.zeros(6)
@@ -564,9 +631,9 @@ class DeRhamIGACylinderAssembler:
         self.kmat = K.tocsr()
         self.force = f
 
-        # add one to the whole diagonal matrix so invertible..
-        eps = 1e-12   # or 1e-10 / 1e-8 depending how singular it is
-        self.kmat = self.kmat + eps * sp.eye(self.kmat.shape[0], format="csr")
+        # # add one to the whole diagonal matrix so invertible..
+        # eps = 1e-12   # or 1e-10 / 1e-8 depending how singular it is
+        # self.kmat = self.kmat + eps * sp.eye(self.kmat.shape[0], format="csr")
 
         # print(f"{f=}")
         # print(f"{self.force[:self.off_u]=}")
@@ -583,7 +650,7 @@ class DeRhamIGACylinderAssembler:
         force_nrm = np.linalg.norm(self.force)
         res_nrm = np.linalg.norm(res)
         rel_nrm = res_nrm / force_nrm
-        print(f"{rel_nrm=:.4e}")
+        # print(f"{rel_nrm=:.4e} of direct solve")
 
         return self.u
 
@@ -617,7 +684,7 @@ class DeRhamIGACylinderAssembler:
             label = "w"
         elif mode == "u":
             vec = self.u[off_u:off_u + self.nu]
-            nx, ny = self.nx_w, self.ny_w
+            nx, ny = self.nx_thy, self.ny_thy
             label = "u"
         elif mode == "v":
             vec = self.u[off_v:off_v + self.nv]
@@ -636,11 +703,11 @@ class DeRhamIGACylinderAssembler:
 
         # vec_nrm = np.linalg.norm(vec)
         vec_nrm = np.max(np.abs(vec))
-        print(f"{vec_nrm=:.4e}")
+        print(f"disp nrm: {vec_nrm:.4e}")
 
         V = vec.reshape((ny, nx))
-        if mode == 'u':
-            V = V.T
+        # if mode == 'u':
+        #     V = V.T
         # V = vec.reshape((ny, nx)).T
         # print(f"{V=}")
         # print(f"{vec=}")
@@ -684,11 +751,11 @@ class DeRhamIGACylinderAssembler:
                 )
 
             R = rad_vec.reshape((ny, nx))
-            orig_mag = float(np.linalg.norm(R))
+            orig_mag = float(np.max(np.abs((R))))
             scale_factor = (disp_mag / orig_mag) if orig_mag > 0 else 1.0
             Rdef = R * scale_factor
 
-        Rdef *= -1
+        # Rdef *= -1
 
         # ---- geometry ----
         Y = (self.radius + Rdef) * np.sin(Phi)
