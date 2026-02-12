@@ -19,6 +19,11 @@ class MixedDeRhamIGACylinderElement:
 
     Unknown ordering (local block order):
       Ue = [ w(16), w2(8), u(12), v(12), thx(12), thy(12) ]
+    
+    NOTE : this element was derived to fix mem locking in the cylinder..
+    See this ref for another derivation of cylinder mem locking and the energy
+        https://link.springer.com/article/10.1007/BF01385524
+        The problem of membrane locking in finite element analysis of cylindrical shells
 
     Spaces:
       w    : (p3,p3)  -> 16

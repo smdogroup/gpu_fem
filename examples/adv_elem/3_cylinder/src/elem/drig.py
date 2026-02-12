@@ -21,10 +21,7 @@ class DeRhamIsogeometricCylinderElement:
       2*e13 = w_x + thy
       2*e23 = w_y - v/r - thx   (y = s so w_y is w_s)
 
-    
-    See this ref for another derivation of cylinder mem locking and the energy
-        https://link.springer.com/article/10.1007/BF01385524
-        The problem of membrane locking in finite element analysis of cylindrical shells
+    NOTE : this element experiences some membrane locking..
 
     Your derived strains implemented:
 
