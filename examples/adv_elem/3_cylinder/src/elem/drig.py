@@ -234,7 +234,7 @@ class DeRhamIsogeometricCylinderElement:
 
                 # k22 = -thx_y + w/r^2 + v_y/r
                 k22_w   = (1.0 / (r * r)) * Nw
-                k22_w = 0.0 # ignore 2nd order term?
+                # k22_w = 0.0 # ignore 2nd order term?
                 k22_thx = -Ntx_y
                 k22_v   = (1.0 / r) * Nv_y
 
