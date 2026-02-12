@@ -681,13 +681,10 @@ class MixedDeRhamIGACylinderAssembler:
         X = 1.0 - X
 
         # ---- deformation (FIXED) ----
-        if mode == "w":
-            R = V
-            orig_mag = float(np.max(np.abs(R)))
-            scale_factor = (disp_mag / orig_mag) if orig_mag > 0 else 1.0
-            Rdef = R * scale_factor
-        else:
-            Rdef = np.zeros_like(V)
+        R = V
+        orig_mag = float(np.max(np.abs(R)))
+        scale_factor = (disp_mag / orig_mag) if orig_mag > 0 else 1.0
+        Rdef = R * scale_factor
 
         # ---- geometry ----
         Y = (self.radius + Rdef) * np.sin(Phi)
