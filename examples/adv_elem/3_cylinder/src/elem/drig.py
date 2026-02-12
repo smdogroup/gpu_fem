@@ -12,7 +12,7 @@ class DeRhamIsogeometricCylinderElement:
 
     Unknowns (field blocks):
       w   : radial displacement (H1, p=2x2)            -> 9 dofs  (p2,p2)
-      u   : axial displacement  (H1, p=2x2)            -> 9 dofs  (p2,p2)
+      u   : axial displacement  (x-edge space)         -> 6 dofs  (p1,p2)
       v   : hoop displacement   (y-edge space)         -> 6 dofs  (p2,p1)
       thx : rotation about hoop? (y-edge space)        -> 6 dofs  (p2,p1)
       thy : rotation about axial (x-edge space)        -> 6 dofs  (p1,p2)
@@ -20,6 +20,11 @@ class DeRhamIsogeometricCylinderElement:
     This choice preserves exact discrete shear cancellation:
       2*e13 = w_x + thy
       2*e23 = w_y - v/r - thx   (y = s so w_y is w_s)
+
+    
+    See this ref for another derivation of cylinder mem locking and the energy
+        https://link.springer.com/article/10.1007/BF01385524
+        The problem of membrane locking in finite element analysis of cylindrical shells
 
     Your derived strains implemented:
 
@@ -44,12 +49,13 @@ class DeRhamIsogeometricCylinderElement:
         The element just provides K; apply different essential BCs in your projector.
     """
 
-    def __init__(self, r: float, reduced_integrated: bool = False, clamped: bool = False, axial_factor:float=0.0):
+    def __init__(self, r: float, reduced_integrated: bool = False, clamped: bool = False, axial_factor:float=0.0, curvature_on:bool=True):
         self.dof_per_node = 1  # separate field blocks
         self.r = float(r)
         self.reduced_integrated = bool(reduced_integrated)
         self.clamped = bool(clamped)
         self.axial_factor = float(axial_factor)
+        self.curvature_on = bool(curvature_on)
 
     # ---- tensor helpers ------------------------------------------------------
     @staticmethod
@@ -165,15 +171,16 @@ class DeRhamIsogeometricCylinderElement:
         # debug_mem_off = True
         debug_mem_off = False
 
-        debug_curv_off = True
+        # # debug_curv_off = True
         # debug_curv_off = False
+        debug_curv_off = not self.curvature_on
 
         # half_eng_strains = True
         half_eng_strains = False
 
-        load = "bend"
-        load = "mem"
-        load = "both"
+        # load = "bend"
+        # load = "mem"
+        # load = "both"
 
 
         # ==========================================================
@@ -230,6 +237,7 @@ class DeRhamIsogeometricCylinderElement:
 
                 # k22 = -thx_y + w/r^2 + v_y/r
                 k22_w   = (1.0 / (r * r)) * Nw
+                k22_w = 0.0 # ignore 2nd order term?
                 k22_thx = -Ntx_y
                 k22_v   = (1.0 / r) * Nv_y
 
@@ -398,6 +406,11 @@ class DeRhamIsogeometricCylinderElement:
                 Nw, Nw_xi, Nw_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny2, dNy2))
                 Nw_x = Nw_xi * xi_x
                 Nw_y = Nw_eta * eta_y
+
+                # reduced integrated w like MITC? oof this may not be as good..
+                # TEMP DEBUG
+                # Ny0 = np.array([1.0/3.0]*3)
+                # Nw = np.kron(Ny0, Nx2)
 
                 # v (p2,p1)
                 Nv, Nv_xi, Nv_eta = self._tensor_product_basis(xi, eta, (Nx2, dNx2), (Ny1, dNy1))
@@ -800,8 +813,8 @@ class DeRhamIsogeometricCylinderElement:
         ty_c = Rty @ ty_f
 
         nxw_c, nyw_c = nxe_c + 2, nye_c + 2
-        nxtx_c, nytx_c = nxe_c + 1, nye_c + 2
-        nxty_c, nyty_c = nxe_c + 2, nye_c + 1
+        nxtx_c, nytx_c = nxe_c + 2, nye_c + 1
+        nxty_c, nyty_c = nxe_c + 1, nye_c + 2
 
         r_c = np.concatenate([w_c, U_c, V_c, tx_c, ty_c])
         r_c = self.apply_bcs_2d(r_c, nxw_c, nyw_c, nxtx_c, nytx_c, nxty_c, nyty_c) #, mode="restrict")

@@ -1,1 +1,1 @@
-from .derham import DeRhamIsogeometricCylinderElement
+from .drig import DeRhamIsogeometricCylinderElement

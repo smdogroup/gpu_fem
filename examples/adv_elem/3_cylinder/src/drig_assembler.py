@@ -666,21 +666,166 @@ class DeRhamIGACylinderAssembler:
         return self.element.restrict_defect(fine_defect, self.nxe, self.nye)
 
     # Also: plot reshape is flipped; fix it:
-    def plot_disp(self, disp_mag: float = 0.2, mode: str = "w", deform: str = "none"):
+    # def plot_disp(self, disp_mag: float = 0.2, mode: str = "w", deform: str = "none"):
+    #     """
+    #     mode:   which field to visualize in color and (optionally) geometry
+    #             one of ["w", "u", "v", "thx", "thy"]
+    #     deform: how to deform the cylinder geometry
+    #             - "w":      always deform with w (safe default)
+    #             - "radial": deform with the selected `mode` field
+    #             - "none":   no deformation, just plot on undeformed cylinder
+    #     """
+    #     if self.u is None:
+    #         raise RuntimeError("Run direct_solve() first.")
+
+    #     # ---- helper to slice the chosen field ----
+    #     mode = mode.lower()
+    #     deform = deform.lower()
+
+    #     # global ordering: [w, u, v, thx, thy]
+    #     off_w   = 0
+    #     off_u   = off_w   + self.nw
+    #     off_v   = off_u   + self.nu
+    #     off_thx = off_v   + self.nv
+    #     off_thy = off_thx + self.nthx
+
+    #     if mode == "w":
+    #         vec = self.u[off_w:off_w + self.nw]
+    #         nx, ny = self.nx_w, self.ny_w
+    #         label = "w"
+    #     elif mode == "u":
+    #         vec = self.u[off_u:off_u + self.nu]
+    #         nx, ny = self.nx_thy, self.ny_thy
+    #         label = "u"
+    #     elif mode == "v":
+    #         vec = self.u[off_v:off_v + self.nv]
+    #         nx, ny = self.nx_thx, self.ny_thx
+    #         label = "v"
+    #     elif mode == "thx":
+    #         vec = self.u[off_thx:off_thx + self.nthx]
+    #         nx, ny = self.nx_thx, self.ny_thx
+    #         label = "thx"
+    #     elif mode == "thy":
+    #         vec = self.u[off_thy:off_thy + self.nthy]
+    #         nx, ny = self.nx_thy, self.ny_thy
+    #         label = "thy"
+    #     else:
+    #         raise ValueError(f"Unknown mode='{mode}'. Use one of ['w','u','v','thx','thy'].")
+
+    #     # vec_nrm = np.linalg.norm(vec)
+    #     vec_nrm = np.max(np.abs(vec))
+    #     print(f"disp nrm: {vec_nrm:.4e}")
+
+    #     V = vec.reshape((ny, nx))
+    #     # if mode == 'u':
+    #     #     V = V.T
+    #     # V = vec.reshape((ny, nx)).T
+    #     # print(f"{V=}")
+    #     # print(f"{vec=}")
+    #     # print(f"{V=}")
+
+    #     # ---- build (x, theta) grid matching that field ----
+    #     x = np.linspace(0.0, self.Lx, nx)
+    #     th = np.linspace(-self.Ly, 0.0, ny)
+    #     X, TH = np.meshgrid(x, th, indexing="xy")
+    #     Phi = TH / self.radius
+
+    #     # flip X coords for some reason (plotting issue)
+    #     X = 1.0 - X
+
+    #     # print(f"{X=}")
+
+    #     # ---- choose deformation field ----
+    #     # if deform == "none":
+    #     #     Rdef = np.zeros_like(V)
+    #     #     deform_label = "none"
+    #     # else:
+    #     #     if deform == "radial":
+    #     #         # deform using the selected field
+    #     #         rad_vec = vec
+    #     #         rad_nx, rad_ny = nx, ny
+    #     #         deform_label = label
+    #     #     elif deform == "w":
+    #     #         # always deform using w field (recommended when mode != w)
+    #     #         rad_vec = self.u[off_w:off_w + self.nw]
+    #     #         rad_nx, rad_ny = self.nx_w, self.ny_w
+    #     #         deform_label = "w"
+    #     #     else:
+    #     #         raise ValueError("deform must be one of ['w','radial','none'].")
+
+    #     #     # If deform grid differs from plot grid, you probably want to only use deform="w"
+    #     #     # unless you *know* they share the same nx/ny.
+    #     #     if (rad_nx, rad_ny) != (nx, ny):
+    #     #         raise ValueError(
+    #     #             f"Deformation grid ({rad_ny}x{rad_nx}) != plot grid ({ny}x{nx}). "
+    #     #             f"Use deform='w' or deform='none' for mode='{mode}'."
+    #     #         )
+
+    #     R = vec.reshape((ny, nx))
+    #     orig_mag = float(np.max(np.abs((R))))
+    #     scale_factor = (disp_mag / orig_mag) if orig_mag > 0 else 1.0
+    #     Rdef = R * scale_factor
+
+    #     # Rdef *= -1
+
+    #     # ---- geometry ----
+    #     Y = (self.radius + Rdef) * np.sin(Phi)
+    #     Z = (self.radius + Rdef) * np.cos(Phi)
+
+    #     # ---- color by selected field ----
+    #     import matplotlib.pyplot as plt
+    #     import matplotlib.colors as mcolors
+    #     import matplotlib.cm as cm
+
+    #     C = np.abs(V)  # vertex values (ny, nx)
+    #     C_face = 0.25 * (C[:-1, :-1] + C[1:, :-1] + C[:-1, 1:] + C[1:, 1:])
+
+    #     norm = mcolors.Normalize(vmin=float(C_face.min()), vmax=float(C_face.max()))
+    #     cmap = cm.get_cmap("viridis")
+    #     facecolors = cmap(norm(C_face))  # (ny-1, nx-1, 4)
+
+    #     fig = plt.figure(figsize=(9, 6))
+    #     ax = fig.add_subplot(111, projection="3d")
+
+    #     ax.plot_surface(
+    #         X, Y, Z,
+    #         facecolors=facecolors,
+    #         linewidth=0,
+    #         antialiased=True,
+    #         shade=False,
+    #     )
+
+    #     ax.set_xlabel("x")
+    #     ax.set_ylabel("y")
+    #     ax.set_zlabel("radial")
+    #     ax.set_title(f"color={label}")
+
+    #     ax.view_init(elev=25, azim=-135)
+
+    #     mappable = cm.ScalarMappable(norm=norm, cmap=cmap)
+    #     mappable.set_array([])
+    #     fig.colorbar(mappable, ax=ax, shrink=0.6, pad=0.08, label=f"|{label}|")
+
+    #     plt.tight_layout()
+    #     plt.show()
+
+    def _plot_disp(self, disp_mag: float = 0.2, mode: str = "w", ax=None):
         """
-        mode:   which field to visualize in color and (optionally) geometry
-                one of ["w", "u", "v", "thx", "thy"]
-        deform: how to deform the cylinder geometry
-                - "w":      always deform with w (safe default)
-                - "radial": deform with the selected `mode` field
-                - "none":   no deformation, just plot on undeformed cylinder
+        PRIVATE: plot a single field onto `ax` (3D) if provided, else create a figure.
+
+        Fixed deformation rule (NO INPUT):
+        - mode == "w": deform with w
+        - else:        undeformed (Rdef = 0)  [grids differ, so no u/u etc]
         """
         if self.u is None:
             raise RuntimeError("Run direct_solve() first.")
 
-        # ---- helper to slice the chosen field ----
+        import numpy as np
+        import matplotlib.pyplot as plt
+        import matplotlib.colors as mcolors
+        import matplotlib.cm as cm
+
         mode = mode.lower()
-        deform = deform.lower()
 
         # global ordering: [w, u, v, thx, thy]
         off_w   = 0
@@ -712,17 +857,10 @@ class DeRhamIGACylinderAssembler:
         else:
             raise ValueError(f"Unknown mode='{mode}'. Use one of ['w','u','v','thx','thy'].")
 
-        # vec_nrm = np.linalg.norm(vec)
         vec_nrm = np.max(np.abs(vec))
-        print(f"disp nrm: {vec_nrm:.4e}")
+        print(f"{label} disp nrm: {vec_nrm:.4e}")
 
         V = vec.reshape((ny, nx))
-        # if mode == 'u':
-        #     V = V.T
-        # V = vec.reshape((ny, nx)).T
-        # print(f"{V=}")
-        # print(f"{vec=}")
-        # print(f"{V=}")
 
         # ---- build (x, theta) grid matching that field ----
         x = np.linspace(0.0, self.Lx, nx)
@@ -730,53 +868,23 @@ class DeRhamIGACylinderAssembler:
         X, TH = np.meshgrid(x, th, indexing="xy")
         Phi = TH / self.radius
 
-        # flip X coords for some reason (plotting issue)
+        # keep your flip
         X = 1.0 - X
 
-        # print(f"{X=}")
-
-        # ---- choose deformation field ----
-        # if deform == "none":
-        #     Rdef = np.zeros_like(V)
-        #     deform_label = "none"
-        # else:
-        #     if deform == "radial":
-        #         # deform using the selected field
-        #         rad_vec = vec
-        #         rad_nx, rad_ny = nx, ny
-        #         deform_label = label
-        #     elif deform == "w":
-        #         # always deform using w field (recommended when mode != w)
-        #         rad_vec = self.u[off_w:off_w + self.nw]
-        #         rad_nx, rad_ny = self.nx_w, self.ny_w
-        #         deform_label = "w"
-        #     else:
-        #         raise ValueError("deform must be one of ['w','radial','none'].")
-
-        #     # If deform grid differs from plot grid, you probably want to only use deform="w"
-        #     # unless you *know* they share the same nx/ny.
-        #     if (rad_nx, rad_ny) != (nx, ny):
-        #         raise ValueError(
-        #             f"Deformation grid ({rad_ny}x{rad_nx}) != plot grid ({ny}x{nx}). "
-        #             f"Use deform='w' or deform='none' for mode='{mode}'."
-        #         )
-
-        R = vec.reshape((ny, nx))
-        orig_mag = float(np.max(np.abs((R))))
-        scale_factor = (disp_mag / orig_mag) if orig_mag > 0 else 1.0
-        Rdef = R * scale_factor
-
-        # Rdef *= -1
+        # ---- deformation (FIXED, no user input) ----
+        if mode == "w":
+            R = V
+            orig_mag = float(np.max(np.abs(R)))
+            scale_factor = (disp_mag / orig_mag) if orig_mag > 0 else 1.0
+            Rdef = R * scale_factor
+        else:
+            Rdef = np.zeros_like(V)
 
         # ---- geometry ----
         Y = (self.radius + Rdef) * np.sin(Phi)
         Z = (self.radius + Rdef) * np.cos(Phi)
 
         # ---- color by selected field ----
-        import matplotlib.pyplot as plt
-        import matplotlib.colors as mcolors
-        import matplotlib.cm as cm
-
         C = np.abs(V)  # vertex values (ny, nx)
         C_face = 0.25 * (C[:-1, :-1] + C[1:, :-1] + C[:-1, 1:] + C[1:, 1:])
 
@@ -784,8 +892,13 @@ class DeRhamIGACylinderAssembler:
         cmap = cm.get_cmap("viridis")
         facecolors = cmap(norm(C_face))  # (ny-1, nx-1, 4)
 
-        fig = plt.figure(figsize=(9, 6))
-        ax = fig.add_subplot(111, projection="3d")
+        created_fig = False
+        if ax is None:
+            fig = plt.figure(figsize=(9, 6))
+            ax = fig.add_subplot(111, projection="3d")
+            created_fig = True
+        else:
+            fig = ax.figure
 
         ax.plot_surface(
             X, Y, Z,
@@ -799,12 +912,40 @@ class DeRhamIGACylinderAssembler:
         ax.set_ylabel("y")
         ax.set_zlabel("radial")
         ax.set_title(f"color={label}")
-
         ax.view_init(elev=25, azim=-135)
 
-        mappable = cm.ScalarMappable(norm=norm, cmap=cmap)
-        mappable.set_array([])
-        fig.colorbar(mappable, ax=ax, shrink=0.6, pad=0.08, label=f"|{label}|")
+        # only colorbar on standalone figure (otherwise subplots become a mess)
+        if created_fig:
+            mappable = cm.ScalarMappable(norm=norm, cmap=cmap)
+            mappable.set_array([])
+            fig.colorbar(mappable, ax=ax, shrink=0.6, pad=0.08, label=f"|{label}|")
+            plt.tight_layout()
+            plt.show()
 
-        plt.tight_layout()
-        plt.show()
+        return ax
+
+
+    def plot_disp(self, disp_mag: float = 0.2, mode: str = "all"):
+        """
+        Public entrypoint.
+
+        - mode in {'w','u','v','thx','thy'}: plot one
+        - mode == 'all': plot all 5 in a (3,2) grid (last slot empty)
+        """
+        import matplotlib.pyplot as plt
+
+        if isinstance(mode, str) and mode.lower() == "all":
+            modes = ["w", "u", "v", "thx", "thy"]
+
+            fig = plt.figure(figsize=(14, 10))
+            axs = [fig.add_subplot(2, 3, k + 1, projection="3d") for k in range(6)]
+
+            for i, m in enumerate(modes):
+                self._plot_disp(disp_mag=disp_mag, mode=m, ax=axs[i])
+
+            axs[5].set_axis_off()
+            plt.tight_layout()
+            plt.show()
+            return
+
+        self._plot_disp(disp_mag=disp_mag, mode=mode, ax=None)
