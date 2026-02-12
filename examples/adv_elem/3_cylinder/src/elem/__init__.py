@@ -1,1 +1,2 @@
 from .drig import DeRhamIsogeometricCylinderElement
+from .mdrig import MixedDeRhamIGACylinderElement

@@ -1,12 +1,13 @@
 import numpy as np
 import sys
 sys.path.append("src/")
-from elem import DeRhamIsogeometricCylinderElement
+from elem import DeRhamIsogeometricCylinderElement, MixedDeRhamIGACylinderElement
 from drig_assembler import DeRhamIGACylinderAssembler
+from drig_assembler2 import MixedDeRhamIGACylinderAssembler
 
 # sys.path.append("../2_plate/src/")
 # from asw_derham import TwoDimAddSchwarzDeRhamVertexEdges
-from dasw_cyl import TwoDimAddSchwarzDeRhamCylinderVertexEdges
+from dasw_cyl import TwoDimAddSchwarzDeRhamCylinderVertexEdges, MixedTwoDimAddSchwarzDeRhamCylinderVertexEdges
 
 sys.path.append("../1_beam/src/")
 from multigrid2 import vcycle_solve, VMG
@@ -45,14 +46,22 @@ axial_factor = 0.0
 # axial_factor = 0.3
 # larger radius can lead to weird locking behavior
 
-assert args.elem == 'drig' # only this element created right now
 
-ELEMENT = DeRhamIsogeometricCylinderElement(
-    r=R, axial_factor=axial_factor,
-    curvature_on=True, # curvature terms lead to mem locking
-    # curvature_on=False,
-)
-ASSEMBLER = DeRhamIGACylinderAssembler
+if args.elem == 'drig':
+    ELEMENT = DeRhamIsogeometricCylinderElement(
+        r=R, axial_factor=axial_factor,
+        curvature_on=True, # curvature terms lead to mem locking
+        # curvature_on=False,
+    )
+    ASSEMBLER = DeRhamIGACylinderAssembler
+elif args.elem == 'mdrig':
+    ELEMENT = MixedDeRhamIGACylinderElement(
+        r=R, axial_factor=axial_factor,
+        curvature_on=True, # curvature terms lead to mem locking
+        # curvature_on=False,
+    )
+    ASSEMBLER = MixedDeRhamIGACylinderAssembler
+    
 
 # standard assembler construction
 assembler = ASSEMBLER(
@@ -109,9 +118,14 @@ if 'mg' in args.solve:
                 omega = args.omega / 4.0 # because 2x smoothing than coupled == 1 schwarz (so ~4x smoothing on thx, thy)
                 patch_type = "wblock_vertex_edges"
 
-            if args.elem in ['drig', 'drigr']:
+            if 'drig' in args.elem:
                 print("using Additive schwarz DeRham smoother")
-                smoother = TwoDimAddSchwarzDeRhamCylinderVertexEdges.from_assembler(
+                if args.elem == 'drig':
+                    ASW_CLASS = TwoDimAddSchwarzDeRhamCylinderVertexEdges
+                elif args.elem == 'mdrig':
+                    ASW_CLASS = MixedTwoDimAddSchwarzDeRhamCylinderVertexEdges 
+
+                smoother = ASW_CLASS.from_assembler(
                     grid, omega=omega, iters=nsmooth,
                     patch_type = patch_type,
                     # patch_type="vertex_edges", # one w vertex and nearby 4 edges (2 of thx and 2 of thy)
@@ -140,7 +154,7 @@ elif args.solve == 'vmg':
     if DEVEL_DEBUG:
         assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
                                         # line_search=False, # often need it turned off.. for best conv
-                                        line_search = args.elem in ['drig', 'drigr'],
+                                        line_search = 'drig' in args.elem,
                                         debug=True,
                                         nvcycles=1000,
                                         rtol=1e-6,
@@ -148,7 +162,7 @@ elif args.solve == 'vmg':
     else:
         assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
                                         # line_search=False, # often need it turned off.. for best conv
-                                        line_search = args.elem in ['drig', 'drigr'],
+                                        line_search = 'drig' in args.elem,
                                         # line_search=False,
                                         debug=args.debug,
                                         nvcycles=400,
@@ -161,7 +175,7 @@ elif args.solve == 'kmg':
         grids, nsmooth=args.nsmooth, 
         ncyc=1, # fewer total v-cycles often..
         # ncyc=2,
-        smoothers=smoothers, line_search=args.elem in ['drig', 'drigr']
+        smoothers=smoothers, line_search = 'drig' in args.elem,
     )
     pc = vmg2
     assembler._assemble_system()
@@ -183,7 +197,7 @@ elif args.solve == 'kmg':
 
 # plot is w, u, v, thx, thy
 
-# temp change to plot forces
+# DEBUG to plot forces
 # assembler.u = assembler.force * 1.0
 
 if args.plot is not None:

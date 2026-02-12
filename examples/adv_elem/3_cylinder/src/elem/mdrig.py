@@ -7,9 +7,8 @@ from .basis import (
     zero_order_quadrature,
     get_iga2_basis,
     get_lagrange_basis_01,
-    # YOU provide:
-    # third_order_quadrature,
-    # get_iga3_basis,
+    third_order_quadrature,
+    get_iga3_basis,
 )
 
 class MixedDeRhamIGACylinderElement:
@@ -72,31 +71,25 @@ class MixedDeRhamIGACylinderElement:
 
     # ---- 1D bases (YOU fill iga3 + quad) ------------------------------------
     @staticmethod
-    def _iga3_1d(x, left, right):
-        # return get_iga3_basis(x, left, right)  # (N(4,), dN(4,))
-        raise NotImplementedError("Provide get_iga3_basis() in your basis module.")
+    def _iga3_1d(x, ixe, nxe):
+        return get_iga3_basis(x, ixe, nxe)
 
     @staticmethod
-    def _iga2_1d(x, left, right):
+    def _iga2_1d(x, ixe, nxe):
+        left = ixe == 0; right = ixe == nxe-1
         return get_iga2_basis(x, left, right)
 
     @staticmethod
     def _p1_1d(x):
         return get_lagrange_basis_01(x)
 
-    def get_kelem(self, E, nu, thick, dx, dy, left_bndry, right_bndry, bot_bndry, top_bndry):
+    def get_kelem(self, E, nu, thick, dx, dy, ixe, nxe, iye, nye):
         """
         Returns 6x6 block stiffness (dense) for local dofs ordered:
           [ w(16), w2(8), u(12), v(12), thx(12), thy(12) ]
         """
         # pts, wts = third_order_quadrature()
-        pts, wts = second_order_quadrature()  # stub
-
-        if self.reduced_integrated:
-            shear_pts, shear_wts = first_order_quadrature()
-        else:
-            # shear_pts, shear_wts = third_order_quadrature()
-            shear_pts, shear_wts = second_order_quadrature()  # stub
+        pts, wts = third_order_quadrature()
 
         r = self.r
 
@@ -186,8 +179,8 @@ class MixedDeRhamIGACylinderElement:
             w_eta = 0.5 * w_eta_raw
             eta = 0.5 * (_eta + 1.0)
 
-            Ny3, dNy3 = self._iga3_1d(eta, bot_bndry, top_bndry)  # p3
-            Ny2, dNy2 = self._iga2_1d(eta, bot_bndry, top_bndry)  # p2
+            Ny3, dNy3 = self._iga3_1d(eta, iye, nye)  # p3
+            Ny2, dNy2 = self._iga2_1d(eta, iye, nye)  # p2
 
             for _xi, w_xi_raw in zip(pts, wts):
                 w_xi = 0.5 * w_xi_raw
@@ -196,8 +189,8 @@ class MixedDeRhamIGACylinderElement:
                 wt = (w_xi * w_eta) * Jdet
                 cB = wt
 
-                Nx3, dNx3 = self._iga3_1d(xi, left_bndry, right_bndry)  # p3
-                Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)  # p2
+                Nx3, dNx3 = self._iga3_1d(xi, ixe, nxe)  # p3
+                Nx2, dNx2 = self._iga2_1d(xi, ixe, nxe)  # p2
 
                 # w: (p3,p3)
                 Nw, Nw_xi, Nw_eta = self._tensor_product_basis(xi, eta, (Nx3, dNx3), (Ny3, dNy3))
@@ -274,25 +267,25 @@ class MixedDeRhamIGACylinderElement:
         # ==========================================================
         # SHEAR (same form, new bases)
         # ==========================================================
-        ns = len(shear_pts)
+        ns = len(pts)
         for jj in range(ns):
-            _eta = shear_pts[jj]
-            w_eta = shear_wts[jj] * 0.5
+            _eta = pts[jj]
+            w_eta = wts[jj] * 0.5
             eta = 0.5 * (_eta + 1.0)
 
-            Ny3, dNy3 = self._iga3_1d(eta, bot_bndry, top_bndry)  # w uses p3
-            Ny2, dNy2 = self._iga2_1d(eta, bot_bndry, top_bndry)  # v/thx uses p2 in y
+            Ny3, dNy3 = self._iga3_1d(eta, iye, nye)  # w uses p3
+            Ny2, dNy2 = self._iga2_1d(eta, iye, nye)  # v/thx uses p2 in y
             # u/thy uses p3 in y (handled below)
 
             for ii in range(ns):
-                _xi = shear_pts[ii]
-                w_xi = shear_wts[ii] * 0.5
+                _xi = pts[ii]
+                w_xi = wts[ii] * 0.5
                 xi = 0.5 * (_xi + 1.0)
 
                 wt = (w_xi * w_eta) * Jdet
 
-                Nx3, dNx3 = self._iga3_1d(xi, left_bndry, right_bndry)
-                Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)
+                Nx3, dNx3 = self._iga3_1d(xi, ixe, nxe)
+                Nx2, dNx2 = self._iga2_1d(xi, ixe, nxe)
 
                 # w: (p3,p3)
                 Nw, Nw_xi, Nw_eta = self._tensor_product_basis(xi, eta, (Nx3, dNx3), (Ny3, dNy3))
@@ -346,8 +339,8 @@ class MixedDeRhamIGACylinderElement:
             w_eta = 0.5 * w_eta_raw
             eta = 0.5 * (_eta + 1.0)
 
-            Ny3, dNy3 = self._iga3_1d(eta, bot_bndry, top_bndry)  # p3
-            Ny2, dNy2 = self._iga2_1d(eta, bot_bndry, top_bndry)  # p2
+            Ny3, dNy3 = self._iga3_1d(eta, iye, nye)  # p3
+            Ny2, dNy2 = self._iga2_1d(eta, iye, nye)  # p2
             Ny1, dNy1 = self._p1_1d(eta)                          # p1 (for w2)
 
             for _xi, w_xi_raw in zip(pts, wts):
@@ -357,8 +350,8 @@ class MixedDeRhamIGACylinderElement:
                 wt = (w_xi * w_eta) * Jdet
                 cM = wt
 
-                Nx3, dNx3 = self._iga3_1d(xi, left_bndry, right_bndry)
-                Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)
+                Nx3, dNx3 = self._iga3_1d(xi, ixe, nxe)
+                Nx2, dNx2 = self._iga2_1d(xi, ixe, nxe)
 
                 # w: (p3,p3)
                 Nw, Nw_xi, Nw_eta = self._tensor_product_basis(xi, eta, (Nx3, dNx3), (Ny3, dNy3))
@@ -438,7 +431,7 @@ class MixedDeRhamIGACylinderElement:
             w_eta = 0.5 * w_eta_raw
             eta = 0.5 * (_eta + 1.0)
 
-            Ny3, dNy3 = self._iga3_1d(eta, bot_bndry, top_bndry)
+            Ny3, dNy3 = self._iga3_1d(eta, iye, nye)
             Ny1, dNy1 = self._p1_1d(eta)
 
             for _xi, w_xi_raw in zip(pts, wts):
@@ -447,7 +440,7 @@ class MixedDeRhamIGACylinderElement:
 
                 wt = (w_xi * w_eta) * Jdet
 
-                Nx3, dNx3 = self._iga3_1d(xi, left_bndry, right_bndry)
+                Nx3, dNx3 = self._iga3_1d(xi, ixe, nxe)
 
                 # Nw2: (p3,p1) -> len 8
                 Nw2, _, _ = self._tensor_product_basis(xi, eta, (Nx3, dNx3), (Ny1, dNy1))
@@ -485,10 +478,8 @@ class MixedDeRhamIGACylinderElement:
         y0: float,
         dx: float,
         dy: float,
-        left_bndry: bool,
-        right_bndry: bool,
-        bot_bndry: bool,
-        top_bndry: bool,
+        ixe:int, nxe:int,
+        iye:int, nye:int,
     ):
         """
         Consistent load vector for q(x,y) acting on w only (and optional axial_factor on u):
@@ -500,7 +491,7 @@ class MixedDeRhamIGACylinderElement:
           fw(16), fw2(8), fu(12), fv(12), ftx(12), fty(12)
         """
         # pts, wts = third_order_quadrature()
-        pts, wts = second_order_quadrature()  # stub
+        pts, wts = third_order_quadrature()
 
         fw  = np.zeros(16)
         fw2 = np.zeros(8)    # typically zero (no direct load on w2)
@@ -515,7 +506,7 @@ class MixedDeRhamIGACylinderElement:
             w_eta = 0.5 * w_eta_raw
             eta = 0.5 * (_eta + 1.0)
 
-            Ny3, dNy3 = self._iga3_1d(eta, bot_bndry, top_bndry)  # p3
+            Ny3, dNy3 = self._iga3_1d(eta, iye, nye)  # p3
             # For u/thy (p2,p3) -> Ny3 in y, Nx2 in x
             # For v/thx (p3,p2) -> Ny2 in y, Nx3 in x
             # For w2 (p3,p1) -> Ny1 in y, Nx3 in x (but no load)
@@ -526,8 +517,8 @@ class MixedDeRhamIGACylinderElement:
 
                 wt = (w_xi * w_eta) * Jdet
 
-                Nx3, dNx3 = self._iga3_1d(xi, left_bndry, right_bndry)  # p3
-                Nx2, dNx2 = self._iga2_1d(xi, left_bndry, right_bndry)  # p2
+                Nx3, dNx3 = self._iga3_1d(xi, ixe, nxe)  # p3
+                Nx2, dNx2 = self._iga2_1d(xi, ixe, nxe)  # p2
 
                 # w basis: (p3,p3) -> 16
                 Nw, _, _ = self._tensor_product_basis(xi, eta, (Nx3, dNx3), (Ny3, dNy3))
@@ -548,27 +539,6 @@ class MixedDeRhamIGACylinderElement:
     # -------------------------------------------------------------------------
     # Multigrid transfers (dyadic refinement) for [w, w2, u, v, thx, thy]
     # -------------------------------------------------------------------------
-
-    def _build_R_p3(self, nxe_c: int) -> np.ndarray:
-        """
-        1D restriction for p=3 IGA line.
-
-        Coarse dofs: n_c = nxe_c + 3
-        Fine   dofs: n_f = 2*nxe_c + 3
-
-        YOU fill this in later (could be full-weighting / variational / knot-insertion).
-        """
-        raise NotImplementedError("Fill _build_R_p3(nxe_c) for p=3 IGA restriction.")
-
-    def _build_P_p3(self, nxe_c: int) -> np.ndarray:
-        """
-        1D prolongation for p=3 IGA line (dyadic refinement).
-        Often you can do P = R^T if you design R as mass-lumped/full-weighting,
-        or you can build exact knot-insertion prolongation.
-
-        YOU fill this in later.
-        """
-        raise NotImplementedError("Fill _build_P_p3(nxe_c) for p=3 IGA prolongation.")
 
     @staticmethod
     def _kron2(Ry: np.ndarray, Rx: np.ndarray) -> np.ndarray:
@@ -669,6 +639,71 @@ class MixedDeRhamIGACylinderElement:
     # -------------------------------------------------------------------------
     # Multigrid transfers (dyadic refinement) for [w, u, v, thx, thy]
     # -------------------------------------------------------------------------
+    def _build_R_p3(self, nxe_c: int) -> np.ndarray:
+        """
+        1D restriction for p=3 IGA line.
+
+        Coarse dofs: n_c = nxe_c + 3
+        Fine   dofs: n_f = 2*nxe_c + 3
+
+        YOU fill this in later (could be full-weighting / variational / knot-insertion).
+        """
+
+        n_w_c = nxe_c + 2
+        nxe_f = 2 * nxe_c
+        n_w_f = nxe_f + 2
+
+        R = np.zeros((n_w_c, n_w_f))
+
+        for ielem in range(nxe_c):
+
+            # choose local restriction based on coarse element index
+            if ielem == 0:
+                R_loc = np.array([
+                    [1.0   , 0.5   , 0.0   , 0.0   , 0.0],
+                    [0.0   , 0.5   , 0.75  , 0.1875, 0.0],
+                    [0.0   , 0.0   , 0.25  , 0.6875, 0.5],
+                    [0.0   , 0.0   , 0.0   , 0.125 , 0.5]
+                ])
+
+            elif ielem == 1:
+                R_loc = np.array([
+                    [0.75  , 0.1875, 0.0   , 0.0   , 0.0],
+                    [0.25  , 0.6875, 0.5   , 0.125 , 0.0],
+                    [0.0   , 0.125 , 0.5   , 0.75  , 0.5],
+                    [0.0   , 0.0   , 0.0   , 0.125 , 0.5]
+                ])
+
+            elif ielem == nxe_c - 2:  # second to last
+                R_loc = np.array([
+                    [0.5   , 0.125 , 0.0   , 0.0   , 0.0],
+                    [0.5   , 0.75  , 0.5   , 0.125 , 0.0],
+                    [0.0   , 0.125 , 0.5   , 0.6875, 0.25],
+                    [0.0   , 0.0   , 0.0   , 0.1875, 0.75]
+                ])
+
+            elif ielem == nxe_c - 1:  # last element
+                R_loc = np.array([
+                    [0.5   , 0.125 , 0.0   , 0.0   , 0.0],
+                    [0.5   , 0.6875, 0.25  , 0.0   , 0.0],
+                    [0.0   , 0.1875, 0.75  , 0.5   , 0.0],
+                    [0.0   , 0.0   , 0.0   , 0.5   , 1.0]
+                ])
+
+            else:  # interior
+                R_loc = np.array([
+                    [0.5   , 0.125 , 0.0   , 0.0   , 0.0],
+                    [0.5   , 0.75  , 0.5   , 0.125 , 0.0],
+                    [0.0   , 0.125 , 0.5   , 0.75  , 0.5],
+                    [0.0   , 0.0   , 0.0   , 0.125 , 0.5]
+                ])
+
+            # add in coarse elem restriction
+            R[ielem:(ielem+4), 2*ielem:(2*ielem+5)] += R_loc
+
+        R /= np.sum(R, axis=0) # normalize if prolongated, results in right values usually
+        return R
+
     def _build_R_p2(self, nxe_c: int) -> np.ndarray:
         """
         Your quadratic (p=2) restriction on a 1D line with n = nxe + 2 dofs.
