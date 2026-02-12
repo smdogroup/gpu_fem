@@ -23,8 +23,10 @@ parser.add_argument("--nxe", type=int, default=16, help="number of elements") # 
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
 parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
 parser.add_argument("--thick", type=float, default=1e-3, help="shell thickness")
-parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
+# parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
+parser.add_argument("--curvature", type=float, default=1.0, help="shell curvature (lower gets flatter)")
 parser.add_argument("--length", type=float, default=1.0, help="cylinder length")
+parser.add_argument("--width", type=float, default=1.0, help="cylinder width (hoop length)")
 parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
 # parser.add_argument("--solve", type=str, default='direct', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
@@ -37,10 +39,15 @@ parser.add_argument("--verify", action=argparse.BooleanOptionalAction, default=F
 args = parser.parse_args()
 
 # t/R leads to potential membrane locking
-R = args.radius
+R = 1.0 / args.curvature
+# s = args.width
+# theta = s / R # s = R * theta, rotation
+
+print(f"{R=}")
+
 L = args.length
-# clamped = True
-clamped = False
+clamped = True
+# clamped = False
 
 axial_factor = 0.0
 # axial_factor = 0.3
@@ -70,7 +77,8 @@ assembler = ASSEMBLER(
     E=70e9, nu=0.3, thick=args.thick,
     length=L,
     # hoop_length=np.pi, # half-cylinder
-    hoop_length=np.pi*0.5*R, # quarter-cylinder
+    # hoop_length=np.pi*0.5*R, # quarter-cylinder
+    hoop_length=args.width,
     radius=R,
     load_fcn = lambda x,s : 1.0,
     clamped=clamped,

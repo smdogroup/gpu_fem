@@ -864,9 +864,9 @@ class DeRhamIGACylinderAssembler:
 
         # ---- build (x, theta) grid matching that field ----
         x = np.linspace(0.0, self.Lx, nx)
-        th = np.linspace(-self.Ly, 0.0, ny)
-        X, TH = np.meshgrid(x, th, indexing="xy")
-        Phi = TH / self.radius
+        s = np.linspace(-self.Ly, 0.0, ny)
+        X, S = np.meshgrid(x, s, indexing="xy")
+        Phi = S / self.radius
 
         # keep your flip
         X = 1.0 - X
