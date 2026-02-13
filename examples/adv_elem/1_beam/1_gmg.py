@@ -20,9 +20,14 @@ from iga_assembler2 import IGABeamAssemblerV2
 from elem import DeRhamIsogeometricElement
 from diga_assembler import DeRhamIGABeamAssembler
 
+# DeRham type interpolation
+from elem import TimoshenkoElement_OptProlong
+
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--elem", type=str, default='drig', help="--beam, options: hyb, ts, ts-nd")
+parser.add_argument("--lam", type=float, default=1e-2, help="lagrange multiplier for weak-penalty of locking-awareness on prolongation")
+
 parser.add_argument("--nxe", type=int, default=128, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=16, help="min # elems multigrid")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
@@ -64,6 +69,15 @@ elif args.elem == 'drig':
     # derham isogeometric element, special vertex-edge style IGA 2nd order basis that is auto locking-free!
     ELEMENT = DeRhamIsogeometricElement()
     is_iga = True
+elif args.elem == 'tsrp':
+    # reduced integrated and with locking-aware prolongation stencil
+    ELEMENT = TimoshenkoElement_OptProlong(
+        reduced_integrated=True, 
+        locking_aware_prolong=True,
+        # locking_aware_prolong=False,
+        lam=args.lam
+        # lam=1e-3
+    )
 
 # ================================
 # make beam assembler

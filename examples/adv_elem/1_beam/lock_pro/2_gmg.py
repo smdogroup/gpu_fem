@@ -26,8 +26,8 @@ import argparse
 parser = argparse.ArgumentParser()
 
 # important inputs locking-aware prolongation: do tsr vs tspr and change lam for locking-aware
-parser.add_argument("--elem", type=str, default='tspr', help="--beam, options: hyb, ts, ts-nd")
-parser.add_argument("--lam", type=float, default=0.01, help="lagrange multiplier for weak-penalty of locking-awareness on prolongation")
+parser.add_argument("--elem", type=str, default='tsrp', help="--beam, options: hyb, ts, ts-nd")
+parser.add_argument("--lam", type=float, default=1e-2, help="lagrange multiplier for weak-penalty of locking-awareness on prolongation")
 
 # parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
 

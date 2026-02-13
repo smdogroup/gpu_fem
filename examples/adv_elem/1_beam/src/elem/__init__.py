@@ -12,3 +12,4 @@ from .ms_elem import MixedShearIsogeometricElement
 
 # special vertex-edge style DeRham iga element
 from .derham import DeRhamIsogeometricElement
+from .tsp_elem import TimoshenkoElement_OptProlong

@@ -20,6 +20,8 @@ from iga_assembler2 import IGABeamAssemblerV2
 from elem import DeRhamIsogeometricElement
 from diga_assembler import DeRhamIGABeamAssembler
 
+from elem import TimoshenkoElement_OptProlong
+
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--nxe", type=int, default=128, help="number of elements")
@@ -35,7 +37,7 @@ args = parser.parse_args()
 
 SR_vec = [1.0, 3.0, 10.0, 30.0, 50.0, 1e2, 300.0, 500.0, 1e3]
 # beam_types = ['eb', 'tsr', 'hhr', 'hhd', 'higd']
-beam_types = ['eb', 'tsr', 'aig', 'hhr', 'hhd', 'higd']
+beam_types = ['eb', 'tsr', 'aig', 'hhr', 'hhd', 'higd', 'tsrp']
 if args.smoother == 'asw': # only has smoother for asw
     beam_types += ['drig']
 runtimes = {key:[] for key in beam_types}
@@ -65,6 +67,14 @@ for SR in SR_vec:
             # derham isogeometric element, special vertex-edge style IGA 2nd order basis that is auto locking-free!
             ELEMENT = DeRhamIsogeometricElement()
             is_iga = True
+        elif elem == 'tsrp':
+            # reduced integrated and with locking-aware prolongation stencil
+            ELEMENT = TimoshenkoElement_OptProlong(
+                reduced_integrated=True, 
+                locking_aware_prolong=True,
+                # locking_aware_prolong=False,
+                lam=1e-3
+            )
 
         # ================================
         # make beam assembler
@@ -157,7 +167,7 @@ plt.style.use(niceplots.get_style())
 fig, ax = plt.subplots()
 
 # colors = ["#d95a72", "#f3d27d", "#3cc7a1", "#3b90b3"]
-colors = ["#d95a72", "#eb9a79", "#f3d27d", "#3cc7a1", "#3b90b3", "#1a4c60", "k"]
+colors = ["#d95a72", "#eb9a79", "#f3d27d", "#3cc7a1", "#3b90b3", "#1a4c60", 'tab:gray', "k"]
 thick_vec = 1.0 / np.array(SR_vec)
 
 for ibeam, beam in enumerate(beam_types):

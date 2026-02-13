@@ -1,8 +1,7 @@
 import numpy as np
 import sys
-sys.path.append("../src/elem/")
-from basis import second_order_quadrature, lagrange, lagrange_grad, zero_order_quadrature
-from basis import interp_lagrange, interp_lagrange_transpose
+from .basis import second_order_quadrature, lagrange, lagrange_grad, zero_order_quadrature
+from .basis import interp_lagrange, interp_lagrange_transpose
 import scipy.sparse as sp
 
 class TimoshenkoElement_OptProlong:
