@@ -649,9 +649,9 @@ class MixedDeRhamIGACylinderElement:
         YOU fill this in later (could be full-weighting / variational / knot-insertion).
         """
 
-        n_w_c = nxe_c + 2
+        n_w_c = nxe_c + 3
         nxe_f = 2 * nxe_c
-        n_w_f = nxe_f + 2
+        n_w_f = nxe_f + 3
 
         R = np.zeros((n_w_c, n_w_f))
 
