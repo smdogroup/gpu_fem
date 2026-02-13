@@ -200,7 +200,7 @@ elif args.solve == 'kmg':
     vmg.n_cycles = 2
     vmg.print = False
 
-    vmg2 = VMG(grids, args.nsmooth, 2)
+    vmg2 = VMG(grids, args.nsmooth, 2, smoothers=smoothers, line_search = args.elem == 'drig')
     
     # assembler.u, nsteps = right_pcg2(
     #     A=assembler.kmat, b=assembler.force,
