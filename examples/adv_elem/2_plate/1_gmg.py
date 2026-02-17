@@ -10,11 +10,10 @@ from dkt_assembler import DKTPlateAssembler
 from std_assembler import StandardPlateAssembler
 from elem import ReissnerMindlinPlateElement_OptProlong, MITCPlateElement_OptProlong
 
-from asw_derham import TwoDimAddSchwarzDeRhamVertexEdges
-from color_asw import TwodimAddSchwarzColored22
-
-from color_asw2 import TwodimAddSchwarzColored22_BC
-
+from smooth import TwoDimAddSchwarzDeRhamVertexEdges
+# from smooth import TwodimAddSchwarzColored22_BC, TwodimAddSchwarzColored22
+from smooth import TwodimSVDAddSchwarz
+from smooth import TwodimSupportAddSchwarz
 
 sys.path.append("../1_beam/src/")
 from multigrid2 import vcycle_solve, VMG
@@ -25,15 +24,15 @@ from asw import TwodimAddSchwarz
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--elem", type=str, default='drig', help="--elem, options: mitcp is another good one")
+parser.add_argument("--elem", type=str, default='mitcp', help="--elem, options: mitcp is another good one")
 parser.add_argument("--nxe", type=int, default=32, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
-parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
+parser.add_argument("--coupled", type=int, default=3, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
-parser.add_argument("--nsmooth", type=int, default=4, help="number of smoothing steps")
+parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--omega", type=float, default=1.0, help="omega smoother coeff (sometimes needs to be lower)")
-parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
+parser.add_argument("--smoother", type=str, default='supp_asw', help="--smooth : [gs, asw, supp_asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="run debug codes")
 parser.add_argument("--verify", action=argparse.BooleanOptionalAction, default=False, help="verify defln with simple load")
@@ -185,20 +184,24 @@ if 'mg' in args.solve:
             smoother = BlockGaussSeidel.from_assembler(
                 grid, omega=args.omega, iters=nsmooth
             )
-        elif args.smoother == 'asw':
+        elif 'asw' in args.smoother:
             if args.elem in ['drig', 'drigr']:
                 omega = args.omega * 0.7 # need extra mult for them (default best values)
+                coupled = args.coupled
+                if coupled > 2:
+                    print(f"{args.elem=} and {args.coupled=} dropped to 2")
+                    coupled = 2
             else:
                 omega = args.omega
 
             smoother = None
-            if args.coupled == 1:
+            if coupled == 1:
                 omega = omega / 2.0 # because some 2x smoothing on thx, thy
                 patch_type = "vertex_edges"
-            elif args.coupled == 2:
+            elif coupled == 2:
                 omega = omega / 4.0 # because 2x smoothing than coupled == 1 schwarz (so ~4x smoothing on thx, thy)
                 patch_type = "wblock_vertex_edges"
-            elif args.coupled == 3:
+            elif coupled == 3:
                 assert not (args.elem in ['drig', 'drigr'])
                 omega = omega / 8.0
 
@@ -220,11 +223,29 @@ if 'mg' in args.solve:
             #     smoother = TwodimAddSchwarzColored22_BC.from_assembler(
             #         grid, omega=omega, iters=nsmooth,
             #     )
+
+            elif args.coupled == 3 and args.smoother == 'supp_asw':
+                smoother = TwodimSupportAddSchwarz.from_assembler(
+                    grid, omega=omega, iters=nsmooth, #, coupled_size=args.coupled
+                )
                 
             else:
-                smoother = TwodimAddSchwarz.from_assembler(
-                    grid, omega=omega, iters=nsmooth, coupled_size=args.coupled
+                # SMOOTHER_CLASS = TwodimSupportAddSchwarz # can't use this on 2x2 coupled or lower
+                SMOOTHER_CLASS = TwodimAddSchwarz
+
+                # old good LU smoother
+                smoother = SMOOTHER_CLASS.from_assembler(
+                    grid, omega=omega, iters=nsmooth, coupled_size=coupled
                 )
+
+                # NOT GOOD IDEA SVD smoother
+                # smoother = TwodimSVDAddSchwarz.from_assembler(
+                #     grid, omega=omega, iters=nsmooth, coupled_size=args.coupled,
+                #     # use_svd_threshold=False,
+                #     use_svd_threshold=True,
+                #     svd_alpha=1e-10
+                # )
+
         smoothers += [smoother]
         nxe = nxe // 2
         if double_smooth:
