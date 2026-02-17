@@ -329,7 +329,7 @@ class MITCPlateElement_OptProlong:
                     U[k, 1] = 0.0
                     U[k, 2] = 0.0
 
-    def _locking_aware_prolong_global_mitc(self, nxe_c: int, length: float = 1.0):
+    def _locking_aware_prolong_global_mitc_v1(self, nxe_c: int, length: float = 1.0):
         """
         Locking-aware prolongation where constraints are on MITC tying strains:
           [ gx(0,-b), gx(0,+b), gy(-a,0), gy(+a,0) ] = 0   per element
@@ -410,19 +410,85 @@ class MITCPlateElement_OptProlong:
             G_c[r0 + 2, loc_dof] += by_m
             G_c[r0 + 3, loc_dof] += by_p
 
-        # Elementwise injection for tying strains (4-per-elem)
+        # # Elementwise injection for tying strains (4-per-elem)
+        # P_gam = np.zeros((4 * nelems_f, 4 * nelems_c), dtype=float)
+        # for ielem_f in range(nelems_f):
+        #     ex = ielem_f % nxe_f
+        #     ey = ielem_f // nxe_f
+        #     ielem_c = (ex // 2) + (ey // 2) * nxe_c
+
+        #     rf = 4 * ielem_f
+        #     rc = 4 * ielem_c
+        #     P_gam[rf + 0, rc + 0] = 1.0
+        #     P_gam[rf + 1, rc + 1] = 1.0
+        #     P_gam[rf + 2, rc + 2] = 1.0
+        #     P_gam[rf + 3, rc + 3] = 1.0
+
+        # ---------------------------------------------------------
+        # P_gam: bilinear averaging (Q1) from coarse elem-grid to fine elem-grid
+        # Each strain component is interpolated independently.
+        #
+        # coarse elements live on a (nxe_c x nxe_c) grid with indices (Ex_c, Ey_c)
+        # fine elements live on a (nxe_f x nxe_f) grid with indices (ex, ey)
+        #
+        # Map fine element center to coarse-index space:
+        #   x_c = (ex + 0.5)/2 - 0.5   in [ -0.25, nxe_c - 0.75 ]
+        # so that fine elements in a 2x2 block around a coarse element "see" neighbors.
+        #
+        # You can tweak the "-0.5" shift if you want less cross-element blending.
+        # ---------------------------------------------------------
         P_gam = np.zeros((4 * nelems_f, 4 * nelems_c), dtype=float)
+
+        # NOTE : elemwise injection gives very similar thin shell perf
+
+        def clamp(v, lo, hi):
+            return max(lo, min(hi, v))
+
         for ielem_f in range(nelems_f):
             ex = ielem_f % nxe_f
             ey = ielem_f // nxe_f
-            ielem_c = (ex // 2) + (ey // 2) * nxe_c
+
+            # fine element "center" mapped into coarse-element index space
+            x = 0.5 * (ex + 0.5) - 0.5
+            y = 0.5 * (ey + 0.5) - 0.5
+
+            i0 = int(np.floor(x))
+            j0 = int(np.floor(y))
+            tx = x - i0
+            ty = y - j0
+
+            # clamp base so neighbors exist; edge blending degenerates gracefully
+            i0 = clamp(i0, 0, nxe_c - 1)
+            j0 = clamp(j0, 0, nxe_c - 1)
+
+            i1 = clamp(i0 + 1, 0, nxe_c - 1)
+            j1 = clamp(j0 + 1, 0, nxe_c - 1)
+
+            # if clamped to boundary, kill the corresponding fraction
+            if i1 == i0:
+                tx = 0.0
+            if j1 == j0:
+                ty = 0.0
+
+            w00 = (1.0 - tx) * (1.0 - ty)
+            w10 = (tx)       * (1.0 - ty)
+            w01 = (1.0 - tx) * (ty)
+            w11 = (tx)       * (ty)
+
+            # coarse element ids
+            e00 = i0 + j0 * nxe_c
+            e10 = i1 + j0 * nxe_c
+            e01 = i0 + j1 * nxe_c
+            e11 = i1 + j1 * nxe_c
 
             rf = 4 * ielem_f
-            rc = 4 * ielem_c
-            P_gam[rf + 0, rc + 0] = 1.0
-            P_gam[rf + 1, rc + 1] = 1.0
-            P_gam[rf + 2, rc + 2] = 1.0
-            P_gam[rf + 3, rc + 3] = 1.0
+
+            # for each tying-strain component, interpolate from coarse neighbors
+            for comp in range(4):
+                P_gam[rf + comp, 4 * e00 + comp] += w00
+                P_gam[rf + comp, 4 * e10 + comp] += w10
+                P_gam[rf + comp, 4 * e01 + comp] += w01
+                P_gam[rf + comp, 4 * e11 + comp] += w11
 
         RHS = P_gam @ G_c  # (4*nelems_f, 3*nnodes_c)
 
@@ -489,6 +555,253 @@ class MITCPlateElement_OptProlong:
 
         self._lock_P_cache[nxe_c] = P.copy()
         return P
+    
+    def _locking_aware_prolong_global_mitc_v2(self, nxe_c: int, length: float = 1.0):
+        """
+        Locking-aware prolongation for MITC tying strains with:
+        1) blended P_gam (injection + bilinear averaging)
+        2) eliminate fine Dirichlet rows from the unknowns (hard BCs, no Esel)
+        3) row-scaled constraint equations (conditioning)
+        4) lam scaled to ||A^T A|| + tiny nugget, and explicit symmetrization
+        5) final hard BC projection on P
+        """
+        if nxe_c in self._lock_P_cache:
+            return self._lock_P_cache[nxe_c]
+
+        import numpy as np
+        import scipy.sparse as sp
+
+        # --------------------
+        # sizes
+        # --------------------
+        nxe_f = 2 * nxe_c
+
+        nx_f = nxe_f + 1
+        nnodes_f = nx_f**2
+        nelems_f = nxe_f**2
+        N_f = 3 * nnodes_f
+
+        nx_c = nxe_c + 1
+        nnodes_c = nx_c**2
+        nelems_c = nxe_c**2
+        N_c = 3 * nnodes_c
+
+        # element reference coords (axis-aligned mapping as in your current code)
+        dx_f = length / nxe_f
+        x_f = dx_f * np.array([0.0, 1.0, 1.0, 0.0])
+        y_f = dx_f * np.array([0.0, 0.0, 1.0, 1.0])
+
+        dx_c = length / nxe_c
+        x_c = dx_c * np.array([0.0, 1.0, 1.0, 0.0])
+        y_c = dx_c * np.array([0.0, 0.0, 1.0, 1.0])
+
+        # --------------------
+        # Build tying-strain operators G_f, G_c (dense)
+        # rows per element: [gx(0,-b), gx(0,+b), gy(-a,0), gy(+a,0)]
+        # --------------------
+        G_f = np.zeros((4 * nelems_f, N_f), dtype=float)
+        for ielem_f in range(nelems_f):
+            ex = ielem_f % nxe_f
+            ey = ielem_f // nxe_f
+            loc_nodes = np.array([
+                ex + nx_f * ey,
+                (ex + 1) + nx_f * ey,
+                (ex + 1) + nx_f * (ey + 1),
+                ex + nx_f * (ey + 1),
+            ], dtype=int)
+            loc_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
+
+            _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x_f, y_f)
+            _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_f, y_f)
+            _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_f, y_f)
+            _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_f, y_f)
+
+            r0 = 4 * ielem_f
+            G_f[r0 + 0, loc_dof] += bx_m
+            G_f[r0 + 1, loc_dof] += bx_p
+            G_f[r0 + 2, loc_dof] += by_m
+            G_f[r0 + 3, loc_dof] += by_p
+
+        G_c = np.zeros((4 * nelems_c, N_c), dtype=float)
+        for ielem_c in range(nelems_c):
+            ex = ielem_c % nxe_c
+            ey = ielem_c // nxe_c
+            loc_nodes = np.array([
+                ex + nx_c * ey,
+                (ex + 1) + nx_c * ey,
+                (ex + 1) + nx_c * (ey + 1),
+                ex + nx_c * (ey + 1),
+            ], dtype=int)
+            loc_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
+
+            _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x_c, y_c)
+            _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_c, y_c)
+            _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_c, y_c)
+            _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_c, y_c)
+
+            r0 = 4 * ielem_c
+            G_c[r0 + 0, loc_dof] += bx_m
+            G_c[r0 + 1, loc_dof] += bx_p
+            G_c[r0 + 2, loc_dof] += by_m
+            G_c[r0 + 3, loc_dof] += by_p
+
+        # --------------------
+        # P_gam: blend injection + bilinear averaging
+        # --------------------
+        def clamp(v, lo, hi):
+            return max(lo, min(hi, v))
+
+        # injection
+        P_inj = np.zeros((4 * nelems_f, 4 * nelems_c), dtype=float)
+        for ielem_f in range(nelems_f):
+            ex = ielem_f % nxe_f
+            ey = ielem_f // nxe_f
+            ielem_c = (ex // 2) + (ey // 2) * nxe_c
+            rf = 4 * ielem_f
+            rc = 4 * ielem_c
+            for comp in range(4):
+                P_inj[rf + comp, rc + comp] = 1.0
+
+        # bilinear averaging on coarse elem-grid
+        P_avg = np.zeros_like(P_inj)
+        for ielem_f in range(nelems_f):
+            ex = ielem_f % nxe_f
+            ey = ielem_f // nxe_f
+
+            # fine element center mapped into coarse-index space (same as your current)
+            x = 0.5 * (ex + 0.5) - 0.5
+            y = 0.5 * (ey + 0.5) - 0.5
+
+            i0 = int(np.floor(x))
+            j0 = int(np.floor(y))
+            tx = x - i0
+            ty = y - j0
+
+            i0 = clamp(i0, 0, nxe_c - 1)
+            j0 = clamp(j0, 0, nxe_c - 1)
+            i1 = clamp(i0 + 1, 0, nxe_c - 1)
+            j1 = clamp(j0 + 1, 0, nxe_c - 1)
+
+            if i1 == i0:
+                tx = 0.0
+            if j1 == j0:
+                ty = 0.0
+
+            w00 = (1.0 - tx) * (1.0 - ty)
+            w10 = (tx)       * (1.0 - ty)
+            w01 = (1.0 - tx) * (ty)
+            w11 = (tx)       * (ty)
+
+            e00 = i0 + j0 * nxe_c
+            e10 = i1 + j0 * nxe_c
+            e01 = i0 + j1 * nxe_c
+            e11 = i1 + j1 * nxe_c
+
+            rf = 4 * ielem_f
+            for comp in range(4):
+                P_avg[rf + comp, 4 * e00 + comp] += w00
+                P_avg[rf + comp, 4 * e10 + comp] += w10
+                P_avg[rf + comp, 4 * e01 + comp] += w01
+                P_avg[rf + comp, 4 * e11 + comp] += w11
+
+        # blend (more injection keeps locality; more avg reduces jumps)
+        alpha = 0.75  # try 0.6–0.9
+        P_gam = alpha * P_inj + (1.0 - alpha) * P_avg
+
+        RHS = P_gam @ G_c  # (4*nelems_f, 3*nnodes_c)
+
+        # --------------------
+        # Baseline nodal prolong + hard BC structure
+        # --------------------
+        P_0 = self._build_P2_uncoupled3(nxe_c).tocsr()
+        P_0 = self._apply_bcs_to_P(P_0, nxe_c).tocsr()
+
+        # which dofs are constrained at a boundary node
+        constrained_dofs = (0, 1, 2) if self.clamped else (0,)
+
+        # coarse fixed columns
+        fixed_cols_c = []
+        for inode in range(nnodes_c):
+            i = inode % nx_c
+            j = inode // nx_c
+            if (i == 0) or (i == nx_c - 1) or (j == 0) or (j == nx_c - 1):
+                base = 3 * inode
+                for a in constrained_dofs:
+                    fixed_cols_c.append(base + a)
+        fixed_cols_c = np.array(sorted(set(fixed_cols_c)), dtype=int)
+
+        all_cols_c = np.arange(3 * nnodes_c, dtype=int)
+        free_cols_c = np.setdiff1d(all_cols_c, fixed_cols_c, assume_unique=False)
+
+        # fine fixed rows (Dirichlet rows) — we REMOVE these from the unknowns
+        fixed_rows_f = []
+        for inode in range(nnodes_f):
+            i = inode % nx_f
+            j = inode // nx_f
+            if (i == 0) or (i == nx_f - 1) or (j == 0) or (j == nx_f - 1):
+                base = 3 * inode
+                for a in constrained_dofs:
+                    fixed_rows_f.append(base + a)
+        fixed_rows_f = np.array(sorted(set(fixed_rows_f)), dtype=int)
+
+        all_rows_f = np.arange(3 * nnodes_f, dtype=int)
+        free_rows_f = np.setdiff1d(all_rows_f, fixed_rows_f, assume_unique=False)
+
+        # --------------------
+        # Least-squares solve on FREE fine rows only
+        #   minimize ||G_f(:,free_rows) P - RHS||^2 + lam_eff ||P - P0||^2
+        # with row scaling + lam scaling + nugget
+        # --------------------
+        A = G_f[:, free_rows_f]          # (4*nelems_f, n_free_rows)
+        B = RHS[:, free_cols_c]          # (4*nelems_f, n_free_cols)
+
+        # Row scaling for conditioning
+        row_norm = np.linalg.norm(A, axis=1)
+        row_norm[row_norm == 0.0] = 1.0
+        W = 1.0 / row_norm
+        # clamp to avoid insane weights
+        W = np.clip(W, 1e-2, 1e2)
+        A = W[:, None] * A
+        B = W[:, None] * B
+
+        # Regularization target from baseline prolong
+        idx0 = np.ix_(free_rows_f, free_cols_c)
+        P0_free = P_0[idx0].toarray()
+
+        # Build normal equations with scaled lambda and tiny nugget
+        AtA = A.T @ A
+        AtB = A.T @ B
+
+        diag_mean = float(np.mean(np.diag(AtA))) if AtA.shape[0] > 0 else 1.0
+        lam0 = float(self.lam)
+        lam_eff = lam0 * diag_mean
+        nugget = 1e-12 * diag_mean
+
+        M = AtA + (lam_eff + nugget) * np.eye(AtA.shape[0])
+        M = 0.5 * (M + M.T)  # enforce symmetry numerically
+        rhs = AtB + lam_eff * P0_free
+
+        P_free = np.linalg.solve(M, rhs)  # (n_free_rows, n_free_cols)
+
+        # --------------------
+        # Assemble full P and hard-enforce BC structure again
+        # --------------------
+        P = P_0.toarray()  # already BC-projected baseline
+
+        # kill coarse boundary cols (consistency)
+        P[:, fixed_cols_c] = 0.0
+
+        # insert solved block on free rows/cols
+        P[np.ix_(free_rows_f, free_cols_c)] = P_free
+
+        # hard zero fine Dirichlet rows (no leakage)
+        P[fixed_rows_f, :] = 0.0
+
+        # final BC projection (belt + suspenders)
+        P = self._apply_bcs_to_P(sp.csr_matrix(P), nxe_c).toarray()
+
+        self._lock_P_cache[nxe_c] = P.copy()
+        return P
 
     def prolongate(self, coarse_u: np.ndarray, nxe_coarse: int):
         dpn = self.dof_per_node
@@ -501,7 +814,9 @@ class MITCPlateElement_OptProlong:
         Nf = nxf * nxf
 
         if self.prolong_mode == "locking-global":
-            P = self._locking_aware_prolong_global_mitc(nxe_coarse, length=1.0)
+            method = self._locking_aware_prolong_global_mitc_v1
+            # method = self._locking_aware_prolong_global_mitc_v2
+            P = method(nxe_coarse, length=1.0)
         elif self.prolong_mode == "standard":
             P = self._build_P2_uncoupled3(nxe_coarse)
             P = self._apply_bcs_to_P(P, nxe_coarse)
@@ -524,7 +839,9 @@ class MITCPlateElement_OptProlong:
         Nc = nxc * nxc
 
         if self.prolong_mode == "locking-global":
-            P = self._locking_aware_prolong_global_mitc(nxe_coarse, length=1.0)
+            method = self._locking_aware_prolong_global_mitc_v1
+            # method = self._locking_aware_prolong_global_mitc_v2
+            P = method(nxe_coarse, length=1.0)
         elif self.prolong_mode == "standard":
             P = self._build_P2_uncoupled3(nxe_coarse)
             P = self._apply_bcs_to_P(P, nxe_coarse)
