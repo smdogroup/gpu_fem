@@ -66,8 +66,11 @@ elif args.elem == 'tsrp':
     # reduced integrated and with locking-aware prolongation stencil
     ELEMENT = TimoshenkoElement_OptProlong(
         reduced_integrated=True, 
-        locking_aware_prolong=True,
-        # locking_aware_prolong=False,
+        # ["global-lock", "kmat", "none"]
+        # prolong_mode="global-locking", 
+        # prolong_mode="local-locking", 
+        # prolong_mode="global-kmat",
+        prolong_mode="none",
         lam=args.lam
     )
 elif args.elem == 'higd':
@@ -141,6 +144,9 @@ if 'mg' in args.solve:
             load_fcn=load_fcn,
         )
         grid._assemble_system()
+        if args.elem == 'tsrp':
+            ELEMENT._kmat_cache[nxe // 2] = grid.kmat.tocsr()
+
         grids += [grid]
         if args.smoother == 'gs':
             smoother = BlockGaussSeidel.from_assembler(
