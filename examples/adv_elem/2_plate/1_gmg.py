@@ -26,7 +26,7 @@ from asw import TwodimAddSchwarz
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--elem", type=str, default='drig', help="--elem, options: mitcp is another good one")
-parser.add_argument("--nxe", type=int, default=64, help="number of elements")
+parser.add_argument("--nxe", type=int, default=32, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
 parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
@@ -109,13 +109,13 @@ elif args.elem == 'mitcp':
 # clamped = True
 clamped = False # simply supported
 
-# load_fcn = lambda x,y : 1.0e2 # simple load
+load_fcn = lambda x,y : 1.0e2 # simple load
 
 # m, n = 2, 1
 # m, n = 2, 2
 
-m, n = 2, 3
-load_fcn = lambda x,y : np.sin(m * np.pi * x) * np.sin(n * np.pi * y)
+# m, n = 2, 3
+# load_fcn = lambda x,y : np.sin(m * np.pi * x) * np.sin(n * np.pi * y)
 
 # m, n = 3, 2
 # load_fcn = lambda x,y : np.sin(m * np.pi * x) * np.sin(n * np.pi * y)
