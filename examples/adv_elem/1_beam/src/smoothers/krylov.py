@@ -76,10 +76,10 @@ def right_pcg2(A, b, x0=None, rtol=1e-8, atol=1e-7, max_iter=1000, M=None):
         r -= alpha * w
         norm_r = np.linalg.norm(r)
 
-        if (k % 10 == 0) or norm_r < (atol + rtol * norm_r):
+        if (k % 10 == 0) or norm_r < (atol + rtol * norm_r0):
             print(f"PCG iter {k}: ||r|| = {norm_r:.3e}")
 
-        if norm_r < (atol + rtol * norm_r):
+        if norm_r < (atol + rtol * norm_r0):
             break
 
     print(f"PCG finished at iter {k}, ||r|| = {norm_r:.3e}")

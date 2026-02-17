@@ -272,7 +272,7 @@ elif args.solve == 'kmg':
 
         assembler, nsteps = right_pcg2(
             A=assembler.kmat, b=assembler.force,
-            M=pc, rtol=1e-6
+            M=pc, rtol=1e-6, atol=1e-12
         )
 
     total_vcyc = vmg2.total_vcycles
