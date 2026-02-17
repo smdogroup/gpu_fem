@@ -7,12 +7,17 @@ import scipy.sparse as sp
 
 class TimoshenkoElement_OptProlong:
     """fully integrated timoshenko beam element (experiences locking"""
-    def __init__(self, reduced_integrated:bool=False, locking_aware_prolong:bool=True, prolong_mode:str='energy', lam:float=1e-2):              
+    def __init__(
+        self, 
+        reduced_integrated:bool=False, 
+        prolong_mode:str='local-locking', 
+        lam:float=1e-2
+    ):
+
         self.dof_per_node = 2
         self.nodes_per_elem = 2
         self.reduced_integrated = reduced_integrated
         self.clamped = True
-        self.locking_aware_prolong = locking_aware_prolong
         self.prolong_mode = prolong_mode
         self.lam = lam
         self._P0_cache = {}

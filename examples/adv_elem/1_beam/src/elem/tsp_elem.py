@@ -239,12 +239,16 @@ class TimoshenkoElement_OptProlong:
 
         # build E correctly (two separate row constraints)
         B = P_gam @ G_c # full RHS matrix of DeRham system
-        E = np.zeros((2, 2*nx_f))
-        E[0, 0] = 1.0
-        E[1, 2*(nx_f-1)] = 1.0
+        # E = np.zeros((2, 2*nx_f))
+        # E[0, 0] = 1.0
+        # E[1, 2*(nx_f-1)] = 1.0
 
-        A = np.concatenate([G_f, E], axis=0)
-        B2 = np.concatenate([B, np.zeros((2, 2*nx_c))], axis=0)
+        # A = np.concatenate([G_f, E], axis=0)
+        # B2 = np.concatenate([B, np.zeros((2, 2*nx_c))], axis=0)
+
+        # no need for the BC constraint if only changing non-fixed nodes
+        A = G_f.copy()
+        B2 = B.copy()
 
         # lam = 0.1
         # lam = 1e-2
@@ -349,12 +353,16 @@ class TimoshenkoElement_OptProlong:
         # -----------------------------
         B = P_gam @ G_c  # (nxe_f, 2*nx_c)
 
-        E = np.zeros((2, 2 * nx_f))
-        E[0, 0] = 1.0
-        E[1, 2 * (nx_f - 1)] = 1.0
+        # E = np.zeros((2, 2 * nx_f))
+        # E[0, 0] = 1.0
+        # E[1, 2 * (nx_f - 1)] = 1.0
 
-        A = np.concatenate([G_f, E], axis=0)
-        B2 = np.concatenate([B, np.zeros((2, 2 * nx_c))], axis=0)
+        # A = np.concatenate([G_f, E], axis=0)
+        # B2 = np.concatenate([B, np.zeros((2, 2 * nx_c))], axis=0)
+
+        # no need for the BC constraint if only changing non-fixed nodes
+        A = G_f.copy()
+        B2 = B.copy()
 
         lam = float(self.lam)
 

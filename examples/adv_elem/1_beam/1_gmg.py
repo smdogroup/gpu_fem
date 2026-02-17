@@ -75,8 +75,8 @@ elif args.elem == 'tsrp':
         reduced_integrated=True, 
         # ["global-lock", "kmat", "none"]
         # prolong_mode="global-locking", 
-        # prolong_mode="local-locking", 
-        prolong_mode="global-kmat",
+        prolong_mode="local-locking", 
+        # prolong_mode="global-kmat",
         # prolong_mode="none",
         lam=args.lam
     )

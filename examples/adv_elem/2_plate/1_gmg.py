@@ -8,6 +8,7 @@ from elem import HierarchicIsogeometricDispElement9, DeRhamIsogeometricPlateElem
 from elem import DiscreteKirchoffLoveTrianglePlateElement, ReissnerMindlinPlateElement
 from dkt_assembler import DKTPlateAssembler
 from std_assembler import StandardPlateAssembler
+from elem import ReissnerMindlinPlateElement_OptProlong
 
 from asw_derham import TwoDimAddSchwarzDeRhamVertexEdges
 
@@ -67,6 +68,19 @@ elif args.elem == 'rm':
         print("need much more nsmooth like 4 for Reissner-Mindlin element")
 elif args.elem == 'rmr':
     ELEMENT = ReissnerMindlinPlateElement(reduced_integrated=True)
+    if args.nsmooth < 4:
+        print("need much more nsmooth like 4 for Reissner-Mindlin element")
+elif args.elem == 'rmrp':
+    ELEMENT = ReissnerMindlinPlateElement_OptProlong(
+        reduced_integrated=True,
+        prolong_mode='locking-global',
+        # prolong_mode='standard',
+        lam=1e-12,
+        # lam=1e-6,
+        # lam=1e-4,
+        # lam=1e-2,
+        # lam=1.0,
+    )
     if args.nsmooth < 4:
         print("need much more nsmooth like 4 for Reissner-Mindlin element")
 
@@ -191,6 +205,7 @@ elif args.solve == 'vmg':
                                     # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
                                     # line_search=False, # often need it turned off.. for best conv
                                     line_search = args.elem in ['drig', 'drigr'],
+                                    # line_search=True,
                                     debug=args.debug,
                                     # nvcycles=100,
                                     nvcycles=1000,

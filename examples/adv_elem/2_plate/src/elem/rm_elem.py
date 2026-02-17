@@ -147,7 +147,7 @@ class ReissnerMindlinPlateElement:
             yq = float(np.dot(N, y))
 
             q = float(mag(xq, yq))   # distributed transverse load
-            q *= 60.0 # not sure where this correction is coming from tbh
+            # q *= 60.0 # not sure where this correction is coming from tbh
 
             # consistent nodal load contribution: ∫ N^T q dA = Σ N_i q * wt * J
             fN = q * wt * J * N  # length 9
