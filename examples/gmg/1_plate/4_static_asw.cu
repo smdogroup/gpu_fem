@@ -200,18 +200,18 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
     int ndof = cycle_type == "K" ? kmg->grids[0].N : mg->grids[0].N;
     double total = startup_time.count() + solve_time.count();
     double mem_MB = is_kcycle ? kmg->get_memory_usage_mb() : mg->get_memory_usage_mb();
-    printf("cylinder GMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
+    printf("plate GMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
 
     if (is_kcycle) {
         // print some of the data of host residual
         int *d_perm = kmg->grids[0].d_perm;
         auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
-        printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/cylinder_mg.vtk");
+        printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/plate_mg.vtk");
     } else {
         // print some of the data of host residual
         int *d_perm = mg->grids[0].d_perm;
         auto h_soln = mg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
-        printToVTK<Assembler,HostVec<T>>(mg->grids[0].assembler, h_soln, "out/cylinder_mg.vtk");
+        printToVTK<Assembler,HostVec<T>>(mg->grids[0].assembler, h_soln, "out/plate_mg.vtk");
     }
 }
 
@@ -293,7 +293,7 @@ int main(int argc, char **argv) {
     // int n_vcycles = 50;
     double omega = 0.2; // smaller omega for ASW
 
-    int nsmooth = 2; // typically faster right now
+    int nsmooth = 4; // typically faster right now
     int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)
     // std::string cycle_type = "K"; // "V", "F", "W", "K"
     std::string cycle_type = "V"; // "V", "F", "W", "K"

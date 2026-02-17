@@ -8,9 +8,12 @@ from elem import HierarchicIsogeometricDispElement9, DeRhamIsogeometricPlateElem
 from elem import DiscreteKirchoffLoveTrianglePlateElement, ReissnerMindlinPlateElement
 from dkt_assembler import DKTPlateAssembler
 from std_assembler import StandardPlateAssembler
-from elem import ReissnerMindlinPlateElement_OptProlong
+from elem import ReissnerMindlinPlateElement_OptProlong, MITCPlateElement_OptProlong
 
 from asw_derham import TwoDimAddSchwarzDeRhamVertexEdges
+from color_asw import TwodimAddSchwarzColored22
+
+from color_asw2 import TwodimAddSchwarzColored22_BC
 
 
 sys.path.append("../1_beam/src/")
@@ -22,13 +25,13 @@ from asw import TwodimAddSchwarz
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--elem", type=str, default='drig', help="--elem, options: tbd")
+parser.add_argument("--elem", type=str, default='drig', help="--elem, options: mitcp is another good one")
 parser.add_argument("--nxe", type=int, default=32, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
 parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
-parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
-parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
+parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
+parser.add_argument("--nsmooth", type=int, default=4, help="number of smoothing steps")
 parser.add_argument("--omega", type=float, default=0.7, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
@@ -75,14 +78,29 @@ elif args.elem == 'rmrp':
         reduced_integrated=True,
         prolong_mode='locking-global',
         # prolong_mode='standard',
-        lam=1e-12,
-        # lam=1e-6,
+        # lam=1e-12,
+        lam=1e-6,
         # lam=1e-4,
         # lam=1e-2,
         # lam=1.0,
     )
-    if args.nsmooth < 4:
-        print("need much more nsmooth like 4 for Reissner-Mindlin element")
+
+elif args.elem == 'mitc':
+    # standard prolongation so regular MITC
+    ELEMENT = MITCPlateElement_OptProlong(
+        prolong_mode='standard',
+    )
+
+elif args.elem == 'mitcp':
+    ELEMENT = MITCPlateElement_OptProlong(
+        prolong_mode='locking-global',
+        # prolong_mode='standard',
+        # lam=1e-12,
+        lam=1e-6,
+        # lam=1e-4,
+        # lam=1e-2,
+        # lam=1.0,
+    )
 
 # ================================
 # make plate assembler
@@ -172,6 +190,9 @@ if 'mg' in args.solve:
             elif args.coupled == 2:
                 omega = args.omega / 4.0 # because 2x smoothing than coupled == 1 schwarz (so ~4x smoothing on thx, thy)
                 patch_type = "wblock_vertex_edges"
+            elif args.coupled == 3:
+                assert not (args.elem in ['drig', 'drigr'])
+                omega = args.omega / 8.0
 
             if args.elem in ['drig', 'drigr']:
                 print("using Additive schwarz DeRham smoother")
@@ -181,9 +202,20 @@ if 'mg' in args.solve:
                     # patch_type="vertex_edges", # one w vertex and nearby 4 edges (2 of thx and 2 of thy)
                     # patch_type="wblock_vertex_edges",
                 )
+            # elif args.coupled == 2:
+            #     print("doing colored asw 2x2")
+            #     # smoother = TwodimAddSchwarzColored22.from_assembler(
+            #     #     grid, omega=omega, iters=nsmooth, coupled_size=args.coupled,
+            #     #     nugget_rel=1e-12, # doesn't help the nugget
+            #     # )
+
+            #     smoother = TwodimAddSchwarzColored22_BC.from_assembler(
+            #         grid, omega=omega, iters=nsmooth,
+            #     )
+                
             else:
                 smoother = TwodimAddSchwarz.from_assembler(
-                    grid, omega=omega, iters=nsmooth, coupled_size=2
+                    grid, omega=omega, iters=nsmooth, coupled_size=args.coupled
                 )
         smoothers += [smoother]
         nxe = nxe // 2
@@ -204,7 +236,7 @@ elif args.solve == 'vmg':
                                     # line search sometimes hurts high cond # cases (high defects in prolong)
                                     # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
                                     # line_search=False, # often need it turned off.. for best conv
-                                    line_search = args.elem in ['drig', 'drigr'],
+                                    line_search = args.elem in ['drig', 'drigr', 'mitcp'],
                                     # line_search=True,
                                     debug=args.debug,
                                     # nvcycles=100,
@@ -218,16 +250,30 @@ elif args.solve == 'kmg':
         grids, nsmooth=args.nsmooth, 
         ncyc=1, # fewer total v-cycles often..
         # ncyc=2,
-        smoothers=smoothers, line_search=args.elem in ['drig', 'drigr']
+        smoothers=smoothers, 
+        line_search=args.elem in ['drig', 'drigr', 'mitcp']
+        # line_search=True,
     )
     pc = vmg2
     assembler._assemble_system()
 
-    assembler.u, nsteps = right_pgmres2(
-        A=assembler.kmat, b=assembler.force,
-        restart=100, M=pc, #M=vmg,
-        rtol=1e-6,
-    )
+    # pc = smoothers[0] # DEBUG
+
+    if args.elem in ['rm', 'rmr']:
+        # these elems have nonsym P and R (can fix) but for now use this
+        assembler.u, nsteps = right_pgmres2(
+            A=assembler.kmat, b=assembler.force,
+            restart=200, 
+            M=pc, #M=vmg,
+            rtol=1e-6,
+        )
+
+    else:
+
+        assembler, nsteps = right_pcg2(
+            A=assembler.kmat, b=assembler.force,
+            M=pc, rtol=1e-6
+        )
 
     total_vcyc = vmg2.total_vcycles
     print(f"{total_vcyc=}")
