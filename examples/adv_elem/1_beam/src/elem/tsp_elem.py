@@ -273,8 +273,6 @@ class TimoshenkoElement_OptProlong:
         P = np.zeros((2*nx_f, 2*nx_c))
         P[:, free_cols] = P_free
         return P
-
-
     
     def _locking_aware_prolong_local(self, P0: sp.csr_matrix, nxe_c: int, length: float,
                                     block_nodes: int = 1,

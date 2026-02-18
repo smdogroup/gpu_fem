@@ -27,10 +27,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--elem", type=str, default='mitcp', help="--elem, options: mitcp is another good one")
 parser.add_argument("--nxe", type=int, default=32, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
-parser.add_argument("--coupled", type=int, default=3, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
+parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
-parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
+parser.add_argument("--nsmooth", type=int, default=4, help="number of smoothing steps")
 parser.add_argument("--omega", type=float, default=1.0, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='supp_asw', help="--smooth : [gs, asw, supp_asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
@@ -45,6 +45,15 @@ args = parser.parse_args()
 # current smoother so cheap, similar cost to jacobi, not bad to just do 3 smoothing steps
 # with DeRham cohomology, same smoothing cost to low and high thick! Solves like Kirchoff at low thick
 # makes sure omega isn't too large otherwise perf can deteriorate, omega = 0.7 was best to me
+
+
+# SETTING #1
+# fastest K(2,2)-GMG conv: coupled = 3, nsmooth = 2, supp_asw smoother
+# but the 3x3 support ASW smoother probably won't be scalable on GPU (3x3 = 9 node and 81 block dense inverse bad, factor and triang not great either prob)
+# maybe if did ILU(0) for these subdomains.. but not sure
+
+# SETTING #2
+# good K(4,4)-GMG conv: coupled = 2, nsmooth = 4, regular asw smoother (2x2 elem-ASW is scalable on GPU and already written for wing case)
 
 
 """ verify each beam element and solver type against truth """
@@ -92,13 +101,15 @@ elif args.elem == 'mitc':
 
 elif args.elem == 'mitcp':
     ELEMENT = MITCPlateElement_OptProlong(
-        prolong_mode='locking-global',
+        # prolong_mode='locking-global',
+        prolong_mode='locking-local', # working reasonably..
         # prolong_mode='standard',
         # lam=1e-12,
         lam=1e-6,
         # lam=1e-4,
         # lam=1e-2,
         # lam=1.0,
+        n_lock_sweeps=10,
     )
 
 # ================================
@@ -193,6 +204,7 @@ if 'mg' in args.solve:
                     coupled = 2
             else:
                 omega = args.omega
+                coupled = args.coupled
 
             smoother = None
             if coupled == 1:
