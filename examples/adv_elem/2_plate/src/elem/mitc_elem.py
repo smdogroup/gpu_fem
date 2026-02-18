@@ -551,6 +551,19 @@ class MITCPlateElement_OptProlong:
         # direct solve
         P_free = np.linalg.solve(M, rhs)
 
+        # same some states to element class for DEBUGGING in locking sandbox 
+        # need to get it out of this class
+        self.G_f = G_f
+        self.G_c = G_c
+        self.P_gam = P_gam
+        self.P_0 = P_0
+        self.M = M
+        self.RHS = rhs
+        self.free_cols_c = free_cols_c
+        self.fixed_cols_c = fixed_cols_c
+        self.solve_rows_f = solve_rows_f
+        self.P_0_free = P0_free
+
         # # block-Jacobi smoothing (3x3 nodal) instead of direct solve
         # P_free = P0_free.copy()
         # omega = 0.8
@@ -1541,6 +1554,654 @@ class MITCPlateElement_OptProlong:
         self._lock_P_cache[nxe_c] = P.copy()
         return P
 
+    def _locking_aware_prolong_local_mitc_v2_jacobi(self,
+                                                nxe_c: int,
+                                                length: float = 1.0,
+                                                block_nodes: int = 1,
+                                                n_sweeps: int = 10,
+                                                omega: float = 1.5):
+        """
+        Local locking-aware prolongation (MITC tying strains) using BLOCK-JACOBI with
+        fixed sparsity + ONLY sparse mat-mat products in the iteration (GPU-friendly).
+
+        Solve approx on interior fine dofs only (boundary dofs held fixed):
+            (A^T A + lam I) X = A^T B + lam P0
+
+        Jacobi sweep (loop-free, SpMM-only):
+            RHS = sparse_control(ATB + lam*P0_free)              (sparse)
+            MX  = sparse_control(M @ X)                          (sparse SpMM)
+            RES = sparse_control(RHS - MX)                       (sparse axpy + mask)
+            X   = sparse_control(X + omega * (Dinv_op @ RES))    (SpMM + axpy + mask)
+
+        Notes:
+        - No Gauss–Seidel dependence (true Jacobi).
+        - No per-block loop in the SWEEPS.
+        - Fixed sparsity enforced via elementwise multiply with a CSR mask.
+        """
+
+        import numpy as np
+        import scipy.sparse as sp
+
+        if nxe_c in self._lock_P_cache:
+            return self._lock_P_cache[nxe_c]
+
+        if block_nodes not in (1, 2):
+            raise ValueError("block_nodes must be 1 or 2")
+
+        lam = float(self.lam)
+
+        # -----------------------------
+        # sizes
+        # -----------------------------
+        nxe_f = 2 * nxe_c
+
+        nx_f = nxe_f + 1
+        nnodes_f = nx_f**2
+        nelems_f = nxe_f**2
+        N_f = 3 * nnodes_f
+
+        nx_c = nxe_c + 1
+        nnodes_c = nx_c**2
+        nelems_c = nxe_c**2
+        N_c = 3 * nnodes_c
+
+        # -----------------------------
+        # baseline prolong (fine x coarse) + BCs
+        # -----------------------------
+        P0 = self._build_P2_uncoupled3(nxe_c)  # csr
+        P0 = self._apply_bcs_to_P(P0, nxe_c)   # csr
+        P0 = P0.toarray()                     # dense (N_f, N_c)
+
+        # -----------------------------
+        # coarse fixed columns
+        # -----------------------------
+        constrained_dofs = (0, 1, 2) if self.clamped else (0,)
+
+        fixed_cols_c = []
+        for inode in range(nnodes_c):
+            i = inode % nx_c
+            j = inode // nx_c
+            if (i == 0) or (i == nx_c - 1) or (j == 0) or (j == nx_c - 1):
+                base = 3 * inode
+                for a in constrained_dofs:
+                    fixed_cols_c.append(base + a)
+        fixed_cols_c = np.array(sorted(set(fixed_cols_c)), dtype=np.int32)
+
+        all_cols_c = np.arange(N_c, dtype=np.int32)
+        free_cols_c = np.setdiff1d(all_cols_c, fixed_cols_c, assume_unique=False)
+
+        # -----------------------------
+        # fine interior dofs as unknowns
+        # -----------------------------
+        interior_nodes = []
+        for j in range(1, nx_f - 1):
+            for i in range(1, nx_f - 1):
+                interior_nodes.append(i + nx_f * j)
+        interior_nodes = np.array(interior_nodes, dtype=np.int32)
+
+        unknown_dofs = np.empty(3 * interior_nodes.size, dtype=np.int32)
+        k = 0
+        for n in interior_nodes:
+            base = 3 * n
+            unknown_dofs[k:k+3] = (base, base + 1, base + 2)
+            k += 3
+
+        # -----------------------------
+        # element reference coords
+        # -----------------------------
+        dx_f = length / nxe_f
+        x_f = dx_f * np.array([0.0, 1.0, 1.0, 0.0])
+        y_f = dx_f * np.array([0.0, 0.0, 1.0, 1.0])
+
+        dx_c = length / nxe_c
+        x_c = dx_c * np.array([0.0, 1.0, 1.0, 0.0])
+        y_c = dx_c * np.array([0.0, 0.0, 1.0, 1.0])
+
+        # -----------------------------
+        # Build G_f and G_c as SPARSE (COO -> CSR)
+        # -----------------------------
+        def build_G(nxe, nx, x_loc, y_loc, N_total):
+            ne = nxe * nxe
+            rows = []
+            cols = []
+            data = []
+
+            for ey in range(nxe):
+                for ex in range(nxe):
+                    e = ex + ey * nxe
+
+                    loc_nodes = np.array([
+                        ex + nx * ey,
+                        (ex + 1) + nx * ey,
+                        (ex + 1) + nx * (ey + 1),
+                        ex + nx * (ey + 1),
+                    ], dtype=np.int32)
+                    loc_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)],
+                                    dtype=np.int32)
+
+                    _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x_loc, y_loc)
+                    _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_loc, y_loc)
+                    _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_loc, y_loc)
+                    _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_loc, y_loc)
+
+                    B = np.vstack([bx_m, bx_p, by_m, by_p])  # (4,12)
+
+                    r0 = 4 * e
+                    for rr in range(4):
+                        r = r0 + rr
+                        rows.extend([r] * 12)
+                        cols.extend(loc_dof.tolist())
+                        data.extend(B[rr, :].tolist())
+
+            return sp.coo_matrix((np.array(data), (np.array(rows), np.array(cols))),
+                                shape=(4 * ne, N_total)).tocsr()
+
+        G_f = build_G(nxe_f, nx_f, x_f, y_f, N_f)  # (4*nelems_f, N_f)
+        G_c = build_G(nxe_c, nx_c, x_c, y_c, N_c)  # (4*nelems_c, N_c)
+
+        # -----------------------------
+        # Build RHS_strain = P_gam @ G_c WITHOUT forming P_gam (assemble COO)
+        # -----------------------------
+        def clamp(v, lo, hi):
+            return max(lo, min(hi, v))
+
+        rhs_rows = []
+        rhs_cols = []
+        rhs_data = []
+        Gc_csr = G_c.tocsr()
+
+        for ey in range(nxe_f):
+            for ex in range(nxe_f):
+                ef = ex + ey * nxe_f
+
+                x = 0.5 * (ex + 0.5) - 0.5
+                y = 0.5 * (ey + 0.5) - 0.5
+
+                i0 = int(np.floor(x))
+                j0 = int(np.floor(y))
+                tx = x - i0
+                ty = y - j0
+
+                i0 = clamp(i0, 0, nxe_c - 1)
+                j0 = clamp(j0, 0, nxe_c - 1)
+                i1 = clamp(i0 + 1, 0, nxe_c - 1)
+                j1 = clamp(j0 + 1, 0, nxe_c - 1)
+
+                if i1 == i0: tx = 0.0
+                if j1 == j0: ty = 0.0
+
+                w00 = (1.0 - tx) * (1.0 - ty)
+                w10 = (tx)       * (1.0 - ty)
+                w01 = (1.0 - tx) * (ty)
+                w11 = (tx)       * (ty)
+
+                e00 = i0 + j0 * nxe_c
+                e10 = i1 + j0 * nxe_c
+                e01 = i0 + j1 * nxe_c
+                e11 = i1 + j1 * nxe_c
+
+                for comp in range(4):
+                    rf = 4 * ef + comp
+                    for ec, w in ((e00, w00), (e10, w10), (e01, w01), (e11, w11)):
+                        if w == 0.0:
+                            continue
+                        rc = 4 * ec + comp
+
+                        start = Gc_csr.indptr[rc]
+                        end   = Gc_csr.indptr[rc + 1]
+                        cols = Gc_csr.indices[start:end]
+                        vals = Gc_csr.data[start:end]
+
+                        rhs_rows.extend([rf] * cols.size)
+                        rhs_cols.extend(cols.tolist())
+                        rhs_data.extend((w * vals).tolist())
+
+        RHS_strain = sp.coo_matrix((np.array(rhs_data),
+                                    (np.array(rhs_rows), np.array(rhs_cols))),
+                                shape=(4 * nelems_f, N_c)).tocsr()
+
+        # -----------------------------
+        # Reduced system pieces: A, B (shifted by boundary contribution)
+        # -----------------------------
+        A = G_f[:, unknown_dofs].tocsr()
+
+        all_f = np.arange(N_f, dtype=np.int32)
+        is_unknown = np.zeros(N_f, dtype=bool)
+        is_unknown[unknown_dofs] = True
+        boundary_dofs = all_f[~is_unknown]
+
+        P_B = P0[np.ix_(boundary_dofs, free_cols_c)]   # dense
+        GB_PB = (G_f[:, boundary_dofs] @ P_B)
+        GB_PB = np.asarray(GB_PB)
+
+        B = RHS_strain[:, free_cols_c] - GB_PB
+        B = sp.csr_matrix(B)
+
+        # Baseline interior rows (dense)
+        P0_free_dense = P0[np.ix_(unknown_dofs, free_cols_c)].copy()
+
+        # -----------------------------
+        # Build normal matrix M and ATB (sparse)
+        # -----------------------------
+        n_unknown = unknown_dofs.size
+        I = sp.eye(n_unknown, format="csr")
+        M = (A.T @ A) + lam * I
+        M = M.tocsr()
+
+        ATB = (A.T @ B).tocsr()  # sparse (n_unknown x n_free)
+
+        # -----------------------------
+        # Fixed sparsity mask (CSR) from locking-driven pattern (optionally union P0 stencil)
+        # -----------------------------
+        S_lock = (M @ ATB).tocsr()
+        # S_lock = (M @ M @ ATB).tocsr()
+        mask = (S_lock != 0).astype(np.int8)
+
+        P0_pat = sp.csr_matrix(P0_free_dense != 0.0).astype(np.int8)
+        mask = (mask + P0_pat).tocsr()
+        mask.data[:] = 1  # boolean mask
+
+        # # -----------------------------
+        # # Build block-diagonal inverse operator Dinv_op ONCE (BSR)
+        # # -----------------------------
+        # dofs_per_node = 3
+        # block_size = dofs_per_node * block_nodes
+        # if (n_unknown % block_size) != 0:
+        #     raise ValueError("For loop-free BSR Jacobi, n_unknown must be divisible by block_size")
+
+        # n_blk = n_unknown // block_size
+
+        # Mb = M.tobsr(blocksize=(block_size, block_size)).tocsr().tobsr(blocksize=(block_size, block_size))
+
+        # diag_blocks = np.zeros((n_blk, block_size, block_size), dtype=float)
+
+        # # one-time gather (not in sweeps)
+        # for i in range(n_blk):
+        #     start, end = Mb.indptr[i], Mb.indptr[i + 1]
+        #     cols = Mb.indices[start:end]
+        #     data = Mb.data[start:end]
+        #     k = np.searchsorted(cols, i)
+        #     if k >= cols.size or cols[k] != i:
+        #         raise RuntimeError("Missing diagonal block in M (unexpected for SPD normal matrix).")
+        #     Db = data[k]
+        #     Db = 0.5 * (Db + Db.T)
+        #     diag_blocks[i, :, :] = np.linalg.inv(Db)
+
+        # Dinv_op = sp.bsr_matrix(
+        #     (diag_blocks, (np.arange(n_blk), np.arange(n_blk))),
+        #     shape=(n_unknown, n_unknown),
+        #     blocksize=(block_size, block_size),
+        # ).tocsr()
+
+        # -----------------------------
+        # Build block-diagonal inverse operator Dinv_op ONCE (BSR)  [FIXED]
+        # -----------------------------
+        dofs_per_node = 3
+        block_size = dofs_per_node * block_nodes
+        if (n_unknown % block_size) != 0:
+            raise ValueError("For loop-free BSR Jacobi, n_unknown must be divisible by block_size")
+
+        n_blk = n_unknown // block_size
+
+        Mb = M.tobsr(blocksize=(block_size, block_size)).tocsr().tobsr(blocksize=(block_size, block_size))
+
+        # diagonal blocks (n_blk, bs, bs)
+        diag_blocks = np.zeros((n_blk, block_size, block_size), dtype=M.dtype)
+
+        # one-time gather + invert
+        for i in range(n_blk):
+            start, end = Mb.indptr[i], Mb.indptr[i + 1]
+            cols = Mb.indices[start:end]
+            data = Mb.data[start:end]   # (nblocks_in_row, bs, bs)
+
+            k = np.searchsorted(cols, i)
+            if k >= cols.size or cols[k] != i:
+                raise RuntimeError("Missing diagonal block in M (unexpected for SPD normal matrix).")
+
+            Db = data[k]
+            Db = 0.5 * (Db + Db.T)
+            diag_blocks[i, :, :] = np.linalg.inv(Db)
+
+        # Build a *diagonal* BSR using (data, indices, indptr) form
+        Dinv_indptr  = np.arange(n_blk + 1, dtype=np.int32)   # one block per block-row
+        Dinv_indices = np.arange(n_blk,     dtype=np.int32)   # diagonal column index
+        Dinv_data    = diag_blocks                              # (nnz_blocks=n_blk, bs, bs)
+
+        Dinv_op = sp.bsr_matrix(
+            (Dinv_data, Dinv_indices, Dinv_indptr),
+            shape=(n_unknown, n_unknown),
+            blocksize=(block_size, block_size),
+        ).tocsr()
+
+
+        # -----------------------------
+        # Fixed sparsity control (CSR mask multiply)
+        # -----------------------------
+        mask = mask.tocsr()
+        def sparse_control(Xsp):
+            return Xsp.multiply(mask)
+
+        # RHS once (sparse)
+        P0_free_sp = sp.csr_matrix(P0_free_dense)
+        RHS = sparse_control((ATB + lam * P0_free_sp).tocsr())
+
+        # Init X as sparse, projected to mask
+        X = sparse_control(sp.csr_matrix(P0_free_dense))
+
+        # -----------------------------
+        # Loop-free per-sweep Jacobi: ONLY SpMM operations
+        # -----------------------------
+        for _ in range(n_sweeps):
+            MX  = sparse_control((M @ X).tocsr())                 # SpMM
+            RES = sparse_control((RHS - MX).tocsr())              # axpy + mask
+            X   = sparse_control((X + omega * (Dinv_op @ RES)).tocsr())  # SpMM + axpy + mask
+
+        # -----------------------------
+        # Assemble full P
+        # -----------------------------
+        P = P0.copy()
+        P[:, fixed_cols_c] = 0.0
+        P[np.ix_(unknown_dofs, free_cols_c)] = X.toarray()
+
+        self._lock_P_cache[nxe_c] = P.copy()
+        return P
+
+    def _locking_aware_prolong_local_mitc_v3_jacobi(
+            self,
+            nxe_c: int,
+            length: float = 1.0,
+            n_sweeps: int = 10,
+            omega: float = 0.5,
+            with_fillin: bool = False,
+            use_mask: bool = True,
+        ):
+        """
+        Locking-aware prolongation where constraints are on MITC tying strains:
+        [ gx(0,-b), gx(0,+b), gy(-a,0), gy(+a,0) ] = 0   per element
+        => 4 constraints per element.
+
+        Same construction as _locking_aware_prolong_global_mitc_v1, but solves
+        (A^T A + lam I) P = A^T B + lam P0
+        using SpMM Jacobi (3x3 block diagonal) with optional fixed sparsity (mask).
+
+        - with_fillin=True  : plain Jacobi (allows fill-in)
+        - with_fillin=False : apply mask every sweep (keeps fixed sparsity)
+        - use_mask=False    : equivalent to fill-in behavior (no masking)
+
+        Mask choice: EXACTLY like your sandbox -> based on pattern of (M @ RHS).
+        """
+
+        import numpy as np
+        import scipy.sparse as sp
+
+        # cache with options so you can compare variants
+        cache_key = ("local_mitc_v3_jacobi", int(nxe_c), float(length),
+                    int(n_sweeps), float(omega), bool(with_fillin), bool(use_mask))
+        if cache_key in self._lock_P_cache:
+            return self._lock_P_cache[cache_key]
+
+        # -----------------------------
+        # same as v1 up to forming M, rhs
+        # -----------------------------
+        nxe_f = 2 * nxe_c
+
+        nx_f = nxe_f + 1
+        nnodes_f = nx_f**2
+        nelems_f = nxe_f**2
+        N_f = 3 * nnodes_f
+
+        nx_c = nxe_c + 1
+        nnodes_c = nx_c**2
+        nelems_c = nxe_c**2
+        N_c = 3 * nnodes_c
+
+        dx_f = length / nxe_f
+        x_f = dx_f * np.array([0.0, 1.0, 1.0, 0.0])
+        y_f = dx_f * np.array([0.0, 0.0, 1.0, 1.0])
+
+        dx_c = length / nxe_c
+        x_c = dx_c * np.array([0.0, 1.0, 1.0, 0.0])
+        y_c = dx_c * np.array([0.0, 0.0, 1.0, 1.0])
+
+        G_f = np.zeros((4 * nelems_f, N_f), dtype=float)
+        for ielem_f in range(nelems_f):
+            ex = ielem_f % nxe_f
+            ey = ielem_f // nxe_f
+            loc_nodes = np.array([
+                ex + nx_f * ey,
+                (ex + 1) + nx_f * ey,
+                (ex + 1) + nx_f * (ey + 1),
+                ex + nx_f * (ey + 1),
+            ], dtype=int)
+            loc_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
+
+            _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x_f, y_f)
+            _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_f, y_f)
+            _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_f, y_f)
+            _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_f, y_f)
+
+            r0 = 4 * ielem_f
+            G_f[r0 + 0, loc_dof] += bx_m
+            G_f[r0 + 1, loc_dof] += bx_p
+            G_f[r0 + 2, loc_dof] += by_m
+            G_f[r0 + 3, loc_dof] += by_p
+
+        G_c = np.zeros((4 * nelems_c, N_c), dtype=float)
+        for ielem_c in range(nelems_c):
+            ex = ielem_c % nxe_c
+            ey = ielem_c // nxe_c
+            loc_nodes = np.array([
+                ex + nx_c * ey,
+                (ex + 1) + nx_c * ey,
+                (ex + 1) + nx_c * (ey + 1),
+                ex + nx_c * (ey + 1),
+            ], dtype=int)
+            loc_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
+
+            _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x_c, y_c)
+            _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_c, y_c)
+            _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_c, y_c)
+            _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_c, y_c)
+
+            r0 = 4 * ielem_c
+            G_c[r0 + 0, loc_dof] += bx_m
+            G_c[r0 + 1, loc_dof] += bx_p
+            G_c[r0 + 2, loc_dof] += by_m
+            G_c[r0 + 3, loc_dof] += by_p
+
+        # P_gam (dense) as in v1
+        P_gam = np.zeros((4 * nelems_f, 4 * nelems_c), dtype=float)
+
+        def clamp(v, lo, hi):
+            return max(lo, min(hi, v))
+
+        for ielem_f in range(nelems_f):
+            ex = ielem_f % nxe_f
+            ey = ielem_f // nxe_f
+
+            x = 0.5 * (ex + 0.5) - 0.5
+            y = 0.5 * (ey + 0.5) - 0.5
+
+            i0 = int(np.floor(x))
+            j0 = int(np.floor(y))
+            tx = x - i0
+            ty = y - j0
+
+            i0 = clamp(i0, 0, nxe_c - 1)
+            j0 = clamp(j0, 0, nxe_c - 1)
+            i1 = clamp(i0 + 1, 0, nxe_c - 1)
+            j1 = clamp(j0 + 1, 0, nxe_c - 1)
+
+            if i1 == i0: tx = 0.0
+            if j1 == j0: ty = 0.0
+
+            w00 = (1.0 - tx) * (1.0 - ty)
+            w10 = (tx)       * (1.0 - ty)
+            w01 = (1.0 - tx) * (ty)
+            w11 = (tx)       * (ty)
+
+            e00 = i0 + j0 * nxe_c
+            e10 = i1 + j0 * nxe_c
+            e01 = i0 + j1 * nxe_c
+            e11 = i1 + j1 * nxe_c
+
+            rf = 4 * ielem_f
+            for comp in range(4):
+                P_gam[rf + comp, 4 * e00 + comp] += w00
+                P_gam[rf + comp, 4 * e10 + comp] += w10
+                P_gam[rf + comp, 4 * e01 + comp] += w01
+                P_gam[rf + comp, 4 * e11 + comp] += w11
+
+        RHS = P_gam @ G_c  # dense (4*nelems_f, 3*nnodes_c)
+
+        # baseline P0 (csr)
+        P_0 = self._build_P2_uncoupled3(nxe_c)
+        P_0 = self._apply_bcs_to_P(P_0, nxe_c)
+        lam = float(self.lam)
+
+        constrained_dofs = (0, 1, 2) if self.clamped else (0,)
+
+        fixed_cols_c = []
+        for inode in range(nnodes_c):
+            i = inode % nx_c
+            j = inode // nx_c
+            if (i == 0) or (i == nx_c - 1) or (j == 0) or (j == nx_c - 1):
+                base = 3 * inode
+                for a in constrained_dofs:
+                    fixed_cols_c.append(base + a)
+        fixed_cols_c = np.array(sorted(set(fixed_cols_c)), dtype=int)
+        all_cols_c = np.arange(3 * nnodes_c, dtype=int)
+        free_cols_c = np.setdiff1d(all_cols_c, fixed_cols_c, assume_unique=False)
+
+        fixed_rows_f = []
+        for inode in range(nnodes_f):
+            i = inode % nx_f
+            j = inode // nx_f
+            if (i == 0) or (i == nx_f - 1) or (j == 0) or (j == nx_f - 1):
+                base = 3 * inode
+                for a in constrained_dofs:
+                    fixed_rows_f.append(base + a)
+        fixed_rows_f = np.array(sorted(set(fixed_rows_f)), dtype=int)
+
+        solve_rows_f = np.arange(3 * nnodes_f, dtype=int)
+
+        nE = fixed_rows_f.size
+        Esel = np.zeros((nE, solve_rows_f.size), dtype=float)
+        Esel[np.arange(nE), fixed_rows_f] = 1.0
+
+        A = G_f[:, solve_rows_f]
+        B = RHS[:, free_cols_c]
+
+        A_aug = np.vstack([A, Esel])
+        B_aug = np.vstack([B, np.zeros((nE, B.shape[1]))])
+
+        idx0 = np.ix_(solve_rows_f, free_cols_c)
+        P0_free = P_0[idx0].toarray()
+
+        M   = A_aug.T @ A_aug + lam * np.eye(solve_rows_f.size)
+        rhs = A_aug.T @ B_aug + lam * P0_free
+
+        # -----------------------------
+        # SpMM Jacobi solve (your sandbox logic, but inside method)
+        # -----------------------------
+        # keep these states for sandbox debugging
+        self.G_f = G_f
+        self.G_c = G_c
+        self.P_gam = P_gam
+        self.P_0 = P_0
+        self.M = M
+        self.RHS = rhs
+        self.free_cols_c = free_cols_c
+        self.fixed_cols_c = fixed_cols_c
+        self.solve_rows_f = solve_rows_f
+        self.P_0_free = P0_free
+
+        # Convert M to CSR once (SpMM-friendly)
+        LHS = sp.csr_matrix(M)
+
+        # RHS and initial guess as CSR too (so LHS @ X stays sparse)
+        RHS_csr = sp.csr_matrix(rhs)
+        X = sp.csr_matrix(P0_free)
+
+        # mask pattern EXACTLY from (M @ RHS) like your script
+        mask = None
+        if (not with_fillin) and use_mask:
+            S_lock = (LHS @ RHS_csr)         # sparse
+            # S_lock = (LHS @ LHS @ RHS_csr) # extra fillin not helpful
+            mask = (S_lock != 0).astype(np.int8)  # sparse 0/1 CSR
+
+        def sparse_control(Z):
+            if mask is None:
+                return Z
+            # force sparse then elementwise mask
+            if not sp.issparse(Z):
+                Z = sp.csr_matrix(Z)
+            return Z.multiply(mask)
+
+        # block diagonal inverse as sparse operator (3x3 nodal blocks)
+        block_size = 3
+        n_unknown = X.shape[0]
+        assert n_unknown % block_size == 0
+        n_blk = n_unknown // block_size
+
+        Mb = LHS.tobsr(blocksize=(block_size, block_size))
+
+        diag_blocks = np.zeros((n_blk, block_size, block_size), dtype=float)
+        for i in range(n_blk):
+            start, end = Mb.indptr[i], Mb.indptr[i + 1]
+            cols = Mb.indices[start:end]
+            data = Mb.data[start:end]   # (nblocks_in_row, bs, bs)
+
+            k = np.searchsorted(cols, i)
+            if k >= cols.size or cols[k] != i:
+                raise RuntimeError("Missing diagonal block in M (unexpected).")
+
+            Db = data[k]
+            Db = 0.5 * (Db + Db.T)
+            diag_blocks[i, :, :] = np.linalg.inv(Db)
+
+        Dinv_indptr  = np.arange(n_blk + 1, dtype=np.int32)
+        Dinv_indices = np.arange(n_blk,     dtype=np.int32)
+        Dinv_data    = diag_blocks
+
+        Dinv_op = sp.bsr_matrix(
+            (Dinv_data, Dinv_indices, Dinv_indptr),
+            shape=(n_unknown, n_unknown),
+            blocksize=(block_size, block_size),
+        ).tocsr()
+
+        # project initial guess
+        X = sparse_control(X)
+
+        # Jacobi sweeps: ONLY SpMM operations + axpy (+ mask when requested)
+        if with_fillin or (mask is None):
+            for _ in range(int(n_sweeps)):
+                MX  = LHS @ X
+                RES = RHS_csr - MX
+                X   = X + float(omega) * (Dinv_op @ RES)
+        else:
+            for _ in range(int(n_sweeps)):
+                MX  = sparse_control(LHS @ X)
+                RES = sparse_control(RHS_csr - MX)
+                X   = sparse_control(X + float(omega) * (Dinv_op @ RES))
+
+        P_free = X.toarray()  # back to dense for assembly like v1
+
+        # -----------------------------
+        # Assemble full P (dense)
+        # -----------------------------
+        P = P_0.toarray()
+        P[:, fixed_cols_c] = 0.0
+        P[np.ix_(solve_rows_f, free_cols_c)] = P_free
+
+        # looks like reasonable sparsity..
+        # import matplotlib.pyplot as plt
+        # plt.spy(P)
+        # plt.show()
+
+        self._lock_P_cache[cache_key] = P.copy()
+        return P
+
 
     def prolongate(self, coarse_u: np.ndarray, nxe_coarse: int):
         dpn = self.dof_per_node
@@ -1557,7 +2218,15 @@ class MITCPlateElement_OptProlong:
             # method = self._locking_aware_prolong_global_mitc_v2
             P = method(nxe_coarse, length=1.0)
         elif self.prolong_mode == 'locking-local':
-            P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=1.0)
+            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
+            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.7)
+            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=1.0)
+            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=1.5)
+            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
+            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.7)
+
+            # new one!
+            P = self._locking_aware_prolong_local_mitc_v3_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
         elif self.prolong_mode == "standard":
             P = self._build_P2_uncoupled3(nxe_coarse)
             P = self._apply_bcs_to_P(P, nxe_coarse)
@@ -1584,7 +2253,15 @@ class MITCPlateElement_OptProlong:
             # method = self._locking_aware_prolong_global_mitc_v2
             P = method(nxe_coarse, length=1.0)
         elif self.prolong_mode == 'locking-local':
-            P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=1.0)
+            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
+            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.7)
+            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=1.0)
+            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=1.5)
+            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
+            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.7)
+
+            # new one!
+            P = self._locking_aware_prolong_local_mitc_v3_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
         elif self.prolong_mode == "standard":
             P = self._build_P2_uncoupled3(nxe_coarse)
             P = self._apply_bcs_to_P(P, nxe_coarse)

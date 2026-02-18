@@ -3,3 +3,4 @@ from .color_asw import TwodimAddSchwarzColored22
 from .color_asw2 import TwodimAddSchwarzColored22_BC
 from .svd_asw import TwodimSVDAddSchwarz
 from .supp_asw import TwodimSupportAddSchwarz
+from .elem_asw import TwodimElementAddSchwarz

@@ -13,7 +13,7 @@ from elem import ReissnerMindlinPlateElement_OptProlong, MITCPlateElement_OptPro
 from smooth import TwoDimAddSchwarzDeRhamVertexEdges
 # from smooth import TwodimAddSchwarzColored22_BC, TwodimAddSchwarzColored22
 from smooth import TwodimSVDAddSchwarz
-from smooth import TwodimSupportAddSchwarz
+from smooth import TwodimSupportAddSchwarz, TwodimElementAddSchwarz
 
 sys.path.append("../1_beam/src/")
 from multigrid2 import vcycle_solve, VMG
@@ -24,13 +24,13 @@ from asw import TwodimAddSchwarz
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--elem", type=str, default='mitcp', help="--elem, options: mitcp is another good one")
+parser.add_argument("--elem", type=str, default='mitc_lp', help="--elem, options: mitcp is another good one")
 parser.add_argument("--nxe", type=int, default=32, help="number of elements")
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
-parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
+parser.add_argument("--coupled", type=int, default=3, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
-parser.add_argument("--nsmooth", type=int, default=4, help="number of smoothing steps")
+parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--omega", type=float, default=1.0, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='supp_asw', help="--smooth : [gs, asw, supp_asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
@@ -99,17 +99,32 @@ elif args.elem == 'mitc':
         prolong_mode='standard',
     )
 
-elif args.elem == 'mitcp':
+
+elif args.elem == 'mitc_gp':
     ELEMENT = MITCPlateElement_OptProlong(
-        # prolong_mode='locking-global',
+        prolong_mode='locking-global', # best..
+        # lam=1e-12,
+        lam=1e-8,
+        # lam=1e-6,
+        # lam=1e-4,
+    )
+
+elif args.elem == 'mitc_lp':
+    ELEMENT = MITCPlateElement_OptProlong(
+        # prolong_mode='locking-global', # best..
         prolong_mode='locking-local', # working reasonably..
         # prolong_mode='standard',
         # lam=1e-12,
-        lam=1e-6,
+        lam=1e-8,
+        # lam=1e-6,
         # lam=1e-4,
         # lam=1e-2,
         # lam=1.0,
+        # n_lock_sweeps=4,
+        # n_lock_sweeps=8,
         n_lock_sweeps=10,
+        # n_lock_sweeps=20,
+        # n_lock_sweeps=30,
     )
 
 # ================================
@@ -119,13 +134,13 @@ elif args.elem == 'mitcp':
 # clamped = True
 clamped = False # simply supported
 
-load_fcn = lambda x,y : 1.0e2 # simple load
+# load_fcn = lambda x,y : 1.0e2 # simple load
 
 # m, n = 2, 1
 # m, n = 2, 2
 
-# m, n = 2, 3
-# load_fcn = lambda x,y : np.sin(m * np.pi * x) * np.sin(n * np.pi * y)
+m, n = 2, 3
+load_fcn = lambda x,y : np.sin(m * np.pi * x) * np.sin(n * np.pi * y)
 
 # m, n = 3, 2
 # load_fcn = lambda x,y : np.sin(m * np.pi * x) * np.sin(n * np.pi * y)
@@ -243,7 +258,8 @@ if 'mg' in args.solve:
                 
             else:
                 # SMOOTHER_CLASS = TwodimSupportAddSchwarz # can't use this on 2x2 coupled or lower
-                SMOOTHER_CLASS = TwodimAddSchwarz
+                SMOOTHER_CLASS = TwodimAddSchwarz # BEST
+                # SMOOTHER_CLASS = TwodimElementAddSchwarz # ends up being worse than regular add-Schwarz by a few iterations
 
                 # old good LU smoother
                 smoother = SMOOTHER_CLASS.from_assembler(
@@ -272,12 +288,16 @@ if args.solve == 'direct':
     assembler.direct_solve()
 elif args.solve == 'vmg':
 
+    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
+    # if args.elem == 'mitcp':
+    #     line_search = ELEMENT.prolong_mode != 'locking-local'
+
     assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
                                     #  line_search=not(args.elem == 'aig'))
                                     # line search sometimes hurts high cond # cases (high defects in prolong)
                                     # line_search=not(args.elem in ['aig', 'tsr', 'hhd', 'higd']), 
                                     # line_search=False, # often need it turned off.. for best conv
-                                    line_search = args.elem in ['drig', 'drigr', 'mitcp'],
+                                    line_search = line_search,
                                     # line_search=True,
                                     debug=args.debug,
                                     # nvcycles=100,
@@ -287,12 +307,17 @@ elif args.solve == 'vmg':
 
 elif args.solve == 'kmg':
 
+    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
+    # if args.elem == 'mitcp':
+    #     line_search = ELEMENT.prolong_mode != 'locking-local'
+
     vmg2 = VMG(
         grids, nsmooth=args.nsmooth, 
         ncyc=1, # fewer total v-cycles often..
         # ncyc=2,
         smoothers=smoothers, 
-        line_search=args.elem in ['drig', 'drigr', 'mitcp']
+        # line_search=False,
+        line_search = line_search,
         # line_search=True,
     )
     pc = vmg2
