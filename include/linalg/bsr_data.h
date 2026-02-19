@@ -44,6 +44,9 @@ class BsrData {
             perm[inode] = inode;
             iperm[inode] = inode;
         }
+        // default
+        c_perm = perm, c_iperm = iperm;
+        cols_elem_conn = nullptr, rc_elem_map = nullptr;
     }
 
     __HOST__ BsrData(const int mb, const int block_dim, const int nnzb, index_t *rowp,
@@ -81,6 +84,9 @@ class BsrData {
             this->perm = perm;
             this->iperm = iperm;
         }
+        // default
+        c_perm = perm, c_iperm = iperm;
+        cols_elem_conn = nullptr, rc_elem_map = nullptr;
     }
 
     /* length of values array */
@@ -685,6 +691,8 @@ class BsrData {
         /* computes symbolic maps such as elem_ind_map and transpose mappings
            for efficient kernel processing on GPU */
 
+        // printf("in symbolic maps for GPU\n");
+
         if (elem_ind_map) delete[] elem_ind_map;
         if (tr_rowp) delete[] tr_rowp;
         if (tr_cols) delete[] tr_cols;
@@ -701,33 +709,113 @@ class BsrData {
            for more details on reordering, see tests/reordering/README.md
            */
         int nodes_per_elem2 = nodes_per_elem * nodes_per_elem;
-        elem_ind_map = new index_t[nelems * nodes_per_elem2]();
-        for (int ielem = 0; ielem < nelems; ielem++) {
-            const int32_t *local_conn = &elem_conn[nodes_per_elem * ielem];
-            for (int block_row = 0; block_row < nodes_per_elem; block_row++) {
-                int32_t _global_block_row = local_conn[block_row];
-                // iperm map : old row to new row
-                int32_t global_block_row = iperm[_global_block_row];
-                int col_istart = rowp[global_block_row];
-                int col_iend = rowp[global_block_row + 1];
-                for (int block_col = 0; block_col < nodes_per_elem; block_col++) {
-                    int32_t _global_block_col = local_conn[block_col];
-                    // iperm map : old col to new col
-                    int32_t global_block_col = iperm[_global_block_col];
-                    // get matching ind in cols for the global_block_col
-                    for (int i = col_istart; i < col_iend; i++) {
-                        if (cols[i] == global_block_col) {
-                            // add this component of block kelem matrix into
-                            // elem_ind_map
-                            int block_ind = nodes_per_elem * block_row + block_col;
-                            // if (i == 0) {
-                            //     printf(
-                            //         "elem %d, glob_ind %d, elem_block_ind %d, glob_block_row %d,
-                            //         " "glob_block_col %d\n", ielem, i, block_ind,
-                            //         global_block_row, global_block_col);
-                            // }
-                            elem_ind_map[nodes_per_elem2 * ielem + block_ind] = i;
-                            break;
+        if (!rc_elem_map || !cols_elem_conn) {
+            // printf("start square mat elem_ind_map\n");
+
+            // square matrix case here
+            elem_ind_map = new index_t[nelems * nodes_per_elem2]();
+            for (int ielem = 0; ielem < nelems; ielem++) {
+                const int32_t *local_conn = &elem_conn[nodes_per_elem * ielem];
+                for (int block_row = 0; block_row < nodes_per_elem; block_row++) {
+                    int32_t _global_block_row = local_conn[block_row];
+                    // iperm map : old row to new row
+                    int32_t global_block_row = iperm[_global_block_row];
+                    int col_istart = rowp[global_block_row];
+                    int col_iend = rowp[global_block_row + 1];
+                    for (int block_col = 0; block_col < nodes_per_elem; block_col++) {
+                        int32_t _global_block_col = local_conn[block_col];
+                        // iperm map : old col to new col
+                        int32_t global_block_col = c_iperm[_global_block_col];
+                        // get matching ind in cols for the global_block_col
+                        for (int i = col_istart; i < col_iend; i++) {
+                            if (cols[i] == global_block_col) {
+                                // add this component of block kelem matrix into
+                                // elem_ind_map
+                                int block_ind = nodes_per_elem * block_row + block_col;
+                                // if (i == 0) {
+                                //     printf(
+                                //         "elem %d, glob_ind %d, elem_block_ind %d, glob_block_row
+                                //         %d, " "glob_block_col %d\n", ielem, i, block_ind,
+                                //         global_block_row, global_block_col);
+                                // }
+                                elem_ind_map[nodes_per_elem2 * ielem + block_ind] = i;
+                                // printf(
+                                //     "elem ind map for ielem %d, elem block ind %d, nnzb ind %d /
+                                //     "
+                                //     "%d\n",
+                                //     ielem, block_ind, i, nnzb);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+        } else {
+            // printf("making non-square FC matrix elem ind map\n");
+            // printf("nelems %d, fine elem conn: ", nelems);
+            // printVec<int>(nelems, elem_conn);
+            // printf("fc_elem_map: ");
+            // printVec<int>(nelems, rc_elem_map);
+            // printf("coarse elem conn: ");
+            // printVec<int>(nelems / 4, cols_elem_conn);
+
+            // printf("rowp: ");
+            // printVec<int>(nnodes + 1, rowp);
+            // printf("cols: ");
+            // printVec<int>(nnzb, cols);
+
+            // non-square matrix case here using rc_elem_map and coarse elem conn
+            elem_ind_map = new index_t[nelems * nodes_per_elem2]();
+            for (int ielem = 0; ielem < nelems; ielem++) {
+                const int32_t *local_conn = &elem_conn[nodes_per_elem * ielem];
+                const int32_t ielem_c = rc_elem_map[ielem];
+                const int32_t *c_local_conn = &cols_elem_conn[nodes_per_elem * ielem_c];
+
+                // printf("ielem %d => ielem_c %d\n", ielem, ielem_c);
+                // printf("fine nodes: ");
+                // printVec<int>(4, local_conn);
+                // printf("coarse nodes: ");
+                // printVec<int>(4, c_local_conn);
+
+                for (int block_row = 0; block_row < nodes_per_elem; block_row++) {
+                    int32_t _global_block_row = local_conn[block_row];
+                    // iperm map : old row to new row
+                    int32_t global_block_row = iperm[_global_block_row];
+                    int col_istart = rowp[global_block_row];
+                    int col_iend = rowp[global_block_row + 1];
+                    for (int block_col = 0; block_col < nodes_per_elem; block_col++) {
+                        int32_t _global_block_col = c_local_conn[block_col];
+                        // iperm map : old col to new col
+                        int32_t global_block_col = c_iperm[_global_block_col];
+                        // printf("grow %d, gcol %d\n", global_block_row, global_block_col);
+                        // get matching ind in cols for the global_block_col
+                        bool found_col = false;
+                        for (int i = col_istart; i < col_iend; i++) {
+                            if (cols[i] == global_block_col) {
+                                // add this component of block kelem matrix into
+                                // elem_ind_map
+                                int block_ind = nodes_per_elem * block_row + block_col;
+                                elem_ind_map[nodes_per_elem2 * ielem + block_ind] = i;
+                                found_col = true;
+                                // printf(
+                                //     "elem ind map for ielem %d, elem block ind %d, nnzb ind %d /
+                                //     "
+                                //     "%d\n",
+                                //     ielem, block_ind, i, nnzb); // DEBUG
+                                if (i >= nnzb) {
+                                    printf("ERROR : elem_ind_map steps out of bounds\n");
+                                }
+                                break;
+                            }
+                        }
+
+                        // if get here and we didn't find a match, then we have an error
+                        if (!found_col) {
+                            printf(
+                                "ERROR : block_row %d, block_col %d had no match with grow %d, "
+                                "gcol %d\n",
+                                block_row, block_col, global_block_row, global_block_col);
                         }
                     }
                 }
@@ -789,12 +877,14 @@ class BsrData {
         DeviceVec<int> d_rowp(nnodes + 1, rowp), d_rows(nnzb, rows), d_cols(nnzb, cols),
             d_perm(nnodes, perm), d_iperm(nnodes, iperm), d_elem_ind_map(n_eim, elem_ind_map),
             d_tr_rowp(nnodes + 1, tr_rowp), d_tr_cols(nnzb, tr_cols),
-            d_tr_block_map(nnzb, tr_block_map);
+            d_tr_block_map(nnzb, tr_block_map), d_cperm(nnodes, c_perm), d_ciperm(nnodes, c_iperm);
         new_bsr.rowp = d_rowp.createHostVec().getPtr();
         new_bsr.rows = d_rows.createHostVec().getPtr();
         new_bsr.cols = d_cols.createHostVec().getPtr();
         new_bsr.perm = d_perm.createHostVec().getPtr();
         new_bsr.iperm = d_iperm.createHostVec().getPtr();
+        new_bsr.c_perm = d_cperm.createHostVec().getPtr();
+        new_bsr.c_iperm = d_ciperm.createHostVec().getPtr();
         new_bsr.elem_ind_map = d_elem_ind_map.createHostVec().getPtr();
         new_bsr.tr_rowp = d_tr_rowp.createHostVec().getPtr();
         new_bsr.tr_cols = d_tr_cols.createHostVec().getPtr();
@@ -810,6 +900,8 @@ class BsrData {
     __HOST__ BsrData createDeviceBsrData() {
         /* create new BsrData object with all host sparsity data copied to the device */
 
+        // printf("create device bsrdata : symbolic maps\n");
+
         // before transferring to device, compute the symbolic maps for the GPU
         // call here instead of at the end of each symbolic factorization change
         if (elem_conn) _compute_symbolic_maps_for_gpu();
@@ -821,6 +913,8 @@ class BsrData {
         new_bsr.nelems = this->nelems;
         new_bsr.nnodes = this->nnodes;
         new_bsr.host = false;
+
+        // printf("create device bsrdata : host to device\n");
 
         // create HostVec wrapper objects in CUDA, transfer to device and get ptr for new object
         if (elem_conn) {
@@ -840,16 +934,21 @@ class BsrData {
         }
 
         HostVec<int> h_rowp(nnodes + 1, rowp), h_rows(nnzb, rows), h_cols(nnzb, cols),
-            h_perm(nnodes, perm), h_iperm(nnodes, iperm);
+            h_perm(nnodes, perm), h_iperm(nnodes, iperm), h_cperm(nnodes, c_perm),
+            h_ciperm(nnodes, c_iperm);
         new_bsr.rowp = h_rowp.createDeviceVec().getPtr();
         new_bsr.rows = h_rows.createDeviceVec().getPtr();
         new_bsr.cols = h_cols.createDeviceVec().getPtr();
         new_bsr.perm = h_perm.createDeviceVec().getPtr();
         new_bsr.iperm = h_iperm.createDeviceVec().getPtr();
+        new_bsr.c_perm = h_cperm.createDeviceVec().getPtr();
+        new_bsr.c_iperm = h_ciperm.createDeviceVec().getPtr();
 
         new_bsr.nelems = nelems;
         new_bsr.nodes_per_elem = nodes_per_elem;
         new_bsr.n_eim = n_eim;
+
+        // printf("create device bsrdata : done\n");
 
         return new_bsr;
     }
@@ -886,8 +985,10 @@ class BsrData {
     // object data, kept public =---------------------------
     int32_t nnzb, nelems, nnodes, nodes_per_elem, block_dim, n_eim;
     const int32_t *elem_conn;
+    const int32_t *cols_elem_conn, *rc_elem_map;  // for FC-type non-square matrices
     int32_t *rowp, *cols, *elem_ind_map;
     int32_t *perm, *iperm;
+    int32_t *c_perm, *c_iperm;
     int32_t *tr_rowp, *tr_cols, *tr_block_map;
     bool host;
 

@@ -94,6 +94,7 @@ class ElementAssembler {
     // util functions
     BsrData &getBsrData() { return bsr_data; }
     Vec<T> getXpts() { return xpts; }
+    Vec<T> getVars() { return vars; }
     Vec<int> getBCs() { return bcs; }
     Vec<int> getConn() { return vars_conn; }
     int get_num_xpts() { return num_geo_nodes * spatial_dim; }

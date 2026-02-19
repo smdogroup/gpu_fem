@@ -88,7 +88,7 @@ def main():
     parser.add_argument(
         "--save",
         type=str,
-        default="kcycles_vs_nprolong.svg",
+        default="out/kcycles_vs_nprolong.svg",
         help="output figure filename (default: kcycles_vs_nprolong.svg). Set to '' to skip saving.",
     )
     parser.add_argument(

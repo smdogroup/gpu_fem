@@ -1,15 +1,15 @@
 #pragma once
-#include "../solvers/solve_utils.h"
-#include "_smoothers.cuh"
 #include "linalg/vec.h"
+#include "multigrid/smoothers/_smoothers.cuh"
+#include "multigrid/solvers/solve_utils.h"
 
 // in order to estimate CG-Lanczos coefficients
 #include <vector>
 
 #include "lapacke.h"
 
-/* locking-aware Jacobi smoother.. TODO is cleanup as this was copied from Chebyshev polynomial smoother
- which is only class that had matrix-smoothing before*/
+/* locking-aware Jacobi smoother.. TODO is cleanup as this was copied from Chebyshev polynomial
+ smoother which is only class that had matrix-smoothing before*/
 
 template <class Assembler>
 class LockingChebyshevSmoother : public BaseSolver {
@@ -17,8 +17,8 @@ class LockingChebyshevSmoother : public BaseSolver {
     using T = typename Assembler::T;
 
     LockingChebyshevSmoother(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
-                                Assembler &assembler_, BsrMat<DeviceVec<T>> Kmat_, T omega_ = 1.0,
-                                int ORDER_ = 1, int n_solve_steps_ = 6, bool debug_ = false)
+                             Assembler &assembler_, BsrMat<DeviceVec<T>> Kmat_, T omega_ = 1.0,
+                             int ORDER_ = 1, int n_solve_steps_ = 6, bool debug_ = false)
         : cublasHandle(cublasHandle_), cusparseHandle(cusparseHandle_) {
         Kmat = Kmat_;
         block_dim = assembler_.getBsrData().block_dim;
@@ -494,6 +494,9 @@ class LockingChebyshevSmoother : public BaseSolver {
             for (int k = 1; k < SMOOTH_ORDER + 1; k++) {
                 // int k = 1; // just do jacobi smoothing here for matrix
 
+                dim3 add_block(64);
+                dim3 DP_grid(P_nnzb);
+
                 // add RHS into Z matrix
                 T scale = 1.0;
                 k_add_colored_submat_PFP<T>
@@ -510,19 +513,19 @@ class LockingChebyshevSmoother : public BaseSolver {
                     d_kmat_vals, d_P_vals, d_Z_vals);
 
                 // compute Dinv*Z into Z in-place (equiv to Dinv*scale*A*P => Z)
-                dim3 DP_block(216), DP_grid(P_nnzb);
+                dim3 DP_block(216);
                 k_compute_Dinv_P_mmprod<T><<<DP_grid, DP_block>>>(
                     P_nnzb, block_dim, d_dinv_vals.getPtr(), d_P_rows, d_Z_vals);
-
-                dim3 add_block(64);
 
                 // no longer doing higher order smoothing here (Just Jacobi at moment)
                 // add alpha_k * Zprev into Z
                 // we're just doing first order smoothing at the moment..
                 // if (SMOOTH_ORDER > 1) {
                 //     T alpha_k = (2.0 * k - 3.0) / (2.0 * k + 1.0);
-                //     k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(P_nnzb, block_dim, alpha_k,
-                //                                                         0, d_Zprev_vals, d_Z_vals);
+                //     k_add_colored_submat_PFP<T><<<DP_grid, add_block>>>(P_nnzb, block_dim,
+                //     alpha_k,
+                //                                                         0, d_Zprev_vals,
+                //                                                         d_Z_vals);
                 // }
 
                 // add Z into P (the prolongation update)

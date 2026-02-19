@@ -5,11 +5,11 @@
 #include <set>
 #include <unordered_set>
 
-#include "_unstruct_utils.h"
-#include "_unstructured.cuh"
+#include "multigrid/prolongation/_unstruct_utils.h"
+#include "multigrid/prolongation/_unstructured.cuh"
 
 template <class Assembler_, class Basis_, bool kmat_fillin = true>
-class LockingAwareStructuredProlongation {
+class LockingAwareUnstructuredProlongation {
    public:
     using T = double;
     using Assembler = Assembler_;
@@ -24,14 +24,15 @@ class LockingAwareStructuredProlongation {
     static constexpr bool is_bsr = true;  // uses full BSR matrix (no CSR)
     static constexpr bool smoothed = true;
 
-    LockingAwareUnstructuredProlongation(cusparseHandle_t &cusparseHandle_, Assembler &fine_assembler_,
-                                   int ELEM_MAX_ = 10)
+    LockingAwareUnstructuredProlongation(cusparseHandle_t &cusparseHandle_,
+                                         Assembler &fine_assembler_, int ELEM_MAX_ = 10)
         : handle(cusparseHandle_) {
         fine_assembler = fine_assembler_;
         ELEM_MAX = ELEM_MAX_;
 
         // init some data from fine assembler, and other startup
         block_dim = fine_assembler.getBsrData().block_dim;
+        h_fine_conn = fine_assembler.getConn().createHostVec().getPtr();
 
         // other startup
         descr_P = 0;
@@ -46,8 +47,9 @@ class LockingAwareStructuredProlongation {
         // assemble_matrices(); // reassemble matrices?
     }
 
-    void init_coarse_data(Assembler &coarse_assembler_) {
+    void init_coarse_data(Assembler &coarse_assembler_, int *h_fc_elem_map_) {
         coarse_assembler = coarse_assembler_;
+        h_fc_elem_map = h_fc_elem_map_;
         d_coarse_iperm = coarse_assembler.getBsrData().iperm;
         // printf("\tDEBUG: construct nz pattern\n");
         construct_nz_pattern();
@@ -84,6 +86,8 @@ class LockingAwareStructuredProlongation {
             fine_assembler, coarse_assembler, prolong_mat, restrict_mat, d_coarse_conn, d_n2e_ptr,
             d_n2e_elems, d_n2e_xis, ELEM_MAX);
 
+        h_coarse_conn = coarse_assembler.getConn().createHostVec().getPtr();
+
         // then get some data out of this (for more readable code later)
         P_bsr_data = prolong_mat->getBsrData();
         d_P_vals = prolong_mat->getPtr();
@@ -98,7 +102,7 @@ class LockingAwareStructuredProlongation {
         N_coarse = nnodes_coarse * block_dim;
         d_coarse_weights = DeviceVec<T>(N_coarse).getPtr();
         d_fine_ones = DeviceVec<T>(N_fine).getPtr();
-        k_vec_set<T><<<(N_fine+31)/32, 32>>>(N_fine, 1.0, d_fine_ones);
+        k_vec_set<T><<<(N_fine + 31) / 32, 32>>>(N_fine, 1.0, d_fine_ones);
     }
 
     void compute_matmat_prod_nz_pattern() {
@@ -187,6 +191,11 @@ class LockingAwareStructuredProlongation {
         int *h_P_rowp0 = DeviceVec<int>(nnodes_fine + 1, d_P_rowp).createHostVec().getPtr();
         int *h_P_cols0 = DeviceVec<int>(P_bsr_data.nnzb, d_P_cols).createHostVec().getPtr();
 
+        // printf("P0 rowp: ");
+        // printVec<int>(nnodes_fine + 1, h_P_rowp0);
+        // printf("P0 cols: ");
+        // printVec<int>(P_bsr_data.nnzb, h_P_cols0);
+
         // delete previous nofill P0 device pointers
         cudaFree(d_P_rowp);
         cudaFree(d_P_rows);
@@ -248,8 +257,32 @@ class LockingAwareStructuredProlongation {
 
         // and update the P_bsr_data also
         int *d_fine_perm = P_bsr_data.perm;
-        P_bsr_data = BsrData(nnodes_fine, block_dim, AP_nnzb, d_P_rowp, d_P_cols, d_fine_perm,
-                             d_fine_iperm, false);
+        // need to create on host for it to create elem ind map and other things
+        bool host = true;
+        auto h_P_bsr_data =
+            BsrData(nnodes_fine, block_dim, AP_nnzb, h_AP_rowp, h_AP_cols, nullptr, nullptr, host);
+        h_P_bsr_data.rows = h_AP_rows;
+        // need to add fc_elem map and fine and coarse elem conn in order to get correct elem ind
+        // maps
+        h_P_bsr_data.nelems = fine_assembler.get_num_elements();
+        h_P_bsr_data.elem_conn = h_fine_conn;
+        h_P_bsr_data.cols_elem_conn = h_coarse_conn;
+        h_P_bsr_data.rc_elem_map = h_fc_elem_map;
+        h_P_bsr_data.nodes_per_elem = 4;
+
+        auto c_bsr_data = coarse_assembler.getBsrData();
+        int c_nnodes = coarse_assembler.get_num_nodes();
+        int *h_cperm = DeviceVec<int>(c_nnodes, c_bsr_data.perm).createHostVec().getPtr();
+        int *h_ciperm = DeviceVec<int>(c_nnodes, c_bsr_data.iperm).createHostVec().getPtr();
+        h_P_bsr_data.c_perm = h_cperm;
+        h_P_bsr_data.c_iperm = h_ciperm;
+
+        printf("make P bsr data for FC-matrix\n");
+        P_bsr_data = h_P_bsr_data.createDeviceBsrData();
+        printf("\tdone make P bsr data for FC-matrix\n");
+
+        // P_bsr_data = BsrData(nnodes_fine, block_dim, AP_nnzb, d_P_rowp, d_P_cols, d_fine_perm,
+        //                      d_fine_iperm, false);
         P_bsr_data.mb = nnodes_fine, P_bsr_data.nb = nnodes_coarse;
         P_bsr_data.rows = d_P_rows;  // need rows
         prolong_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_P_vals_vec);
@@ -268,7 +301,8 @@ class LockingAwareStructuredProlongation {
     }
 
     void update_after_smooth() {
-        // compute coarse weights for nonlinear problems as P^T * ones => weights (row-sums of P^T coarse nodes)
+        // compute coarse weights for nonlinear problems as P^T * ones => weights (row-sums of P^T
+        // coarse nodes)
         cudaMemset(d_coarse_weights, 0.0, N_coarse * sizeof(T));
         int nprods = P_nnzb * block_dim2;
         dim3 block0(32), grid0((nprods + 31) / 32);
@@ -283,7 +317,8 @@ class LockingAwareStructuredProlongation {
         // now do cusparse Bsrmv.. for P @ coarse_soln => dx_fine (permuted nodes order)
         T a = 1.0, b = 0.0;
         int mb = P_bsr_data.mb, nb = P_bsr_data.nb;
-        // printf("prolongate with block_dim %d, mb %d, nb %d, P_nnzb %d\n", block_dim, mb, nb, P_nnzb);
+        // printf("prolongate with block_dim %d, mb %d, nb %d, P_nnzb %d\n", block_dim, mb, nb,
+        // P_nnzb);
         CHECK_CUSPARSE(cusparseDbsrmv(handle, CUSPARSE_DIRECTION_ROW,
                                       CUSPARSE_OPERATION_NON_TRANSPOSE, mb, nb, P_nnzb, &a, descr_P,
                                       d_P_vals, d_P_rowp, d_P_cols, block_dim,
@@ -337,6 +372,7 @@ class LockingAwareStructuredProlongation {
     T *d_fine_ones;
 
     int *d_coarse_conn, *d_n2e_ptr, *d_n2e_elems;
+    int *h_fc_elem_map, *h_coarse_conn, *h_fine_conn;
     T *d_n2e_xis;
     int *d_coarse_iperm, *d_fine_iperm;
     int nnodes_fine, block_dim, block_dim2, N_fine;

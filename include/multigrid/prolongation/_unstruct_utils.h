@@ -872,14 +872,13 @@ void init_unstructured_grid_maps(Assembler &fine_assembler, Assembler &coarse_as
         auto d_PT_cols = HostVec<int>(PT_nnzb, h_prolT_cols).createDeviceVec().getPtr();
         auto d_PT_vals = DeviceVec<T>(block_dim2 * PT_nnzb);
         auto PT_bsr_data = BsrData(nnodes_coarse, P_block_dim, PT_nnzb, d_PT_rowp, d_PT_cols,
-                                d_coarse_perm, d_coarse_iperm, false);
+                                   d_coarse_perm, d_coarse_iperm, false);
         PT_bsr_data.mb = nnodes_coarse, PT_bsr_data.nb = nnodes_fine;
         PT_bsr_data.rows = d_PT_rows;  // for each nnz, which row is it (not same as rowp),
-                                    // helps for efficient mat-prods
+                                       // helps for efficient mat-prods
         restrict_mat = new BsrMat<DeviceVec<T>>(
             PT_bsr_data, d_PT_vals);  // only store this matrix on the coarse grid
     }
-    
 
     // CHECK_CUDA(cudaDeviceSynchronize());
     // auto time_08 = std::chrono::high_resolution_clock::now();

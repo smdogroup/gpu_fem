@@ -96,37 +96,48 @@ class MITCShellAssembler
 
         mat.zeroValues();
         int cols_per_elem = (Basis::order == 1 ? 24 : Basis::order == 2 ? 9 : 4);
-        dim3 block(1, cols_per_elem, // no num_quad_pts here, because uses tying points not num_quadpts
-                   elems_per_block);  // better order for consecutive threads and mem reads
+        dim3 block(
+            1, cols_per_elem,  // no num_quad_pts here, because uses tying points not num_quadpts
+            elems_per_block);  // better order for consecutive threads and mem reads
         int elem_cols_per_block = cols_per_elem * elems_per_block;
         int nblocks =
             (this->num_elements * dof_per_elem + elem_cols_per_block - 1) / elem_cols_per_block;
         dim3 grid(nblocks);
 
-        k_add_lockstrain_jacobian_fast<T, elems_per_block, Assembler, Data, Vec_, Mat><<<grid, block>>>(
-            this->num_vars_nodes, this->num_elements, cols_per_elem, this->elem_components,
-            this->geo_conn, this->vars_conn, this->xpts, this->vars, this->compData, mat);
+        k_add_lockstrain_jacobian_fast<T, elems_per_block, Assembler, Data, Vec_, Mat>
+            <<<grid, block>>>(this->num_vars_nodes, this->num_elements, cols_per_elem,
+                              this->elem_components, this->geo_conn, this->vars_conn, this->xpts,
+                              this->vars, this->compData, mat);
 
         CHECK_CUDA(cudaDeviceSynchronize());
         // #endif
     }
 
     template <int elems_per_block = 1>
-    void add_lockstrain_fc_jacobian_fast(Assembler &coarse_assembler, int *d_fc_elem_map, Mat &mat) {
+    void add_lockstrain_fc_jacobian_fast(Assembler &coarse_assembler, int *d_fc_elem_map,
+                                         Mat &mat) {
         // FC prolong mat product G_f^T * P_gam * G_c
 
         mat.zeroValues();
         int cols_per_elem = (Basis::order == 1 ? 24 : Basis::order == 2 ? 9 : 4);
-        dim3 block(1, cols_per_elem, // no num_quad_pts here, because uses tying points not num_quadpts
-                   elems_per_block);  // better order for consecutive threads and mem reads
+        dim3 block(
+            1, cols_per_elem,  // no num_quad_pts here, because uses tying points not num_quadpts
+            elems_per_block);  // better order for consecutive threads and mem reads
         int elem_cols_per_block = cols_per_elem * elems_per_block;
         int nblocks =
             (this->num_elements * dof_per_elem + elem_cols_per_block - 1) / elem_cols_per_block;
         dim3 grid(nblocks);
 
-        k_add_lockstrain_fc_jacobian_fast<T, elems_per_block, Assembler, Data, Vec_, Mat><<<grid, block>>>(
-            this->num_vars_nodes, this->num_elements, cols_per_elem, this->elem_components,
-            this->geo_conn, this->vars_conn, this->xpts, this->vars, this->compData, mat);
+        auto d_c_conn = coarse_assembler.getConn();
+        auto d_c_xpts = coarse_assembler.getXpts();
+        auto d_c_vars = coarse_assembler.getVars();
+
+        k_add_lockstrain_fc_jacobian_fast<T, elems_per_block, Assembler, Data, Vec_, Mat>
+            <<<grid, block>>>(this->num_vars_nodes, coarse_assembler.num_nodes, this->num_elements,
+                              coarse_assembler.num_elements, d_fc_elem_map, cols_per_elem,
+                              this->elem_components, this->geo_conn, this->vars_conn, d_c_conn,
+                              d_c_conn, this->xpts, this->vars, d_c_xpts, d_c_vars, this->compData,
+                              mat);
 
         CHECK_CUDA(cudaDeviceSynchronize());
         // #endif
@@ -747,7 +758,8 @@ class MITCShellAssembler
     }  // add_element_quadpt_jacobian_col
 
     template <class Data, STRAIN strain = ALL>
-    __DEVICE__ static void add_element_lockstrain_jacobian_col_fast(  // __noinline__ is slower actually
+    __DEVICE__ static void
+    add_element_lockstrain_jacobian_col_fast(  // __noinline__ is slower actually
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
         const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
         const T vars[dof_per_elem], const T pvars[dof_per_elem], T matCol[dof_per_elem]) {
@@ -837,16 +849,14 @@ class MITCShellAssembler
     }  // add_lockstrain_jacobian_col
 
     template <class Data, STRAIN strain = ALL>
-    __DEVICE__ static void add_element_lockstrain_fc_jacobian_row_fast(  // __noinline__ is slower actually
-        const T pt[2], const T &scale, 
-        const T fine_xpts[xpts_per_elem], const T coarse_xpts[xpts_per_elem], 
-        const T fine_fn[xpts_per_elem], const T coarse_fn[xpts_per_elem],
-        const T fine_XdinvT[9], const T fine_Tmat[9], const T fine_XdinvzT[9], 
-        const T coarse_XdinvT[9], const T coarse_Tmat[9], const T coarse_XdinvzT[9], 
-        const Data &compData,
-        const T fine_vars[dof_per_elem], const T coarse_vars[dof_per_elem], 
-        const T pvars[dof_per_elem], T matRow[dof_per_elem]) {
-
+    __DEVICE__ static void
+    add_element_lockstrain_fc_jacobian_row_fast(  // __noinline__ is slower actually
+        const T pt[2], const T &scale, const T fine_xpts[xpts_per_elem],
+        const T coarse_xpts[xpts_per_elem], const T fine_fn[xpts_per_elem],
+        const T coarse_fn[xpts_per_elem], const T fine_XdinvT[9], const T fine_Tmat[9],
+        const T fine_XdinvzT[9], const T coarse_XdinvT[9], const T coarse_Tmat[9],
+        const T coarse_XdinvzT[9], const Data &compData, const T fine_vars[dof_per_elem],
+        const T coarse_vars[dof_per_elem], const T pvars[dof_per_elem], T matRow[dof_per_elem]) {
         constexpr bool bending = strain == BENDING || strain == ALL;
         constexpr bool tying = strain == TYING || strain == ALL;
         constexpr bool drill = strain == DRILL || strain == ALL;
@@ -864,10 +874,12 @@ class MITCShellAssembler
             // --------------------------------
             T fine_d[3 * num_nodes];  // need directors in reverse for nonlinear strains
             if constexpr (is_nonlinear) {
-                Director::template computeDirector<vars_per_node, num_nodes>(fine_vars, fine_fn, fine_d);
+                Director::template computeDirector<vars_per_node, num_nodes>(fine_vars, fine_fn,
+                                                                             fine_d);
 
-                T fine_ety[Basis::num_all_tying_points];
-                computeMITCTyingStrain<T, Phys, Basis, is_nonlinear>(fine_xpts, fine_fn, fine_vars, d, ety);
+                T ety[Basis::num_all_tying_points];
+                computeMITCTyingStrain<T, Phys, Basis, is_nonlinear>(fine_xpts, fine_fn, fine_vars,
+                                                                     fine_d, ety);
                 A2D::SymMat<T, 3> gty;
                 interpTyingStrain<T, Basis>(pt, ety, gty.get_data());
 
@@ -877,14 +889,22 @@ class MITCShellAssembler
                 // __syncthreads();
             }
 
+            T coarse_d[3 * num_nodes];  // need directors in reverse for nonlinear strains
+            if constexpr (is_nonlinear) {
+                Director::template computeDirector<vars_per_node, num_nodes>(coarse_vars, coarse_fn,
+                                                                             coarse_d);
+            }
+
             // pforward section
             // -------------------------------
             T p_d[3 * num_nodes];
             {
-                Director::template computeDirectorHfwd<vars_per_node, num_nodes>(pvars, fn, p_d);
+                Director::template computeDirectorHfwd<vars_per_node, num_nodes>(pvars, fine_fn,
+                                                                                 p_d);
 
                 T p_ety[Basis::num_all_tying_points];
-                computeMITCTyingStrainHfwd<T, Phys, Basis>(fine_xpts, fine_fn, fine_vars, fine_d, pvars, p_d, p_ety);
+                computeMITCTyingStrainHfwd<T, Phys, Basis>(fine_xpts, fine_fn, fine_vars, fine_d,
+                                                           pvars, p_d, p_ety);
                 A2D::SymMat<T, 3> p_gty;
                 interpTyingStrain<T, Basis>(pt, p_ety, p_gty.get_data());
 
@@ -922,9 +942,9 @@ class MITCShellAssembler
                 A2D::Vec<T, 3 * num_nodes> d_hat;
                 A2D::Vec<T, Basis::num_all_tying_points> ety_hat;  // zeroes out on init
                 interpTyingStrainTranspose<T, Basis>(pt, gty_hat.get_data(), ety_hat.get_data());
-                computeMITCTyingStrainHrev<T, Phys, Basis>(coarse_xpts, coarse_fn, coarse_vars, coarse_d, pvars, p_d,
-                                                           ety_bar.get_data(), ety_hat.get_data(),
-                                                           matRow, d_hat.get_data());
+                computeMITCTyingStrainHrev<T, Phys, Basis>(
+                    coarse_xpts, coarse_fn, coarse_vars, coarse_d, pvars, p_d, ety_bar.get_data(),
+                    ety_hat.get_data(), matRow, d_hat.get_data());
 
                 Director::template computeDirectorHrev<vars_per_node, num_nodes>(
                     coarse_fn, d_hat.get_data(), matRow);
