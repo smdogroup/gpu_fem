@@ -292,4 +292,246 @@ __GLOBAL__ static void k_add_residual_fast(int32_t vars_num_nodes, int32_t num_e
                                     local_res);
     }
     
-}  // end of add_jacobian_fast
+}  // end of add_residual_fast
+
+
+
+template <typename T, int elems_per_block, class ElemGroup, class Data, template <typename> class Vec, class Mat>
+__GLOBAL__ static void k_add_lockstrain_jacobian_fast(int32_t vars_num_nodes, int32_t num_elements, int cols_per_elem, Vec<int32_t> elem_comp, 
+                                        Vec<int32_t> geo_conn, Vec<int32_t> vars_conn, Vec<T> xpts,
+                                        Vec<T> vars, Vec<Data> compData, Mat mat) {
+    using Geo = typename ElemGroup::Geo;
+    using Basis = typename ElemGroup::Basis;
+    using Phys = typename ElemGroup::Phys;
+    using Quadrature = typename Basis::Quadrature;
+
+    int local_elem_col = threadIdx.y + cols_per_elem * threadIdx.z;
+    int cols_per_block = elems_per_block * cols_per_elem;
+    int global_elem_col = local_elem_col + blockIdx.x * cols_per_block;
+    const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
+    int n_elem_cols = num_elements * vars_per_elem;
+    bool active_thread = global_elem_col < n_elem_cols;
+    if (!active_thread) return;
+    int global_elem = global_elem_col / vars_per_elem;
+    int tid_xy = blockDim.x * threadIdx.y + threadIdx.x;
+    int nthreads_xy = blockDim.x * blockDim.y;
+    int tid = nthreads_xy * threadIdx.z + tid_xy;
+    int local_elem = threadIdx.z;
+
+    const int nxpts_per_elem = Geo::num_nodes * Geo::spatial_dim;
+
+    const int32_t *_geo_conn = geo_conn.getPtr();
+    const int32_t *_vars_conn = vars_conn.getPtr();
+    const Data *_comp_data = compData.getPtr();
+
+    __SHARED__ T block_xpts[elems_per_block][nxpts_per_elem];
+    __SHARED__ T block_vars[elems_per_block][vars_per_elem];
+    __SHARED__ Data block_data[elems_per_block];
+
+    if (tid_xy == 0) {
+        memset(&block_xpts[0][0], 0.0, sizeof(T) * nxpts_per_elem);
+    }
+    __syncthreads();
+
+    // load data into block shared mem using some subset of threads
+    const int32_t *geo_elem_conn = &_geo_conn[global_elem * Geo::num_nodes];
+    xpts.copyElemValuesToShared(active_thread, tid_xy, nthreads_xy, Geo::spatial_dim,
+                                Geo::num_nodes, geo_elem_conn, &block_xpts[local_elem][0]);
+    __syncthreads();
+
+    const int32_t *vars_elem_conn = &_vars_conn[global_elem * Basis::num_nodes];
+    vars.copyElemValuesToShared(active_thread, tid_xy, nthreads_xy, Phys::vars_per_node,
+                                Basis::num_nodes, vars_elem_conn, block_vars[local_elem]);
+     __syncthreads();
+    
+
+    if (tid_xy == 0) {
+        int icomp = elem_comp[global_elem];
+        block_data[local_elem] = _comp_data[icomp];
+    }
+    __syncthreads();
+
+    int ideriv = global_elem_col % vars_per_elem;
+    int iquad = threadIdx.x;
+
+    T local_mat_col[vars_per_elem];
+    memset(local_mat_col, 0.0, sizeof(T) * vars_per_elem);
+
+    
+    // some prelim computations with xpts and quadrature point
+    // NOTE : it actually doesn't matter what quadpt we are at.. except for quadrature weights.. for this
+    // the lockstrain G_f^T G_f product uses the tying strains at their MITC points which is before tying to quadpt interp
+    T pt[2] = {0.0, 0.0}; // just choose centroid of element in [-1,1]^2 comp domain for anything quadpt related like detXd, etc.
+    T weight = 1.0;
+    T fn[nxpts_per_elem];
+    ShellComputeNodeNormals<T, Basis>(block_xpts[local_elem], fn);
+    T detXd = getDetXd<T, Basis>(pt, block_xpts[local_elem], fn);
+    T scale = detXd * weight; // scale for energy derivatives
+    __syncthreads();
+    T XdinvT[9], Tmat[9], XdinvzT[9];
+    computeShellRotations<T, Basis, Data>(pt, block_data[local_elem].refAxis, block_xpts[local_elem], fn, Tmat, XdinvT, XdinvzT);
+    __syncthreads();
+
+    T p_vars[vars_per_elem];
+    memset(p_vars, 0.0, sizeof(T) * vars_per_elem);
+    p_vars[ideriv] = 1.0;
+
+    // // compute drill strains
+    // NOTE : need drill strains in the lock-strain prod? prob not for now.. Check this later..
+    // ElemGroup::template add_element_lockstrain_jacobian_col_fast<Data, DRILL>(
+    //     pt, scale, block_xpts[local_elem], fn, 
+    //     XdinvT, Tmat, XdinvzT, block_data[local_elem],
+    //     block_vars[local_elem], p_vars, local_mat_col);
+    // __syncthreads();
+
+    // // // compute tying strains
+    ElemGroup::template add_element_lockstrain_jacobian_col_fast<Data, TYING>(
+        pt, scale, block_xpts[local_elem], fn, 
+        XdinvT, Tmat, XdinvzT, block_data[local_elem],
+        block_vars[local_elem], p_vars, local_mat_col);
+    __syncthreads();
+
+    // no quadrature point sum here (uses tying points instead)
+    int elem_block_row = ideriv / Phys::vars_per_node;
+    int elem_inner_row = ideriv % Phys::vars_per_node;
+    mat.addElementMatRow(true, elem_block_row, elem_inner_row, global_elem, 0, 1,
+        Phys::vars_per_node, Basis::num_nodes, vars_elem_conn, local_mat_col);
+
+}  // end of add_lockstrain_jacobian_fast
+
+
+
+template <typename T, int elems_per_block, class ElemGroup, class Data, template <typename> class Vec, class Mat>
+__GLOBAL__ static void k_add_lockstrain_fc_jacobian_fast(
+    int32_t fine_num_nodes, int coarse_num_nodes, 
+    int fine_num_elements, int coarse_num_elements,
+    int *fc_elem_map,
+    int cols_per_elem, Vec<int32_t> elem_comp, 
+    Vec<int32_t> fine_geo_conn, Vec<int32_t> fine_vars_conn, 
+    Vec<int32_t> coarse_geo_conn, Vec<int32_t> coarse_vars_conn,
+    Vec<T> fine_xpts, Vec<T> coarse_xpts,
+    Vec<T> fine_vars, Vec<T> coarse_vars, 
+    Vec<Data> compData, Mat mat) {
+
+    using Geo = typename ElemGroup::Geo;
+    using Basis = typename ElemGroup::Basis;
+    using Phys = typename ElemGroup::Phys;
+    using Quadrature = typename Basis::Quadrature;
+
+    int local_elem_col = threadIdx.y + cols_per_elem * threadIdx.z;
+    int cols_per_block = elems_per_block * cols_per_elem;
+    int global_elem_col = local_elem_col + blockIdx.x * cols_per_block;
+    const int vars_per_elem = Basis::num_nodes * Phys::vars_per_node;
+    int n_elem_cols = num_elements * vars_per_elem;
+    bool active_thread = global_elem_col < n_elem_cols;
+    if (!active_thread) return;
+    int global_elem = global_elem_col / vars_per_elem;
+    int tid_xy = blockDim.x * threadIdx.y + threadIdx.x;
+    int nthreads_xy = blockDim.x * blockDim.y;
+    int tid = nthreads_xy * threadIdx.z + tid_xy;
+    int local_elem = threadIdx.z;
+
+    int fine_global_elem = global_elem;
+    int coarse_global_elem = fc_elem_map[fine_global_elem];
+
+    const int nxpts_per_elem = Geo::num_nodes * Geo::spatial_dim;
+
+    const int32_t *_fine_geo_conn = fine_geo_conn.getPtr();
+    const int32_t *_fine_vars_conn = fine_vars_conn.getPtr();
+    const int32_t *_coarse_geo_conn = coarse_geo_conn.getPtr();
+    const int32_t *_coarse_vars_conn = coarse_vars_conn.getPtr();
+    const Data *_comp_data = compData.getPtr();
+
+    __SHARED__ T block_fine_xpts[elems_per_block][nxpts_per_elem];
+    __SHARED__ T block_fine_vars[elems_per_block][vars_per_elem];
+    __SHARED__ T block_coarse_xpts[elems_per_block][nxpts_per_elem];
+    __SHARED__ T block_coarse_vars[elems_per_block][vars_per_elem];
+    __SHARED__ Data block_data[elems_per_block];
+
+    if (tid_xy == 0) {
+        memset(&block_fine_xpts[0][0], 0.0, sizeof(T) * nxpts_per_elem);
+        memset(&block_coarse_xpts[0][0], 0.0, sizeof(T) * nxpts_per_elem);
+    }
+    __syncthreads();
+
+    // load data into block shared mem using some subset of threads
+    const int32_t *fine_geo_elem_conn = &_fine_geo_conn[fine_global_elem * Geo::num_nodes];
+    fine_xpts.copyElemValuesToShared(active_thread, tid_xy, nthreads_xy, Geo::spatial_dim,
+                                Geo::num_nodes, fine_geo_elem_conn, &block_fine_xpts[local_elem][0]);
+    __syncthreads();
+
+    const int32_t *coarse_geo_elem_conn = &_coarse_geo_conn[coarse_global_elem * Geo::num_nodes];
+    coarse_xpts.copyElemValuesToShared(active_thread, tid_xy, nthreads_xy, Geo::spatial_dim,
+                                Geo::num_nodes, coarse_geo_elem_conn, &block_coarse_xpts[local_elem][0]);
+    __syncthreads();
+
+    const int32_t *fine_vars_elem_conn = &_fine_vars_conn[fine_global_elem * Basis::num_nodes];
+    fine_vars.copyElemValuesToShared(active_thread, tid_xy, nthreads_xy, Phys::vars_per_node,
+                                Basis::num_nodes, fine_vars_elem_conn, block_fine_vars[fine_local_elem]);
+     __syncthreads();
+
+    const int32_t *coarse_vars_elem_conn = &_coarse_vars_conn[coarse_global_elem * Basis::num_nodes];
+    coarse_vars.copyElemValuesToShared(active_thread, tid_xy, nthreads_xy, Phys::vars_per_node,
+                                Basis::num_nodes, coarse_vars_elem_conn, block_coarse_vars[coarse_local_elem]);
+    __syncthreads();
+    
+
+    if (tid_xy == 0) {
+        int icomp = elem_comp[global_elem];
+        block_data[local_elem] = _comp_data[icomp];
+    }
+    __syncthreads();
+
+    int ideriv = global_elem_col % vars_per_elem;
+    int iquad = threadIdx.x;
+
+    T local_mat_row[vars_per_elem];
+    memset(local_mat_row, 0.0, sizeof(T) * vars_per_elem);
+    
+    // some prelim computations with xpts and quadrature point
+    // NOTE : it actually doesn't matter what quadpt we are at.. except for quadrature weights.. for this
+    // the lockstrain G_f^T G_f product uses the tying strains at their MITC points which is before tying to quadpt interp
+    T pt[2] = {0.0, 0.0}; // just choose centroid of element in [-1,1]^2 comp domain for anything quadpt related like detXd, etc.
+    T weight = 1.0;
+    T fine_fn[nxpts_per_elem];
+    ShellComputeNodeNormals<T, Basis>(block_fine_xpts[local_elem], fine_fn);
+    T coarse_fn[nxpts_per_elem];
+    ShellComputeNodeNormals<T, Basis>(block_coarse_xpts[local_elem], coarse_fn);
+    T detXd = getDetXd<T, Basis>(pt, block_coarse_xpts[local_elem], fn);
+    T scale = detXd * weight; // scale for energy derivatives
+    __syncthreads();
+    T fine_XdinvT[9], fine_Tmat[9], fine_XdinvzT[9];
+    computeShellRotations<T, Basis, Data>(pt, block_data[local_elem].refAxis, block_fine_xpts[local_elem], 
+        fine_fn, fine_Tmat, fine_XdinvT, fine_XdinvzT);
+    T coarse_XdinvT[9], coarse_Tmat[9], coarse_XdinvzT[9];
+    computeShellRotations<T, Basis, Data>(pt, block_data[local_elem].refAxis, block_coarse_xpts[local_elem], 
+        coarse_fn, coarse_Tmat, coarse_XdinvT, coarse_XdinvzT);
+    __syncthreads();
+
+    T p_vars[vars_per_elem];
+    memset(p_vars, 0.0, sizeof(T) * vars_per_elem);
+    p_vars[ideriv] = 1.0;
+
+    // compute tying strains (fine-coarse version)
+    // since we are doing matRow not matCol (because more efficient on GPU), p_vars now represents fine 
+    // and output mat_row is like coarse dim
+    ElemGroup::template add_element_lockstrain_fc_jacobian_row_fast<Data, TYING>(
+        pt, scale, 
+        block_fine_xpts[local_elem], block_coarse_xpts[local_elem], 
+        fine_fn, coarse_fn,
+        fine_XdinvT, fine_Tmat, fine_XdinvzT, 
+        coarse_XdinvT, coarse_Tmat, coarse_XdinvzT, 
+        block_data[local_elem],
+        block_fine_vars[local_elem], block_coarse_vars[local_elem],
+        p_vars, local_mat_row);
+    __syncthreads();
+
+    // no quadrature point sum here (uses tying points instead)
+    // need to add properly as elemMatCol instead of elemMatRow (transpose trick) into prolong matrix
+    // P = G_f^T * P_gam * G_c + lam * P_0   is not symmetric [F,C] dimensions
+    int elem_block_row = ideriv / Phys::vars_per_node;
+    int elem_inner_row = ideriv % Phys::vars_per_node;
+    mat.addElementMatRow(true, elem_block_row, elem_inner_row, global_elem, 0, 1,
+        Phys::vars_per_node, Basis::num_nodes, vars_elem_conn, local_mat_row);
+
+}  // end of k_add_lockstrain_fc_jacobian_fast

@@ -34,6 +34,10 @@
 #include "multigrid/solvers/multilevel/kcycle.h"
 #include "multigrid/solvers/multilevel/twolevel.h"
 
+// local utils
+#include "include/lock_prolongation.h"
+#include "include/lock_smoother.h"
+
 /* command line args:
     [direct/mg] [--nxe int] [--SR float] [--nvcyc int]
     * nxe must be power of 2
@@ -59,10 +63,12 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
     const SCALER scaler  = LINE_SEARCH;
     // using Smoother = ChebyshevPolynomialSmoother<Assembler>;
     using Smoother = UnstructuredQuadAdditiveSchwarzSmoother<T, Assembler>;
-    using Prolongation = StructuredProlongation<Assembler, PLATE>;
+    // using Prolongation = StructuredProlongation<Assembler, PLATE>;
+    using Prolongation = LockingAwareUnstructuredProlongation<Assembler>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
+    using LockingSmoother = LockingChebyshevSmoother<Assembler>;
     
     // for K-cycles
     using KrylovSolve = PCGSolver<T, GRID>;
@@ -73,10 +79,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
 
     MG *mg;
     KMG *kmg;
-
-    // order of chebyshev polynomial
-    int ORDER = 4; 
-    // int ORDER = 8; 
 
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     T omegaLS_min = 1e-2, omegaLS_max = 4.0;
@@ -119,11 +121,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
             bsr_data.AMD_reordering();
             bsr_data.compute_full_LU_pattern(10.0, false);
         } else {
-            // bsr_data.multicolor_reordering(num_colors, _color_rowp);
             bsr_data.compute_nofill_pattern();
         }
-        // auto grid = *GRID::buildFromAssembler(assembler, my_loads, full_LU, reorder);
-        // auto h_color_rowp = HostVec<int>(num_colors + 1, _color_rowp);
 
         assembler.moveBsrDataToDevice();
         auto loads = assembler.createVarsVec(my_loads);
@@ -143,7 +142,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
         printf("\tassemble kmat time %.2e\n", assembly_time.count());
 
         // build smoother and prolongations..
-        // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
         printf("nsmooth %d, omega = %.4e\n", nsmooth, omega);
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, 
             omega, nsmooth);
@@ -158,12 +156,86 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
         }
     }
 
+    assert(is_kcycle); // for first try..
+    auto &grids = kmg->grids;
+
+    // =====================================================
+    // locking-aware prolongation
+    // =====================================================
+
     // register the coarse assemblers to the prolongations..
-    if (is_kcycle) {
-        kmg->template init_prolongations<Basis>();
-    } else {
-        mg->template init_prolongations<Basis>();
+    double lam = 1e-12; // see python locking script
+    // if (is_kcycle) {
+    // clear and re-assemble kmat to hold G_f^T G_f + lam * I
+    auto &f_assembler = grids[0].assembler;
+    auto &f_kmat = grids[0].Kmat;
+    int *d_fine_bcs = f_assembler.getBCs();
+    f_assembler.add_lockstrain_jacobian_fast(f_kmat);
+    f_assembler.apply_bcs(f_kmat);
+    f_kmat.add_diag_nugget(lam);
+
+    // get initial prolongator
+    auto &c_assembler = grids[1].assembler;
+    auto &c_kmat = grids[1].Kmat;
+    int *d_coarse_bcs = c_assembler.getBCs();
+    auto &prolong = grids[0].prolongation;
+    prolong.init_coarse_data(c_assembler);
+    // get P_0 matrix .. standard prolongation
+    auto &P_mat = prolong.prolong_mat;
+    auto &RHS_mat = prolong.RHS_mat;
+
+    // apply fine and coarse bcs to P0_mat
+    const ones_on_diag = false; // just zero out completely for prolong matrix
+    P_mat.template apply_bcs_rows<ones_on_diag>(d_fine_bcs);
+    P_mat.template apply_bcs_cols<ones_on_diag>(d_coarse_bcs);
+
+    // make device fine-coarse elem map (here just use structured pattern)
+    int num_fine_elements = f_assembler.get_num_elements();
+    int *h_fc_elem_map = new int[num_fine_elements];
+    int nxe_c = nxe / 2;
+    for (int ielem = 0; ielem < num_fine_elements; ielem++) {
+        int ixe = ielem % nxe; iye = ielem / nxe;
+        int ixe_c = ixe / 2, iye_c = iye / 2;
+        int ielem_c = nxe_c * iye_c + ixe_c;
+        h_fc_elem_map[ielem] = ielem_c;
     }
+    int *d_fc_elem_map = HostVec<int>(num_fine_elements, d_fc_elem_map).createHostVec().getPtr();
+
+    // now assemble G_f^T * P_gam * G_c + lam * P_0  RHS prolong matrix with K*P0 sparsity
+    f_assembler.add_lockstrain_fc_jacobian_fast(c_assembler, d_fc_elem_map, P_rhs);
+    // apply bcs to P_rhs matrix
+    RHS_mat.template apply_bcs_rows<ones_on_diag>(d_fine_bcs);
+    RHS_mat.template apply_bcs_cols<ones_on_diag>(d_coarse_bcs);
+    
+    // apply bcs to standard prolongator then add it into P_rhs
+    // RHS_mat.add(lam, P0_mat); // make new add method here for P_rhs += lam * P_0
+    int P_nnzb = P_mat.nnzb, block_dim = 6;
+    T *d_P_vals = P_mat.getPtr(), *d_RHS_vals = RHS_mat.getPtr();
+    k_add_colored_submat_PFP<T>
+        <<<P_nnzb, 64>>>(P_nnzb, block_dim, lam, 0, d_P_vals, d_RHS_vals);
+
+    // do jacobi smoothing of P_0 => P matrix using kmat and rhs
+    auto lock_smoother = LockingSmoothernew Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega);
+    // TBD : See unstruct prolongation class
+    // use new ./include/lock_prolongation.h class here
+    int n_smooth_prolong = 6;
+    smoother->smoothMatrix(n_smooth_prolong, prolong->prolong_mat, prolong->Z_mat,
+                            prolong->RHS_mat, prolong->nnzb_prod,
+                            prolong->d_K_prodBlocks, prolong->d_P_prodBlocks,
+                            prolong->d_Z_prodBlocks);
+    prolong->update_after_smooth(); // update coarse weights for nonlinear problems by row-sums of P^T
+
+    // re-assemble usual kmat (proceed with multigrid solve after that..)
+    f_assembler.add_jacobian_fast(f_kmat);
+    f_assembler.apply_bcs(f_kmat);
+
+    // TODO: maybe don't do this call here (or eventually merge into that API)?
+    // I do that explicitly right now..
+    // kmg->template init_prolongations<Basis>();
+
+    // ===========================================
+    // end of locking aware prolongation
+    // ===========================================
 
     auto end0 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> startup_time = end0 - start0;
@@ -173,8 +245,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
     bool print = true;
     // bool print = false;
     T atol = 1e-6, rtol = 1e-6;
-    // bool double_smooth = false;
-    bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
+    bool double_smooth = false;
+    // bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
 
     int n_cycles = 500; // max # cycles
     int print_freq = 3;
@@ -220,13 +292,14 @@ void direct_solve(int nxe, double SR) {
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
 
-    int nhe = nxe;
-    double L = 1.0, R = 0.5, thick = L / SR;
-    double E = 70e9, nu = 0.3;
-    // double rho = 2500, ys = 350e6;
-    bool imperfection = false; // option for geom imperfection
-    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-    auto assembler = createCylinderAssembler<Assembler>(nxe, nhe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
+    int c_nxe = nxe;
+    int c_nye = c_nxe;
+    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+    int nxe_per_comp = c_nxe / 4, nye_per_comp = c_nye/4; // for now (should have 25 grids)
+    auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+    double Q = 1.0; // load magnitude
+    T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+    printf("making grid with nxe %d\n", c_nxe);
 
     // BSR symbolic factorization
     // must pass by ref to not corrupt pointers
@@ -236,11 +309,6 @@ void direct_solve(int nxe, double SR) {
     bsr_data.AMD_reordering();
     bsr_data.compute_full_LU_pattern(fillin, print);
     assembler.moveBsrDataToDevice();
-
-    // get the loads
-    constexpr bool compressive = false;
-    double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderLoads<T, Basis, Physics, compressive>(nxe, nhe, L, R, Q);
 
     auto loads = assembler.createVarsVec(my_loads);
     assembler.apply_bcs(loads);
@@ -252,7 +320,9 @@ void direct_solve(int nxe, double SR) {
     auto vars = assembler.createVarsVec();
 
     // assemble the kmat
-    assembler.add_jacobian(res, kmat);
+    assembler.add_jacobian_fast(kmat);
+    assembler.add_residual_fast(res);
+    // assembler.add_jacobian(res, kmat);
     assembler.apply_bcs(res);
     assembler.apply_bcs(kmat);
 
@@ -268,11 +338,11 @@ void direct_solve(int nxe, double SR) {
     size_t bytes_per_double = sizeof(double);
     double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
     int ndof = assembler.get_num_vars();
-    printf("cylinder direct solve, ndof %d : solve time %.2e, with mem (MB) %.2e\n", ndof, solve_time.count(), mem_mb);
+    printf("plate direct solve, ndof %d : solve time %.2e, with mem (MB) %.2e\n", ndof, solve_time.count(), mem_mb);
 
     // print some of the data of host residual
     auto h_soln = soln.createHostVec();
-    printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/cylinder.vtk");
+    printToVTK<Assembler,HostVec<T>>(assembler, h_soln, "out/plate.vtk");
 }
 
 template <typename T, class Assembler>
@@ -290,16 +360,12 @@ int main(int argc, char **argv) {
     // int nxe = 256; // default value
     int nxe = 32; // for comparison with python GMG
     double SR = 100.0; // default
-    // int n_vcycles = 50;
     double omega = 0.2; // smaller omega for ASW
 
     int nsmooth = 4; // typically faster right now
     int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     // std::string cycle_type = "V"; // "V", "F", "W", "K"
-
-    std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
-    // std::string elem_type = "CFI4";
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -376,21 +442,10 @@ int main(int argc, char **argv) {
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
     printf("cylinder mesh with %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
-    if (elem_type == "MITC4") {
-        using Basis = LagrangeQuadBasis<T, Quad, 1>;
-        using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, omega, cycle_type);
-    } else if (elem_type == "CFI4") {
-        using Basis = ChebyshevQuadBasis<T, Quad, 1>;
-        using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, omega, cycle_type);
-    } else if (elem_type == "CFI9") {
-        using Basis = ChebyshevQuadBasis<T, Quad, 2>;
-        using Assembler = FullyIntegratedShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-        gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, omega, cycle_type);
-    } else {
-        printf("ERROR : didn't run anything, elem type not in available types (see main function)\n");
-    }
+    using Basis = LagrangeQuadBasis<T, Quad, 1>;
+    using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
+    gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, omega, cycle_type);
+    
 
     return 0;
 
