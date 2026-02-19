@@ -30,7 +30,8 @@ parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid
 parser.add_argument("--coupled", type=int, default=3, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
-parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
+parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps for MG smoother")
+parser.add_argument("--nprolong", type=int, default=10, help="number of smoothing steps for prolongator")
 parser.add_argument("--omega", type=float, default=1.0, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='supp_asw', help="--smooth : [gs, asw, supp_asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
@@ -114,6 +115,7 @@ elif args.elem == 'mitc_lp':
         # prolong_mode='locking-global', # best..
         prolong_mode='locking-local', # working reasonably..
         # prolong_mode='standard',
+        omega=0.5,
         # lam=1e-12,
         lam=1e-8,
         # lam=1e-6,
@@ -122,8 +124,22 @@ elif args.elem == 'mitc_lp':
         # lam=1.0,
         # n_lock_sweeps=4,
         # n_lock_sweeps=8,
-        n_lock_sweeps=10,
+        # n_lock_sweeps=10, # default,
+        n_lock_sweeps=args.nprolong,
         # n_lock_sweeps=20,
+        # n_lock_sweeps=30,
+    )
+
+elif args.elem == 'mitc_ep':
+    ELEMENT = MITCPlateElement_OptProlong(
+        prolong_mode='energy-jacobi',
+        omega=0.5,
+        # omega=0.7,
+        # n_lock_sweeps=4,
+        # n_lock_sweeps=8,
+        # n_lock_sweeps=10,
+        # n_lock_sweeps=10, # default,
+        n_lock_sweeps=args.nprolong,
         # n_lock_sweeps=30,
     )
 
@@ -205,6 +221,11 @@ if 'mg' in args.solve:
             load_fcn=load_fcn,
         )
         grid._assemble_system()
+
+        if args.elem == 'mitc_ep':
+            # add kmat into kmat cache for the element
+            ELEMENT._kmat_cache[nxe // 2] = grid.kmat.copy()
+
         grids += [grid]
         if args.smoother == 'gs':
             smoother = BlockGaussSeidel.from_assembler(
@@ -301,7 +322,8 @@ elif args.solve == 'vmg':
                                     # line_search=True,
                                     debug=args.debug,
                                     # nvcycles=100,
-                                    nvcycles=1000,
+                                    nvcycles=200,
+                                    # nvcycles=1000,
                                     rtol=1e-6,
                                     smoothers=smoothers)
 
@@ -338,7 +360,8 @@ elif args.solve == 'kmg':
 
         assembler, nsteps = right_pcg2(
             A=assembler.kmat, b=assembler.force,
-            M=pc, rtol=1e-6, atol=1e-12
+            M=pc, rtol=1e-6, atol=1e-12,
+            max_iter=200,
         )
 
     total_vcyc = vmg2.total_vcycles

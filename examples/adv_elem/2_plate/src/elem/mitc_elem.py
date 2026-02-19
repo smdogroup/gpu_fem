@@ -27,8 +27,9 @@ class MITCPlateElement_OptProlong:
         a: float = 1.0 / np.sqrt(3.0),        # typical choice consistent w/ 2x2 Gauss
         b: float = 1.0 / np.sqrt(3.0),
         n_lock_sweeps:int=10,
+        omega:float=0.5,
     ):
-        assert prolong_mode in ["locking-global", "locking-local", "standard"]
+        assert prolong_mode in ["locking-global", "locking-local", "standard", "energy-jacobi"]
 
         self.dof_per_node = 3
         self.nodes_per_elem = 4
@@ -38,6 +39,7 @@ class MITCPlateElement_OptProlong:
         self.clamped = False
         self.lam = float(lam)
         self.n_lock_sweeps = n_lock_sweeps
+        self.omega = float(omega)
 
         self.a = float(a)
         self.b = float(b)
@@ -48,6 +50,7 @@ class MITCPlateElement_OptProlong:
         self._P2_cache = {}   # key: nxe_coarse -> P2 (csr)
         self._P2_u3_cache = {}
         self._lock_P_cache = {}
+        self._kmat_cache = {}
 
     # ----------------------------
     # MITC helpers
@@ -2202,6 +2205,97 @@ class MITCPlateElement_OptProlong:
         self._lock_P_cache[cache_key] = P.copy()
         return P
 
+    def _energy_smooth_jacobi_v1(
+        self,
+        nxe_c: int,
+        length: float = 1.0,
+        n_sweeps: int = 10,
+        omega: float = 0.7,
+        with_fillin: bool = False,
+        use_mask: bool = True,
+    ):
+        """
+        Standard K-matrix energy smoothing in Jacobi-preconditioned space:
+            P <- P - omega * D^{-1} (K P)
+
+        - K is taken from: self._kmat_cache[nxe_c]   (you provide it)
+        - Optional fixed sparsity: mask = pattern(K@P) computed once initially.
+        - Cache key is ONLY nxe_c (simple).
+        """
+
+        import numpy as np
+        import scipy.sparse as sp
+
+        # simple cache: ONLY keyed by nxe_c
+        cache_key = ("energy_smooth_jacobi_v1", int(nxe_c))
+        if cache_key in self._lock_P_cache:
+            return self._lock_P_cache[cache_key]
+
+        # baseline P0
+        P0 = self._build_P2_uncoupled3(nxe_c)
+        P0 = self._apply_bcs_to_P(P0, nxe_c)
+        P = P0.tocsr()
+
+        # kmat from cache
+        if not hasattr(self, "_kmat_cache") or (int(nxe_c) not in self._kmat_cache):
+            raise RuntimeError("Expected self._kmat_cache[nxe_c] to exist for energy smoothing.")
+        K = self._kmat_cache[int(nxe_c)]
+        K = K.tocsr() if sp.isspmatrix(K) else sp.csr_matrix(K)
+
+        # Jacobi block inverse (3x3 nodal blocks)
+        bs = 3
+        N = K.shape[0]
+        if (N % bs) != 0 or K.shape[1] != N:
+            raise ValueError(f"kmat must be square with size multiple of 3, got {K.shape}")
+        nblk = N // bs
+
+        Kb = K.tobsr(blocksize=(bs, bs))
+        diag_inv = np.zeros((nblk, bs, bs), dtype=float)
+        for i in range(nblk):
+            s, e = Kb.indptr[i], Kb.indptr[i + 1]
+            cols = Kb.indices[s:e]
+            data = Kb.data[s:e]  # (nblocks_in_row, bs, bs)
+            k = np.searchsorted(cols, i)
+            if k >= cols.size or cols[k] != i:
+                raise RuntimeError("Missing diagonal 3x3 block in kmat.")
+            Db = data[k]
+            Db = 0.5 * (Db + Db.T)
+            diag_inv[i] = np.linalg.inv(Db)
+
+        Dinv = sp.bsr_matrix(
+            (diag_inv, np.arange(nblk, dtype=np.int32), np.arange(nblk + 1, dtype=np.int32)),
+            shape=(N, N),
+            blocksize=(bs, bs),
+        ).tocsr()
+
+        # fixed sparsity mask from initial K@P
+        mask = None
+        if (not with_fillin) and use_mask:
+            mask = ((K @ P) != 0).astype(np.int8)
+
+        def control(Z):
+            if mask is None:
+                return Z
+            if not sp.issparse(Z):
+                Z = sp.csr_matrix(Z)
+            return Z.multiply(mask)
+
+        P = control(P)
+
+        # Jacobi-preconditioned energy smoothing: P <- P - omega * Dinv * (K P)
+        if with_fillin or (mask is None):
+            for _ in range(int(n_sweeps)):
+                KP = K @ P
+                P = P - float(omega) * (Dinv @ KP)
+        else:
+            for _ in range(int(n_sweeps)):
+                KP = control(K @ P)
+                P = control(P - float(omega) * (Dinv @ KP))
+
+        P_out = P.toarray()
+        self._lock_P_cache[cache_key] = P_out
+        return P_out
+
 
     def prolongate(self, coarse_u: np.ndarray, nxe_coarse: int):
         dpn = self.dof_per_node
@@ -2218,18 +2312,16 @@ class MITCPlateElement_OptProlong:
             # method = self._locking_aware_prolong_global_mitc_v2
             P = method(nxe_coarse, length=1.0)
         elif self.prolong_mode == 'locking-local':
-            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
-            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.7)
-            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=1.0)
-            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=1.5)
-            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
-            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.7)
+            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
+            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
 
             # new one!
-            P = self._locking_aware_prolong_local_mitc_v3_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
+            P = self._locking_aware_prolong_local_mitc_v3_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
         elif self.prolong_mode == "standard":
             P = self._build_P2_uncoupled3(nxe_coarse)
             P = self._apply_bcs_to_P(P, nxe_coarse)
+        elif self.prolong_mode == "energy-jacobi":
+            P = self._energy_smooth_jacobi_v1(nxe_coarse, n_sweeps=self.n_lock_sweeps, omega=self.omega)
         else:
             raise NotImplementedError("locking-local not implemented in this prototype")
 
@@ -2253,18 +2345,16 @@ class MITCPlateElement_OptProlong:
             # method = self._locking_aware_prolong_global_mitc_v2
             P = method(nxe_coarse, length=1.0)
         elif self.prolong_mode == 'locking-local':
-            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
-            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.7)
-            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=1.0)
-            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=1.5)
-            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
-            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.7)
+            # P = self._locking_aware_prolong_local_mitc_v1(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
+            # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
 
             # new one!
-            P = self._locking_aware_prolong_local_mitc_v3_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=0.5)
+            P = self._locking_aware_prolong_local_mitc_v3_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
         elif self.prolong_mode == "standard":
             P = self._build_P2_uncoupled3(nxe_coarse)
             P = self._apply_bcs_to_P(P, nxe_coarse)
+        elif self.prolong_mode == "energy-jacobi":
+            P = self._energy_smooth_jacobi_v1(nxe_coarse, n_sweeps=self.n_lock_sweeps, omega=self.omega)
         else:
             raise NotImplementedError("locking-local not implemented in this prototype")
 
