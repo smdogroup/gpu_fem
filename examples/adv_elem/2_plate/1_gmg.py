@@ -115,7 +115,10 @@ elif args.elem == 'mitc_lp':
         # prolong_mode='locking-global', # best..
         prolong_mode='locking-local', # working reasonably..
         # prolong_mode='standard',
-        omega=0.5,
+        # omega=0.4, # needed smaller omega for coarser mesh (in general should use CG-Lanczos to get spectral radius.. helps)
+        omega=0.5, # nope nvm 0.5 was better
+        # omega=0.6,
+        # omega=0.7,
         # lam=1e-12,
         lam=1e-8,
         # lam=1e-6,
@@ -133,7 +136,8 @@ elif args.elem == 'mitc_lp':
 elif args.elem == 'mitc_ep':
     ELEMENT = MITCPlateElement_OptProlong(
         prolong_mode='energy-jacobi',
-        omega=0.5,
+        # omega=0.4, # needed smaller omega for coarser mesh (in general should use CG-Lanczos to get spectral radius.. helps)
+        omega=0.5, # NOPE nvm, 0.5 is better
         # omega=0.7,
         # n_lock_sweeps=4,
         # n_lock_sweeps=8,
