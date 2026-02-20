@@ -493,21 +493,21 @@ class LockingChebyshevSmoother : public BaseSolver {
             // iteration starts by first computing z_1 so k=1 (as z_0 = 0)
             for (int k = 1; k < SMOOTH_ORDER + 1; k++) {
                 // int k = 1; // just do jacobi smoothing here for matrix
+                Z_mat->zeroValues();
 
                 dim3 add_block(64);
                 dim3 DP_grid(P_nnzb);
 
-                // add RHS into Z matrix
-                T scale = 1.0;
+                // add RHS into Z matrix (with same scale as -K*P part)
+                T beta_k = (8.0 * k - 4.0) / (2.0 * k + 1.0);
+                T a = omega / spectral_radius * beta_k;
                 k_add_colored_submat_PFP<T>
-                    <<<DP_grid, add_block>>>(P_nnzb, block_dim, scale, 0, d_RHS_vals, d_Z_vals);
+                    <<<DP_grid, add_block>>>(P_nnzb, block_dim, a, 0, d_RHS_vals, d_Z_vals);
 
                 // compute -omega/rho(Dinv*A) * beta_k * A*P into Z first (scaled prolong defect
                 // matrix). This mat product is fixed sparsity.
-                Z_mat->zeroValues();
+                a = -a;  // swap sign here so it's omega*const*(RHS - K*P_k)
                 dim3 PKP_block(216), PKP_grid(nnzb_prod);
-                T beta_k = (8.0 * k - 4.0) / (2.0 * k + 1.0);
-                T a = -omega / spectral_radius * beta_k;
                 k_compute_mat_mat_prod<T><<<PKP_grid, PKP_block>>>(
                     nnzb_prod, block_dim, a, d_K_prodblocks, d_P_prodblocks, d_Z_prodblocks,
                     d_kmat_vals, d_P_vals, d_Z_vals);
@@ -529,9 +529,9 @@ class LockingChebyshevSmoother : public BaseSolver {
                 // }
 
                 // add Z into P (the prolongation update)
-                scale = 1.0;
+                a = 1.0;
                 k_add_colored_submat_PFP<T>
-                    <<<DP_grid, add_block>>>(P_nnzb, block_dim, scale, 0, d_Z_vals, d_P_vals);
+                    <<<DP_grid, add_block>>>(P_nnzb, block_dim, a, 0, d_Z_vals, d_P_vals);
 
                 // now copy Z into Zprev (no longer doing cause not higher order)
                 // Z_mat->copyValuesTo(*Zprev_mat);

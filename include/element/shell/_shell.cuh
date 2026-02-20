@@ -409,8 +409,8 @@ __GLOBAL__ static void k_add_lockstrain_fc_jacobian_fast(
     int cols_per_elem, Vec<int32_t> elem_comp, 
     Vec<int32_t> fine_geo_conn, Vec<int32_t> fine_vars_conn, 
     Vec<int32_t> coarse_geo_conn, Vec<int32_t> coarse_vars_conn,
-    Vec<T> fine_xpts, Vec<T> coarse_xpts,
-    Vec<T> fine_vars, Vec<T> coarse_vars, 
+    Vec<T> fine_xpts, Vec<T> fine_vars, 
+    Vec<T> coarse_xpts, Vec<T> coarse_vars, 
     Vec<Data> compData, Mat mat) {
 
     using Geo = typename ElemGroup::Geo;
@@ -496,42 +496,48 @@ __GLOBAL__ static void k_add_lockstrain_fc_jacobian_fast(
     T fine_fn[nxpts_per_elem];
     ShellComputeNodeNormals<T, Basis>(block_fine_xpts[local_elem], fine_fn);
     T coarse_fn[nxpts_per_elem];
-    ShellComputeNodeNormals<T, Basis>(block_coarse_xpts[local_elem], coarse_fn);
-    // T detXd = getDetXd<T, Basis>(pt, block_coarse_xpts[local_elem], fine_fn);
-    // T scale = detXd * weight; // scale for energy derivatives
-    // __syncthreads();
-    // T fine_XdinvT[9], fine_Tmat[9], fine_XdinvzT[9];
-    // computeShellRotations<T, Basis, Data>(pt, block_data[local_elem].refAxis, block_fine_xpts[local_elem], 
-    //     fine_fn, fine_Tmat, fine_XdinvT, fine_XdinvzT);
-    // T coarse_XdinvT[9], coarse_Tmat[9], coarse_XdinvzT[9];
-    // computeShellRotations<T, Basis, Data>(pt, block_data[local_elem].refAxis, block_coarse_xpts[local_elem], 
-    //     coarse_fn, coarse_Tmat, coarse_XdinvT, coarse_XdinvzT);
-    // __syncthreads();
+    ShellComputeNodeNormals<T, Basis>(block_coarse_xpts[local_elem], coarse_fn); // got here when failed last time
+    T detXd = getDetXd<T, Basis>(pt, block_coarse_xpts[local_elem], fine_fn);
+    T scale = detXd * weight; // scale for energy derivatives
+    __syncthreads();
+    T fine_XdinvT[9], fine_Tmat[9], fine_XdinvzT[9];
+    computeShellRotations<T, Basis, Data>(pt, block_data[local_elem].refAxis, block_fine_xpts[local_elem], 
+        fine_fn, fine_Tmat, fine_XdinvT, fine_XdinvzT);
+    T coarse_XdinvT[9], coarse_Tmat[9], coarse_XdinvzT[9];
+    computeShellRotations<T, Basis, Data>(pt, block_data[local_elem].refAxis, block_coarse_xpts[local_elem], 
+        coarse_fn, coarse_Tmat, coarse_XdinvT, coarse_XdinvzT);
+    __syncthreads();
 
-    // T p_vars[vars_per_elem];
-    // memset(p_vars, 0.0, sizeof(T) * vars_per_elem);
-    // p_vars[ideriv] = 1.0;
+    T p_vars[vars_per_elem];
+    memset(p_vars, 0.0, sizeof(T) * vars_per_elem);
+    p_vars[ideriv] = 1.0;
 
-    // // compute tying strains (fine-coarse version)
-    // // since we are doing matRow not matCol (because more efficient on GPU), p_vars now represents fine 
-    // // and output mat_row is like coarse dim
-    // ElemGroup::template add_element_lockstrain_fc_jacobian_row_fast<Data, TYING>(
-    //     pt, scale, 
-    //     block_fine_xpts[local_elem], block_coarse_xpts[local_elem], 
-    //     fine_fn, coarse_fn,
-    //     fine_XdinvT, fine_Tmat, fine_XdinvzT, 
-    //     coarse_XdinvT, coarse_Tmat, coarse_XdinvzT, 
-    //     block_data[local_elem],
-    //     block_fine_vars[local_elem], block_coarse_vars[local_elem],
-    //     p_vars, local_mat_row);
-    // __syncthreads();
+    // compute tying strains (fine-coarse version)
+    // since we are doing matRow not matCol (because more efficient on GPU), p_vars now represents fine 
+    // and output mat_row is like coarse dim
+    ElemGroup::template add_element_lockstrain_fc_jacobian_row_fast<Data, TYING>(
+        pt, scale, 
+        block_fine_xpts[local_elem], block_coarse_xpts[local_elem], 
+        fine_fn, coarse_fn,
+        fine_XdinvT, fine_Tmat, fine_XdinvzT, 
+        coarse_XdinvT, coarse_Tmat, coarse_XdinvzT, 
+        block_data[local_elem],
+        block_fine_vars[local_elem], block_coarse_vars[local_elem],
+        p_vars, local_mat_row);
+    __syncthreads();
 
-    // // no quadrature point sum here (uses tying points instead)
-    // // need to add properly as elemMatCol instead of elemMatRow (transpose trick) into prolong matrix
-    // // P = G_f^T * P_gam * G_c + lam * P_0   is not symmetric [F,C] dimensions
-    // int elem_block_row = ideriv / Phys::vars_per_node;
-    // int elem_inner_row = ideriv % Phys::vars_per_node;
-    // mat.addElementMatRow(true, elem_block_row, elem_inner_row, global_elem, 0, 1,
-    //     Phys::vars_per_node, Basis::num_nodes, fine_vars_elem_conn, local_mat_row);
+    // if (threadIdx.y == 0 && blockIdx.x == 0) {
+    //     printf("local_mat_row: ");
+    //     printVec<T>(24, local_mat_row);
+    // }
+    // return;
+
+    // no quadrature point sum here (uses tying points instead)
+    // need to add properly as elemMatCol instead of elemMatRow (transpose trick) into prolong matrix
+    // P = G_f^T * P_gam * G_c + lam * P_0   is not symmetric [F,C] dimensions
+    int elem_block_row = ideriv / Phys::vars_per_node;
+    int elem_inner_row = ideriv % Phys::vars_per_node;
+    mat.addElementMatRow(true, elem_block_row, elem_inner_row, global_elem, 0, 1,
+        Phys::vars_per_node, Basis::num_nodes, fine_vars_elem_conn, local_mat_row);
 
 }  // end of k_add_lockstrain_fc_jacobian_fast

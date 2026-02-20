@@ -22,13 +22,17 @@ class LockingAwareUnstructuredProlongation {
     static constexpr bool structured = true;
     static constexpr bool assembly = true;
     static constexpr bool is_bsr = true;  // uses full BSR matrix (no CSR)
-    static constexpr bool smoothed = true;
+    // static constexpr bool smoothed = true;
+    // technically is smoothed but put false for now, so doesn't try to call missing smoothMatrix
+    // API, TODO is fix this here
+    static constexpr bool smoothed = false;
 
     LockingAwareUnstructuredProlongation(cusparseHandle_t &cusparseHandle_,
                                          Assembler &fine_assembler_, int ELEM_MAX_ = 10)
         : handle(cusparseHandle_) {
         fine_assembler = fine_assembler_;
         ELEM_MAX = ELEM_MAX_;
+        has_init_coarse = false;
 
         // init some data from fine assembler, and other startup
         block_dim = fine_assembler.getBsrData().block_dim;
@@ -47,7 +51,15 @@ class LockingAwareUnstructuredProlongation {
         // assemble_matrices(); // reassemble matrices?
     }
 
-    void init_coarse_data(Assembler &coarse_assembler_, int *h_fc_elem_map_) {
+    void init_coarse_data(Assembler &coarse_assembler_) {
+        // main call, TBD (see call below done customly for now)
+    }
+
+    void init_coarse_data_manual(Assembler &coarse_assembler_, int *h_fc_elem_map_) {
+        // TBD : make this use main API above later..
+        if (has_init_coarse) return;
+        has_init_coarse = true;
+
         coarse_assembler = coarse_assembler_;
         h_fc_elem_map = h_fc_elem_map_;
         d_coarse_iperm = coarse_assembler.getBsrData().iperm;
@@ -268,7 +280,9 @@ class LockingAwareUnstructuredProlongation {
         h_P_bsr_data.elem_conn = h_fine_conn;
         h_P_bsr_data.cols_elem_conn = h_coarse_conn;
         h_P_bsr_data.rc_elem_map = h_fc_elem_map;
-        h_P_bsr_data.nodes_per_elem = 4;
+        int nodes_per_elem = 4;
+        h_P_bsr_data.nodes_per_elem = nodes_per_elem;
+        h_P_bsr_data.n_eim = h_P_bsr_data.nelems * nodes_per_elem * nodes_per_elem;
 
         auto c_bsr_data = coarse_assembler.getBsrData();
         int c_nnodes = coarse_assembler.get_num_nodes();
@@ -276,6 +290,8 @@ class LockingAwareUnstructuredProlongation {
         int *h_ciperm = DeviceVec<int>(c_nnodes, c_bsr_data.iperm).createHostVec().getPtr();
         h_P_bsr_data.c_perm = h_cperm;
         h_P_bsr_data.c_iperm = h_ciperm;
+        h_P_bsr_data.mb = nnodes_fine;
+        h_P_bsr_data.nb = nnodes_coarse;
 
         printf("make P bsr data for FC-matrix\n");
         P_bsr_data = h_P_bsr_data.createDeviceBsrData();
@@ -349,6 +365,7 @@ class LockingAwareUnstructuredProlongation {
     // Zmat is temp matrix for smoothing
     // BsrMat<DeviceVec<T>> *prolong_mat, *Z_mat, *Zprev_mat;
     BsrMat<DeviceVec<T>> *prolong_mat, *Z_mat, *RHS_mat;
+    BsrMat<DeviceVec<T>> *Zprev_mat;  // unused Zprev now
 
     // pointers for mat-mat smoothing
     int *h_P_rowp, *h_P_cols;  // final fillin version A*P sparsity
@@ -377,4 +394,6 @@ class LockingAwareUnstructuredProlongation {
     int *d_coarse_iperm, *d_fine_iperm;
     int nnodes_fine, block_dim, block_dim2, N_fine;
     int nnodes_coarse, N_coarse;
+
+    bool has_init_coarse;
 };

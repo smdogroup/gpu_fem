@@ -35,8 +35,8 @@
 #include "multigrid/solvers/multilevel/twolevel.h"
 
 // local utils
-#include "include/lock_prolongation.h"
-#include "include/lock_smoother.h"
+#include "../2_plate/include/lock_prolongation.h"
+#include "../2_plate/include/lock_smoother.h"
 
 /* command line args:
     [direct/mg] [--nxe int] [--SR float] [--nvcyc int]
@@ -104,12 +104,17 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
     // make each grid
     for (int c_nxe = nxe; c_nxe >= nxe_min; c_nxe /= 2) {
         // make the assembler
-        int c_nye = c_nxe;
-        double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
-        int nxe_per_comp = c_nxe, nye_per_comp = c_nye; // for now (should have 25 grids)
-        auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+        int c_nhe = c_nxe;
+        double L = 1.0, R = 0.5, thick = L / SR;
+        double E = 70e9, nu = 0.3;
+        // double rho = 2500, ys = 350e6;
+        bool imperfection = false; // option for geom imperfection
+        int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
+        auto assembler = createCylinderAssembler<Assembler>(c_nxe, c_nhe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
+        constexpr bool compressive = false;
+        const int load_case = 3; // petal and chirp load
         double Q = 1.0; // load magnitude
-        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+        T *my_loads = getCylinderLoads<T, Basis, Physics, load_case>(c_nxe, c_nhe, L, R, Q);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -170,7 +175,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
 
         printf("Step 0 : get fine grid data on grid %d\n", i);
         // register the coarse assemblers to the prolongations..
-        double lam = 1e-12; // see python locking script
+        // double lam = 1e-12; // see python locking script
+        double lam = 1e-6;
         // if (is_kcycle) {
         // clear and re-assemble kmat to hold G_f^T G_f + lam * I
         auto &f_assembler = grids[i].assembler;
@@ -234,8 +240,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
 
         // do jacobi smoothing of P_0 => P matrix using kmat and rhs
         printf("Step 7 - perform block-Jacobi smoothing using locking energy for the prolongator\n");
-        // T omega_p = 0.5; // omega for prolongation
-        T omega_p = 0.3;
+        T omega_p = 0.5; // omega for prolongation
+        // T omega_p = 0.3;
+        // T omega_p = 0.1;
         auto lock_smoother = new LockingSmoother(cublasHandle, cusparseHandle, f_assembler, f_kmat, omega_p);
         // TBD : See unstruct prolongation class
         // use new ./include/lock_prolongation.h class here
@@ -324,14 +331,13 @@ void direct_solve(int nxe, double SR) {
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
 
-    int c_nxe = nxe;
-    int c_nye = c_nxe;
-    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
-    int nxe_per_comp = c_nxe / 4, nye_per_comp = c_nye/4; // for now (should have 25 grids)
-    auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
-    double Q = 1.0; // load magnitude
-    T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
-    printf("making grid with nxe %d\n", c_nxe);
+    int nhe = nxe;
+    double L = 1.0, R = 0.5, thick = L / SR;
+    double E = 70e9, nu = 0.3;
+    // double rho = 2500, ys = 350e6;
+    bool imperfection = false; // option for geom imperfection
+    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
+    auto assembler = createCylinderAssembler<Assembler>(nxe, nhe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
 
     // BSR symbolic factorization
     // must pass by ref to not corrupt pointers
@@ -341,6 +347,11 @@ void direct_solve(int nxe, double SR) {
     bsr_data.AMD_reordering();
     bsr_data.compute_full_LU_pattern(fillin, print);
     assembler.moveBsrDataToDevice();
+
+    // get the loads
+    constexpr bool compressive = false;
+    double Q = 1.0; // load magnitude
+    T *my_loads = getCylinderLoads<T, Basis, Physics, compressive>(nxe, nhe, L, R, Q);
 
     auto loads = assembler.createVarsVec(my_loads);
     assembler.apply_bcs(loads);

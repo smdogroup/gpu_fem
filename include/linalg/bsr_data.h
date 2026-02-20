@@ -47,12 +47,13 @@ class BsrData {
         // default
         c_perm = perm, c_iperm = iperm;
         cols_elem_conn = nullptr, rc_elem_map = nullptr;
+        mb = nnodes, nb = nnodes;
     }
 
-    __HOST__ BsrData(const int mb, const int block_dim, const int nnzb, index_t *rowp,
+    __HOST__ BsrData(const int mb_, const int block_dim, const int nnzb, index_t *rowp,
                      index_t *cols, int *perm = nullptr, int *iperm = nullptr, bool host = true)
         : nnzb(nnzb),
-          nnodes(mb),
+          nnodes(mb_),
           nodes_per_elem(0),
           rowp(rowp),
           cols(cols),
@@ -87,6 +88,7 @@ class BsrData {
         // default
         c_perm = perm, c_iperm = iperm;
         cols_elem_conn = nullptr, rc_elem_map = nullptr;
+        mb = mb_, nb = mb_;
     }
 
     /* length of values array */
@@ -279,6 +281,10 @@ class BsrData {
         iperm = su_mat2->iperm;
         // perm = su_mat2->iperm;  // my reordering definition is flipped from sparse utils
         // iperm = su_mat2->perm;
+
+        // copy to coarse
+        c_perm = perm;
+        c_iperm = iperm;
     }
 
     static int _get_avail_color(std::vector<int> my_adj_colors, int min_color = 0) {
@@ -598,6 +604,9 @@ class BsrData {
             iperm[k] = _new_perm[k];
         }
         if (_new_perm) delete[] _new_perm;
+
+        c_perm = perm;
+        c_iperm = iperm;
     }
 
     __HOST__ void qorder_reordering(double p_factor, bool print = true) {
@@ -660,6 +669,9 @@ class BsrData {
             // iperm[i] = q_perm[i];
             // perm[q_perm[i]] = i;
         }
+
+        c_perm = perm;
+        c_iperm = iperm;
     }
 
     __HOST__ void random_reordering() {
@@ -685,6 +697,9 @@ class BsrData {
         // printVec<int>(nnodes, perm);
         // printf("iperm: ");
         // printVec<int>(nnodes, iperm);
+
+        c_perm = perm;
+        c_iperm = iperm;
     }
 
     __HOST__ void _compute_symbolic_maps_for_gpu() {
@@ -830,7 +845,7 @@ class BsrData {
            so compute here the the sparsity maps of the transpose matrix */
 
         // get transpose rowp, cols of BSR matrix
-        auto su_mat = SparseUtils::BSRMat<double, 1, 1>(nnodes, nnodes, nnzb, rowp, cols, nullptr);
+        auto su_mat = SparseUtils::BSRMat<double, 1, 1>(mb, nb, nnzb, rowp, cols, nullptr);
         auto su_mat_transpose = SparseUtils::BSRMatMakeTransposeSymbolic(su_mat);
         tr_rowp = su_mat_transpose->rowp;
         tr_cols = su_mat_transpose->cols;
@@ -840,7 +855,7 @@ class BsrData {
         tr_block_map = new int32_t[nnzb];
         int32_t *temp_col_local_block_ind_ctr = new int32_t[nnodes];
         memset(temp_col_local_block_ind_ctr, 0, nnodes * sizeof(int32_t));
-        for (int block_row = 0; block_row < nnodes; block_row++) {
+        for (int block_row = 0; block_row < mb; block_row++) {
             for (int orig_block_ind = rowp[block_row]; orig_block_ind < rowp[block_row + 1];
                  orig_block_ind++) {
                 int32_t block_col = cols[orig_block_ind];
@@ -874,10 +889,10 @@ class BsrData {
 #endif
 
         // create HostVec wrapper objects in CUDA, transfer to device and get ptr for new object
-        DeviceVec<int> d_rowp(nnodes + 1, rowp), d_rows(nnzb, rows), d_cols(nnzb, cols),
-            d_perm(nnodes, perm), d_iperm(nnodes, iperm), d_elem_ind_map(n_eim, elem_ind_map),
-            d_tr_rowp(nnodes + 1, tr_rowp), d_tr_cols(nnzb, tr_cols),
-            d_tr_block_map(nnzb, tr_block_map), d_cperm(nnodes, c_perm), d_ciperm(nnodes, c_iperm);
+        DeviceVec<int> d_rowp(mb + 1, rowp), d_rows(nnzb, rows), d_cols(nnzb, cols),
+            d_perm(mb, perm), d_iperm(mb), d_elem_ind_map(n_eim, elem_ind_map),
+            d_tr_rowp(nb + 1, tr_rowp), d_tr_cols(nnzb, tr_cols),
+            d_tr_block_map(nnzb, tr_block_map), d_cperm(nb, c_perm), d_ciperm(nb, c_iperm);
         new_bsr.rowp = d_rowp.createHostVec().getPtr();
         new_bsr.rows = d_rows.createHostVec().getPtr();
         new_bsr.cols = d_cols.createHostVec().getPtr();
@@ -893,6 +908,8 @@ class BsrData {
         new_bsr.nelems = nelems;
         new_bsr.nodes_per_elem = nodes_per_elem;
         new_bsr.n_eim = n_eim;
+        new_bsr.mb = mb;
+        new_bsr.nb = nb;
 
         return new_bsr;
     }
@@ -913,6 +930,8 @@ class BsrData {
         new_bsr.nelems = this->nelems;
         new_bsr.nnodes = this->nnodes;
         new_bsr.host = false;
+        new_bsr.mb = mb;
+        new_bsr.nb = nb;
 
         // printf("create device bsrdata : host to device\n");
 
@@ -924,7 +943,7 @@ class BsrData {
             CHECK_CUDA(cudaMemcpy(d_elem_conn, elem_conn, nodes_per_elem * nelems * sizeof(int),
                                   cudaMemcpyHostToDevice));
 #endif
-            HostVec<int> h_elem_ind_map(n_eim, elem_ind_map), h_tr_rowp(nnodes + 1, tr_rowp),
+            HostVec<int> h_elem_ind_map(n_eim, elem_ind_map), h_tr_rowp(nb + 1, tr_rowp),
                 h_tr_cols(nnzb, tr_cols), h_tr_block_map(nnzb, tr_block_map);
             new_bsr.elem_ind_map = h_elem_ind_map.createDeviceVec().getPtr();
             new_bsr.tr_rowp = h_tr_rowp.createDeviceVec().getPtr();
@@ -933,9 +952,8 @@ class BsrData {
             new_bsr.elem_conn = d_elem_conn;
         }
 
-        HostVec<int> h_rowp(nnodes + 1, rowp), h_rows(nnzb, rows), h_cols(nnzb, cols),
-            h_perm(nnodes, perm), h_iperm(nnodes, iperm), h_cperm(nnodes, c_perm),
-            h_ciperm(nnodes, c_iperm);
+        HostVec<int> h_rowp(mb + 1, rowp), h_rows(nnzb, rows), h_cols(nnzb, cols), h_perm(mb, perm),
+            h_iperm(mb, iperm), h_cperm(nb, c_perm), h_ciperm(nb, c_iperm);
         new_bsr.rowp = h_rowp.createDeviceVec().getPtr();
         new_bsr.rows = h_rows.createDeviceVec().getPtr();
         new_bsr.cols = h_cols.createDeviceVec().getPtr();
