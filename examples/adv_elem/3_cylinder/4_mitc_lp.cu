@@ -240,10 +240,15 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
 
         // do jacobi smoothing of P_0 => P matrix using kmat and rhs
         printf("Step 7 - perform block-Jacobi smoothing using locking energy for the prolongator\n");
-        T omega_p = 0.5; // omega for prolongation
-        // T omega_p = 0.3;
+        // T omega_p = 0.5;
+        // T omega_p = 0.3; // omega for prolongation
         // T omega_p = 0.1;
+
+        T omega_p = 0.9;
         auto lock_smoother = new LockingSmoother(cublasHandle, cusparseHandle, f_assembler, f_kmat, omega_p);
+        // do CG-Lanczos for spectral radius
+        lock_smoother->setup_cg_lanczos(grids[i].d_defect, 10);
+
         // TBD : See unstruct prolongation class
         // use new ./include/lock_prolongation.h class here
         // int n_smooth_prolong = 6;
@@ -405,7 +410,7 @@ int main(int argc, char **argv) {
     double SR = 1e3; // default
     double omega = 0.2; // smaller omega for ASW
 
-    int nsmooth = 2; // typically faster right now
+    int nsmooth = 4; // typically faster right now
     int ninnercyc = 1;
     int nsmooth_mat = 2; // more iterations not converging yet
     // int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)
