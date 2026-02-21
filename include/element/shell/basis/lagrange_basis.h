@@ -292,8 +292,11 @@ class LagrangeQuadBasis {
     __HOST_DEVICE__ static void getTyingKnots(T red_knots[], T full_knots[]) {
         // reduced integration points (not the same as lagrange-lobatto)
         if constexpr (nx == 2) {
-            full_knots[0] = -1.0;
-            full_knots[1] = 1.0;
+            T a = 1.0;  // standard MITC
+            // T a = 1.0 / sqrt(3.0);  // debugging for lock-aware prolong
+
+            full_knots[0] = -a;
+            full_knots[1] = a;
 
             red_knots[0] = 0.0;
         }

@@ -133,7 +133,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
 
         // assemble the kmat
         auto start0 = std::chrono::high_resolution_clock::now();
-        assembler.add_jacobian(res, kmat);
+        // assembler.add_jacobian(res, kmat);
+        assembler.add_jacobian_fast(kmat);
         // assembler.apply_bcs(res);
         assembler.apply_bcs(kmat);
         CHECK_CUDA(cudaDeviceSynchronize());
@@ -400,7 +401,7 @@ int main(int argc, char **argv) {
 
     int nsmooth = 2; // typically faster right now
     int ninnercyc = 1;
-    int nsmooth_mat = 2; // more iterations not converging yet
+    int nsmooth_mat = 3; // more iterations not converging yet
     // int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     // std::string cycle_type = "V"; // "V", "F", "W", "K"

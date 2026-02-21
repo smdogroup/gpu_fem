@@ -110,6 +110,7 @@ fixed_cols_c = ELEMENT.fixed_cols_c
 solve_rows_f = ELEMENT.solve_rows_f
 P0_free = ELEMENT.P_0_free
 
+
 # truth, direct solve
 # this gives correct solution
 # X = np.linalg.solve(LHS, RHS) 

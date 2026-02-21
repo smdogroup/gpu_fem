@@ -10,7 +10,8 @@
 template <class Assembler>
 Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E, double nu,
                                double thick, double rho = 2500, double ys = 350e6,
-                               int nxe_per_comp = 1, int nye_per_comp = 1) {
+                               int nxe_per_comp = 1, int nye_per_comp = 1,
+                               bool theta_ss_bc = true) {
     using T = typename Assembler::T;
     using Basis = typename Assembler::Basis;
     using Geo = typename Assembler::Geo;
@@ -63,7 +64,11 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
     std::vector<int> my_bcs;
     // (0,0) corner with dof 123456
     for (int idof = 0; idof < vpn; idof++) {
-        my_bcs.push_back(idof);
+        if (idof == 3 || idof == 4) {
+            if (theta_ss_bc) my_bcs.push_back(idof);
+        } else {
+            my_bcs.push_back(idof);
+        }
     }
     // negative x2 (or y) edge with dof 23
     for (int ix = 1; ix < nnx; ix++) {
@@ -79,18 +84,18 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
                                   // coupling in nodal matrix (this is right)
         }
 
-        my_bcs.push_back(vpn * inode + offset + 1);  // dof 2 for v
-        my_bcs.push_back(vpn * inode + offset + 2);  // dof 3 for w
-        my_bcs.push_back(vpn * inode + offset + 4);  // dof 4 for thy
+        my_bcs.push_back(vpn * inode + offset + 1);                   // dof 2 for v
+        my_bcs.push_back(vpn * inode + offset + 2);                   // dof 3 for w
+        if (theta_ss_bc) my_bcs.push_back(vpn * inode + offset + 4);  // dof 4 for thy
     }
     // neg and pos x1 edges with dof 13 and 3 resp.
     for (int iy = 1; iy < nny; iy++) {
         // neg x1 edge
         int ix = 0;
         int inode = nnx * iy + ix;
-        my_bcs.push_back(vpn * inode + offset);      // u
-        my_bcs.push_back(vpn * inode + offset + 2);  // w
-        my_bcs.push_back(vpn * inode + offset + 3);  // dof 3 for thx
+        my_bcs.push_back(vpn * inode + offset);                       // u
+        my_bcs.push_back(vpn * inode + offset + 2);                   // w
+        if (theta_ss_bc) my_bcs.push_back(vpn * inode + offset + 3);  // dof 3 for thx
         if constexpr (IS_HR_ELEM) {
             my_bcs.push_back(vpn * inode + 0);  // v0 equiv to e11 strain-gap disp (zero like u)
             my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like u)
@@ -101,8 +106,8 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
         // pos x1 edge
         ix = nnx - 1;
         inode = nnx * iy + ix;
-        my_bcs.push_back(vpn * inode + offset + 2);  // corresp dof 3 for w
-        my_bcs.push_back(vpn * inode + offset + 3);  // corresp dof 3 for thx
+        my_bcs.push_back(vpn * inode + offset + 2);                   // corresp dof 3 for w
+        if (theta_ss_bc) my_bcs.push_back(vpn * inode + offset + 3);  // corresp dof 3 for thx
         // no HR constraints needed on positive edges
         if constexpr (IS_HR_ELEM) {
             // in-plane BCs a bit weird still (needed v12 or v1 = 0 on positive x1,x2 edges but not
@@ -118,8 +123,8 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
         int iy = nny - 1;
         int inode = nnx * iy + ix;
         // printf("new bc = %d\n", 6 * inode + 2);
-        my_bcs.push_back(vpn * inode + offset + 4);  // dof 5 for thy
-        my_bcs.push_back(vpn * inode + offset + 2);  // corresp dof 3 for w
+        if (theta_ss_bc) my_bcs.push_back(vpn * inode + offset + 4);  // dof 5 for thy
+        my_bcs.push_back(vpn * inode + offset + 2);                   // corresp dof 3 for w
         // no HR constraints needed on positive edges
         if constexpr (IS_HR_ELEM) {
             // my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
@@ -129,7 +134,7 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
     }
     // (+x1,+x2) corner node, add thy DOF
     int inode = nnx * (nny - 1) + nnx - 1;
-    my_bcs.push_back(vpn * inode + offset + 4);  // set thy DOF zero here too
+    if (theta_ss_bc) my_bcs.push_back(vpn * inode + offset + 4);  // set thy DOF zero here too
     if constexpr (IS_HR_ELEM) {
         // my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
         // my_bcs.push_back(vpn * inode + 2);  // v2 equiv to e22 strain-gap disp (zero like v)
@@ -137,14 +142,14 @@ Assembler createPlateAssembler(int nxe, int nye, double Lx, double Ly, double E,
     }
     // (-x1,+x2) corner node, top left
     inode = nnx * (nny - 1);
-    my_bcs.push_back(vpn * inode + offset + 4);  // set thy DOF zero here too
+    if (theta_ss_bc) my_bcs.push_back(vpn * inode + offset + 4);  // set thy DOF zero here too
     if constexpr (IS_HR_ELEM) {
         my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
         my_bcs.push_back(vpn * inode + 4);  // v4 equiv to gam23 strain-gap disp (like thy)
     }
     // (+x1,-x2) corner node, bottom right
     inode = nnx - 1;
-    my_bcs.push_back(vpn * inode + offset + 3);  // corresp dof 3 for thx
+    if (theta_ss_bc) my_bcs.push_back(vpn * inode + offset + 3);  // corresp dof 3 for thx
     if constexpr (IS_HR_ELEM) {
         my_bcs.push_back(vpn * inode + 1);  // v1 equiv to e12 strain-gap disp (zero like v)
         my_bcs.push_back(vpn * inode + 3);  // v3 equiv to gam13 strain-gap disp (like thx)

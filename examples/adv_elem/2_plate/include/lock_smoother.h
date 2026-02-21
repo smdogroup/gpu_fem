@@ -455,7 +455,52 @@ class LockingChebyshevSmoother : public BaseSolver {
         printf("spectral radius %.8e\n", spectral_radius);
     }
 
-    /* prolong matrix-smoothing area (AMG) */
+    // void debug_print_matrix(std::string mat_name, BsrMat<DeviceVec<T>> *mat) {
+    //     auto _bsr_data = mat->getBsrData();
+    //     int _nnodes = _bsr_data.mb;
+    //     int _nnzb = _bsr_data.nnzb;
+    //     int *h_rowp = DeviceVec<int>(_nnodes + 1, _bsr_data.rowp).createHostVec().getPtr();
+    //     int *h_rows = DeviceVec<int>(rhs_nnzb, _bsr_data.rows).createHostVec().getPtr();
+    //     int *h_cols = DeviceVec<int>(rhs_nnzb, _bsr_data.cols).createHostVec().getPtr();
+    //     T *h_vals = mat->getVec().createHostVec().getPtr();
+    //     printf("debug mat %s with nnzb %d\n", mat_name, rhs_nnzb);
+    //     printf("h_rowp: ");
+    //     printVec<int>(_nnodes + 1, h_rowp);
+    //     printf("h_rhs_cols: ");
+    //     printVec<int>(_nnzb, h_cols);
+    //     for (int iblock = 0; iblock < _nnzb; iblock++) {
+    //         T *block_vals = &h_vals[36 * iblock];
+    //         int node_row = h_rows[iblock], node_col = h_cols[iblock];
+    //         printf("\n\nlocking-p-rhs block node (%d,%d):\n", node_row, node_col);
+    //         // for (int i = 0; i < 6; i++) {
+    //         //     printf("\t");
+    //         //     printVec<T>(6, &block_vals[6 * i]);
+    //         // }
+    //         int keep_dof[3] = {2, 3, 4};
+    //         for (int i = 0; i < 3; i++) {
+    //             int j = keep_dof[i];
+    //             printf("\t");
+    //             for (int i2 = 0; i2 < 3; i2++) {
+    //                 int j2 = keep_dof[i2];
+    //                 // all vals here should be either {0, 0.25, 0.5, 1} so let's round it so I
+    //                 can
+    //                 // do quick compare
+    //                 T val = block_vals[6 * j +
+    //                                    j2];  // I checked and there are sometimes like 1e-7
+    //                                    errors
+    //                                          // because I do optimization of (xi,eta) pairs
+    //                 // val = std::round(val * 100) / 100; // rounds to two decimal places (so txt
+    //                 // file comparison will work better)
+    //                 printf("%.6e  ", val);
+    //             }
+    //             printf("\n");
+    //         }
+    //         printf("\n");
+    //     }
+    //     printf("\ndone with locking-p-rhs mat\n");
+    // }
+
+    /* prolong matrix-smoothing area (lock-aware GMG) */
 
     void smoothMatrix(int n_iters, BsrMat<DeviceVec<T>> *prolong_mat, BsrMat<DeviceVec<T>> *Z_mat,
                       BsrMat<DeviceVec<T>> *RHS_mat, int nnzb_prod, int *d_K_prodblocks,
@@ -500,7 +545,8 @@ class LockingChebyshevSmoother : public BaseSolver {
                 dim3 DP_grid(P_nnzb);
 
                 // add RHS into Z matrix (with same scale as -K*P part)
-                T beta_k = (8.0 * k - 4.0) / (2.0 * k + 1.0);
+                // T beta_k = (8.0 * k - 4.0) / (2.0 * k + 1.0);
+                T beta_k = 1.0;
                 T a = omega / spectral_radius * beta_k;
                 k_add_colored_submat_PFP<T>
                     <<<DP_grid, add_block>>>(P_nnzb, block_dim, a, 0, d_RHS_vals, d_Z_vals);
@@ -531,6 +577,7 @@ class LockingChebyshevSmoother : public BaseSolver {
 
                 // add Z into P (the prolongation update)
                 a = 1.0;
+                // a = -1.0;
                 k_add_colored_submat_PFP<T>
                     <<<DP_grid, add_block>>>(P_nnzb, block_dim, a, 0, d_Z_vals, d_P_vals);
 

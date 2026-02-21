@@ -53,16 +53,42 @@ class IsotropicShell {
         s[4] = As * e[4];
     }
 
-    __HOST_DEVICE__ static void computeIdentityTyingStress(const T &scale, 
-                                                   A2D::SymMat<T, 3> &e, A2D::SymMat<T, 3> &s) {
-        /* compute membrane + trv shear stresses from the tying strains (identity product for lockstrain lock-aware prolong) */
+    __HOST_DEVICE__ static void computeIdentityTyingStress(const T &scale, A2D::SymMat<T, 3> &e,
+                                                           A2D::SymMat<T, 3> &s) {
+        /* compute membrane + trv shear stresses from the tying strains (identity product for
+         * lockstrain lock-aware prolong) */
 
-        s[0] = scale * e[0];
-        s[1] = scale * e[1];
-        s[2] = scale * e[2];
-        s[3] = scale * e[3];
-        s[4] = scale * e[4];
-        // s[5] = 0.0 is ignored (inextensible direction)
+        for (int i = 0; i < 5; i++) s[i] = e[i];
+
+        // s[0] = scale * e[0];
+        // s[1] = scale * e[1];
+        // s[2] = scale * e[2];
+        // s[3] = scale * e[3];
+        // s[4] = scale * e[4];
+        // // s[5] = 0.0 is ignored (inextensible direction)
+    }
+
+    __HOST_DEVICE__ static void computeIdentityTyingPtStresses(const T &scale, const int num_tying,
+                                                               T e[], T s[]) {
+        /* compute membrane + trv shear stresses from the tying strains (identity product for
+         * lockstrain lock-aware prolong) */
+
+        // debug no membrane strain terms
+        int trv_shear_ind[4] = {5, 6, 7, 8};
+        // also 4x to make the trv shear strains double mag
+        for (int i = 0; i < 4; i++) {
+            int j = trv_shear_ind[i];
+            s[j] = e[j] * 4.0;
+        }
+        // e12 mem strain
+        s[4] = 4.0 * e[4];
+        for (int i = 0; i < 4; i++) {
+            // membrane strains
+            s[i] = e[i];
+        }
+
+        // for (int i = 0; i < num_tying; i++) s[i] = e[i];
+        // for (int i = 0; i < num_tying; i++) s[i] = scale * e[i];
     }
 
     __HOST_DEVICE__ static void computeBendingStress(const T &scale, const Data &data,

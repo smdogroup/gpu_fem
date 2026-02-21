@@ -3,7 +3,11 @@ import scipy.sparse as sp
 
 from .basis import second_order_quadrature
 from .basis import get_lagrange_basis_2d_all
+from ._utils import debug_print_bsr_matrix
 
+
+import numpy as np
+import scipy.sparse as sp
 
 class MITCPlateElement_OptProlong:
     """
@@ -24,16 +28,18 @@ class MITCPlateElement_OptProlong:
         self,
         prolong_mode: str = "locking-global",  # 'standard'
         lam: float = 1e-2,
-        a: float = 1.0 / np.sqrt(3.0),        # typical choice consistent w/ 2x2 Gauss
-        b: float = 1.0 / np.sqrt(3.0),
+        a: float = 1.0,        # typical choice consistent w/ 2x2 Gauss
+        b: float = 1.0,
         n_lock_sweeps:int=10,
         omega:float=0.5,
+        debug:bool=False,
     ):
         assert prolong_mode in ["locking-global", "locking-local", "standard", "energy-jacobi"]
 
         self.dof_per_node = 3
         self.nodes_per_elem = 4
         self.ndof = self.dof_per_node * self.nodes_per_elem
+        self.debug = debug
 
         self.prolong_mode = prolong_mode
         self.clamped = False
@@ -52,21 +58,156 @@ class MITCPlateElement_OptProlong:
         self._lock_P_cache = {}
         self._kmat_cache = {}
 
+    # # ----------------------------
+    # # MITC helpers, with old (thx, thy) + grad w order
+    # # ----------------------------
+    # @staticmethod
+    # def _interp_1d_pm(s: float, a: float) -> np.ndarray:
+    #     """
+    #     Linear 1D Lagrange basis to interpolate from points at [-a, +a] to s.
+    #     Returns [N_- , N_+], where:
+    #       N_- = (a - s)/(2a), N_+ = (a + s)/(2a)
+    #     """
+    #     a = float(a)
+    #     return np.array([(a - s) / (2.0 * a), (a + s) / (2.0 * a)], dtype=float)
+
+    # @staticmethod
+    # def _geom_map_and_grads(Nxi, Neta, x, y):
+    #     x_xi = float(np.dot(Nxi, x))
+    #     x_eta = float(np.dot(Neta, x))
+    #     y_xi = float(np.dot(Nxi, y))
+    #     y_eta = float(np.dot(Neta, y))
+
+    #     J = x_xi * y_eta - x_eta * y_xi
+    #     invJ = 1.0 / J
+
+    #     xi_x = y_eta * invJ
+    #     xi_y = -x_eta * invJ
+    #     eta_x = -y_xi * invJ
+    #     eta_y = x_xi * invJ
+
+    #     Nx = Nxi * xi_x + Neta * eta_x
+    #     Ny = Nxi * xi_y + Neta * eta_y
+    #     return J, Nx, Ny
+
+    # def _Bs_rows_at_point(self, xi: float, eta: float, x: np.ndarray, y: np.ndarray):
+    #     """
+    #     Return the *pointwise* shear B rows (two 1x12 rows) for:
+    #       gamma_xz = w_x + thx
+    #       gamma_yz = w_y + thy
+    #     evaluated at (xi,eta).
+    #     """
+    #     N, Nxi, Neta = get_lagrange_basis_2d_all(xi, eta)
+    #     J, Nx, Ny = self._geom_map_and_grads(Nxi, Neta, x, y)
+
+    #     bx = np.zeros((12,), dtype=float)
+    #     by = np.zeros((12,), dtype=float)
+
+    #     # gamma_xz = w_x + thx
+    #     bx[0::3] = Nx
+    #     bx[1::3] = N
+
+    #     # gamma_yz = w_y + thy
+    #     by[0::3] = Ny
+    #     by[2::3] = N
+
+    #     return J, bx, by
+
+    # def _Bs_mitc_at_quad(self, xi: float, eta: float, x: np.ndarray, y: np.ndarray):
+    #     """
+    #     Build the *effective* MITC shear B matrix (2x12) at the quadrature point (xi,eta):
+    #       row0 = interpolated gamma_xz from tying at (0, ±b) using eta-basis
+    #       row1 = interpolated gamma_yz from tying at (±a, 0) using xi-basis
+    #     """
+    #     # Geometry/J evaluated at the quad point for integration measure
+    #     Nq, Nxi_q, Neta_q = get_lagrange_basis_2d_all(xi, eta)
+    #     Jq, _, _ = self._geom_map_and_grads(Nxi_q, Neta_q, x, y)
+
+    #     # Tying evaluations
+    #     _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x, y)
+    #     _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x, y)
+
+    #     _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x, y)
+    #     _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x, y)
+
+    #     # Interpolation weights
+    #     w_eta = self._interp_1d_pm(eta, self.b)  # from [-b,+b] -> eta
+    #     w_xi  = self._interp_1d_pm(xi,  self.a)  # from [-a,+a] -> xi
+
+    #     row_gx = w_eta[0] * bx_m + w_eta[1] * bx_p
+    #     row_gy = w_xi[0]  * by_m + w_xi[1]  * by_p
+
+    #     Bs = np.vstack([row_gx, row_gy])  # 2x12
+    #     return Jq, Bs
+
+    # # ----------------------------
+    # # Element stiffness (MITC4)
+    # # ----------------------------
+    # def get_kelem(self, E: float, nu: float, thick: float, elem_xpts: np.ndarray):
+    #     """
+    #     elem_xpts length 12: [x0,y0,z0?, x1,y1,z1?, x2,y2,z2?, x3,y3,z3?]
+    #     Uses x=elem_xpts[0::3], y=elem_xpts[1::3].
+    #     """
+    #     pts, wts = second_order_quadrature()  # 2nd order in each direction (3-pt if that's your impl)
+
+    #     kelem = np.zeros((self.ndof, self.ndof))
+
+    #     # material constants
+    #     D0 = E * thick**3 / (12.0 * (1.0 - nu**2))
+    #     Db = D0 * np.array([
+    #         [1.0,  nu,          0.0],
+    #         [nu,   1.0,         0.0],
+    #         [0.0,  0.0, (1.0 - nu) / 2.0],
+    #     ])
+    #     ks = 5.0 / 6.0
+    #     G = E / (2.0 * (1.0 + nu))
+    #     Ds = (ks * G * thick) * np.eye(2)
+
+    #     x = elem_xpts[0::3]
+    #     y = elem_xpts[1::3]
+
+    #     # ---- BENDING (unchanged): depends on rotation gradients only ----
+    #     for ii, xi in enumerate(pts):
+    #         for jj, eta in enumerate(pts):
+    #             wt = wts[ii] * wts[jj]
+
+    #             N, Nxi, Neta = get_lagrange_basis_2d_all(xi, eta)
+    #             J, Nx, Ny = self._geom_map_and_grads(Nxi, Neta, x, y)
+
+    #             Bb = np.zeros((3, self.ndof))
+
+    #             Bb[0, 1::3] = Nx          # d(thx)/dx
+    #             Bb[1, 2::3] = Ny          # d(thy)/dy
+    #             Bb[2, 1::3] = Ny          # d(thx)/dy
+    #             Bb[2, 2::3] = Nx          # d(thy)/dx
+
+    #             kelem += (Bb.T @ Db @ Bb) * (wt * J)
+
+    #     # ---- SHEAR (MITC): full integration, BUT shear strains are tied/interpolated ----
+    #     for ii, xi in enumerate(pts):
+    #         for jj, eta in enumerate(pts):
+    #             wt = wts[ii] * wts[jj]
+
+    #             Jq, Bs = self._Bs_mitc_at_quad(xi, eta, x, y)  # 2x12 effective
+    #             kelem += (Bs.T @ Ds @ Bs) * (wt * Jq)
+
+    #     return kelem
+
     # ----------------------------
-    # MITC helpers
+    # MITC helpers using (thy, -thx) directors + grad w ordering
     # ----------------------------
     @staticmethod
     def _interp_1d_pm(s: float, a: float) -> np.ndarray:
         """
         Linear 1D Lagrange basis to interpolate from points at [-a, +a] to s.
         Returns [N_- , N_+], where:
-          N_- = (a - s)/(2a), N_+ = (a + s)/(2a)
+        N_- = (a - s)/(2a), N_+ = (a + s)/(2a)
         """
         a = float(a)
         return np.array([(a - s) / (2.0 * a), (a + s) / (2.0 * a)], dtype=float)
 
     @staticmethod
-    def _geom_map_and_grads(Nxi, Neta, x, y):
+    def _geom_map_and_grads(Nxi, Neta, x, y, debug: bool = False):
         x_xi = float(np.dot(Nxi, x))
         x_eta = float(np.dot(Neta, x))
         y_xi = float(np.dot(Nxi, y))
@@ -80,38 +221,52 @@ class MITCPlateElement_OptProlong:
         eta_x = -y_xi * invJ
         eta_y = x_xi * invJ
 
+        # if debug:
+        #     print(f"{Nxi=}\n{Neta=}")
+
         Nx = Nxi * xi_x + Neta * eta_x
         Ny = Nxi * xi_y + Neta * eta_y
         return J, Nx, Ny
 
     def _Bs_rows_at_point(self, xi: float, eta: float, x: np.ndarray, y: np.ndarray):
         """
-        Return the *pointwise* shear B rows (two 1x12 rows) for:
-          gamma_xz = w_x + thx
-          gamma_yz = w_y + thy
+        Return the *pointwise* shear B rows (two 1x12 rows) for the director choice:
+            director = (thy, -thx)
+
+        i.e. transverse shear strains:
+            gamma_xz = w_x + thy
+            gamma_yz = w_y - thx
+
         evaluated at (xi,eta).
+
+        DOF ordering per node: [w, thx, thy]
         """
         N, Nxi, Neta = get_lagrange_basis_2d_all(xi, eta)
-        J, Nx, Ny = self._geom_map_and_grads(Nxi, Neta, x, y)
+        J, Nx, Ny = self._geom_map_and_grads(Nxi, Neta, x, y, self.debug)
 
         bx = np.zeros((12,), dtype=float)
         by = np.zeros((12,), dtype=float)
 
-        # gamma_xz = w_x + thx
-        bx[0::3] = Nx
-        bx[1::3] = N
+        # if self.debug:
+        #     print(f"{J=}\n{Nx=}\n{Ny=}\n{N=}")
 
-        # gamma_yz = w_y + thy
+        # gamma_xz = w_x + thy
+        bx[0::3] = Nx
+        bx[2::3] = +N
+
+        # gamma_yz = w_y - thx
         by[0::3] = Ny
-        by[2::3] = N
+        by[1::3] = -N
 
         return J, bx, by
 
     def _Bs_mitc_at_quad(self, xi: float, eta: float, x: np.ndarray, y: np.ndarray):
         """
         Build the *effective* MITC shear B matrix (2x12) at the quadrature point (xi,eta):
-          row0 = interpolated gamma_xz from tying at (0, ±b) using eta-basis
-          row1 = interpolated gamma_yz from tying at (±a, 0) using xi-basis
+
+        Uses the same director convention as _Bs_rows_at_point:
+            gamma_xz = w_x + thy   tied from (0, ±b) and interpolated in eta
+            gamma_yz = w_y - thx   tied from (±a, 0) and interpolated in xi
         """
         # Geometry/J evaluated at the quad point for integration measure
         Nq, Nxi_q, Neta_q = get_lagrange_basis_2d_all(xi, eta)
@@ -141,8 +296,10 @@ class MITCPlateElement_OptProlong:
         """
         elem_xpts length 12: [x0,y0,z0?, x1,y1,z1?, x2,y2,z2?, x3,y3,z3?]
         Uses x=elem_xpts[0::3], y=elem_xpts[1::3].
+
+        Note: BENDING curvatures are formed consistently with director = (thy, -thx).
         """
-        pts, wts = second_order_quadrature()  # 2nd order in each direction (3-pt if that's your impl)
+        pts, wts = second_order_quadrature()
 
         kelem = np.zeros((self.ndof, self.ndof))
 
@@ -160,7 +317,11 @@ class MITCPlateElement_OptProlong:
         x = elem_xpts[0::3]
         y = elem_xpts[1::3]
 
-        # ---- BENDING (unchanged): depends on rotation gradients only ----
+        # ---- BENDING: consistent with director = (thy, -thx) ----
+        # Let (rx, ry) = (thy, -thx). Curvatures:
+        #   kappa_x  = d(rx)/dx  =  d(thy)/dx
+        #   kappa_y  = d(ry)/dy  = -d(thx)/dy
+        #   kappa_xy = d(rx)/dy + d(ry)/dx = d(thy)/dy - d(thx)/dx
         for ii, xi in enumerate(pts):
             for jj, eta in enumerate(pts):
                 wt = wts[ii] * wts[jj]
@@ -170,19 +331,23 @@ class MITCPlateElement_OptProlong:
 
                 Bb = np.zeros((3, self.ndof))
 
-                Bb[0, 1::3] = Nx          # d(thx)/dx
-                Bb[1, 2::3] = Ny          # d(thy)/dy
-                Bb[2, 1::3] = Ny          # d(thx)/dy
-                Bb[2, 2::3] = Nx          # d(thy)/dx
+                # kappa_x = d(thy)/dx
+                Bb[0, 2::3] = Nx
+
+                # kappa_y = -d(thx)/dy
+                Bb[1, 1::3] = -Ny
+
+                # kappa_xy = d(thy)/dy - d(thx)/dx
+                Bb[2, 2::3] = Ny
+                Bb[2, 1::3] = -Nx
 
                 kelem += (Bb.T @ Db @ Bb) * (wt * J)
 
-        # ---- SHEAR (MITC): full integration, BUT shear strains are tied/interpolated ----
+        # ---- SHEAR (MITC): full integration, tied/interpolated ----
         for ii, xi in enumerate(pts):
             for jj, eta in enumerate(pts):
                 wt = wts[ii] * wts[jj]
-
-                Jq, Bs = self._Bs_mitc_at_quad(xi, eta, x, y)  # 2x12 effective
+                Jq, Bs = self._Bs_mitc_at_quad(xi, eta, x, y)
                 kelem += (Bs.T @ Ds @ Bs) * (wt * Jq)
 
         return kelem
@@ -566,6 +731,7 @@ class MITCPlateElement_OptProlong:
         self.fixed_cols_c = fixed_cols_c
         self.solve_rows_f = solve_rows_f
         self.P_0_free = P0_free
+        self.Mb = None
 
         # # block-Jacobi smoothing (3x3 nodal) instead of direct solve
         # P_free = P0_free.copy()
@@ -2240,7 +2406,7 @@ class MITCPlateElement_OptProlong:
         import numpy as np
         import scipy.sparse as sp
 
-        cache_key = ("local_mitc_v3_jacobi_bc_elim", int(nxe_c), float(length),
+        cache_key = ("local_mitc_v4_jacobi_bc_elim", int(nxe_c), float(length),
                     int(n_sweeps), float(omega), bool(with_fillin), bool(use_mask))
         if cache_key in self._lock_P_cache:
             return self._lock_P_cache[cache_key]
@@ -2284,6 +2450,9 @@ class MITCPlateElement_OptProlong:
             _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_f, y_f)
             _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_f, y_f)
             _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_f, y_f)
+
+            if self.debug: 
+                print(f"{bx_m=}\n{bx_p=}\n{by_m=}\n{by_p=}")
 
             r0 = 4 * ielem_f
             G_f[r0 + 0, loc_dof] += bx_m
@@ -2450,10 +2619,48 @@ class MITCPlateElement_OptProlong:
         RHS_csr = sp.csr_matrix(rhs)
         X = sp.csr_matrix(P0_free)
 
-        mask = None
-        if (not with_fillin) and use_mask:
-            S_lock = (LHS @ RHS_csr)
-            mask = (S_lock != 0).astype(np.int8)
+        # mask_mode = 1
+        mask_mode = 2
+
+        if mask_mode == 1:
+            mask = None
+            if (not with_fillin) and use_mask:
+                S_lock = (LHS @ RHS_csr)
+                # mask = (S_lock != 0).astype(np.int8)
+                tol = 1e-24  # or something consistent with your scale
+                mask = (abs(S_lock) > tol).astype(np.int8)
+
+        elif mask_mode == 2:
+            # for a,b = pm 1 of edges (need to be more careful part of sparsity isn't dropped out)
+            def _structural_mask(A: sp.csr_matrix, B: sp.csr_matrix) -> sp.csr_matrix:
+                """
+                Return structural pattern of A@B (no numeric cancellation):
+                    mask_ij = 1 iff exists k with A_ik != 0 and B_kj != 0
+                """
+                # Make 0/1 matrices with same sparsity (values don't matter)
+                A1 = A.copy()
+                if A1.nnz:
+                    A1.data[:] = 1.0
+                B1 = B.copy()
+                if B1.nnz:
+                    B1.data[:] = 1.0
+
+                S = A1 @ B1                 # numeric product but cannot cancel to zero structurally
+                S.eliminate_zeros()          # just in case
+                return (S != 0).astype(np.int8)
+
+            mask = None
+            if (not with_fillin) and use_mask:
+                # 1) Always keep original P0 sparsity (so entries like (0,6) never drop)
+                P0_pat = (sp.csr_matrix(P0_free) != 0).astype(np.int8)
+
+                # 2) Add one-level structural fill (your "M@RHS" idea, but structural not numeric)
+                MR_pat = _structural_mask(LHS, RHS_csr)
+
+                # 3) Final mask is union
+                mask = (P0_pat + MR_pat)
+                mask.data[:] = 1  # turn any 1/2/... into 1
+                mask.eliminate_zeros()
 
         def sparse_control(Z):
             if mask is None:
@@ -2468,6 +2675,7 @@ class MITCPlateElement_OptProlong:
         n_blk = n_unknown // block_size
 
         Mb = LHS.tobsr(blocksize=(block_size, block_size))
+        self.Mb = Mb
 
         diag_blocks = np.zeros((n_blk, block_size, block_size), dtype=float)
         for i in range(n_blk):
@@ -2502,6 +2710,8 @@ class MITCPlateElement_OptProlong:
             shape=(n_unknown, n_unknown),
             blocksize=(block_size, block_size),
         ).tocsr()
+        
+        # debug_print_bsr_matrix(Mb, name="locking-kmat")
 
         X = sparse_control(X)
 
@@ -2524,6 +2734,340 @@ class MITCPlateElement_OptProlong:
         P = P_0.toarray()
         P[:, fixed_cols_c] = 0.0
         P[np.ix_(solve_rows_f, free_cols_c)] = P_free
+
+        self.P = P
+
+        self._lock_P_cache[cache_key] = P.copy()
+        return P
+    
+    def _locking_aware_prolong_local_mitc_v5_jacobi(
+            self,
+            nxe_c: int,
+            length: float = 1.0,
+            n_sweeps: int = 10,
+            omega: float = 0.5,
+            with_fillin: bool = False,
+            use_mask: bool = True,
+        ):
+        """
+        v5 change (your requirement):
+        - DO NOT eliminate coarse BC DOFs from the solve (no free_cols_c).
+        - Keep RHS_csr and X with ncols = N_c = 3*nnodes_c (multiple of 3).
+        - Impose coarse BCs by zeroing constrained coarse columns in:
+                (P_gam @ G_c) term  AND  P0 rows (i.e., P0[:, fixed_cols_c]=0)
+            so the solve is consistent while keeping full 3-dof node blocks.
+        - Impose fine BCs via row/col elimination on M and rhs row reset to P0, as before.
+
+        Solve (G_f^T G_f + lam I) P = G_f^T (P_gam G_c) + lam P0
+        using SpMM Jacobi (3x3 block diagonal) with optional fixed sparsity (mask).
+        """
+
+        import numpy as np
+        import scipy.sparse as sp
+
+        cache_key = ("local_mitc_v5_jacobi_no_coarse_elim",
+                    int(nxe_c), float(length), int(n_sweeps),
+                    float(omega), bool(with_fillin), bool(use_mask))
+        if cache_key in self._lock_P_cache:
+            return self._lock_P_cache[cache_key]
+
+        # -----------------------------
+        # same as v1-v4 up to forming G_f, G_c, P_gam, RHS_full, P0
+        # -----------------------------
+        nxe_f = 2 * nxe_c
+
+        nx_f = nxe_f + 1
+        nnodes_f = nx_f**2
+        nelems_f = nxe_f**2
+        N_f = 3 * nnodes_f
+
+        nx_c = nxe_c + 1
+        nnodes_c = nx_c**2
+        nelems_c = nxe_c**2
+        N_c = 3 * nnodes_c
+
+        dx_f = length / nxe_f
+        x_f = dx_f * np.array([0.0, 1.0, 1.0, 0.0])
+        y_f = dx_f * np.array([0.0, 0.0, 1.0, 1.0])
+
+        dx_c = length / nxe_c
+        x_c = dx_c * np.array([0.0, 1.0, 1.0, 0.0])
+        y_c = dx_c * np.array([0.0, 0.0, 1.0, 1.0])
+
+        G_f = np.zeros((4 * nelems_f, N_f), dtype=float)
+        for ielem_f in range(nelems_f):
+            ex = ielem_f % nxe_f
+            ey = ielem_f // nxe_f
+            loc_nodes = np.array([
+                ex + nx_f * ey,
+                (ex + 1) + nx_f * ey,
+                (ex + 1) + nx_f * (ey + 1),
+                ex + nx_f * (ey + 1),
+            ], dtype=int)
+            loc_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
+
+            _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x_f, y_f)
+            _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_f, y_f)
+            _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_f, y_f)
+            _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_f, y_f)
+
+            r0 = 4 * ielem_f
+            G_f[r0 + 0, loc_dof] += bx_m
+            G_f[r0 + 1, loc_dof] += bx_p
+            G_f[r0 + 2, loc_dof] += by_m
+            G_f[r0 + 3, loc_dof] += by_p
+
+        G_c = np.zeros((4 * nelems_c, N_c), dtype=float)
+        for ielem_c in range(nelems_c):
+            ex = ielem_c % nxe_c
+            ey = ielem_c // nxe_c
+            loc_nodes = np.array([
+                ex + nx_c * ey,
+                (ex + 1) + nx_c * ey,
+                (ex + 1) + nx_c * (ey + 1),
+                ex + nx_c * (ey + 1),
+            ], dtype=int)
+            loc_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
+
+            _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x_c, y_c)
+            _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_c, y_c)
+            _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_c, y_c)
+            _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_c, y_c)
+
+            r0 = 4 * ielem_c
+            G_c[r0 + 0, loc_dof] += bx_m
+            G_c[r0 + 1, loc_dof] += bx_p
+            G_c[r0 + 2, loc_dof] += by_m
+            G_c[r0 + 3, loc_dof] += by_p
+
+        # # P_gam (dense) as in v1
+        # P_gam = np.zeros((4 * nelems_f, 4 * nelems_c), dtype=float)
+
+        # def clamp(v, lo, hi):
+        #     return max(lo, min(hi, v))
+
+        # for ielem_f in range(nelems_f):
+        #     ex = ielem_f % nxe_f
+        #     ey = ielem_f // nxe_f
+
+        #     x = 0.5 * (ex + 0.5) - 0.5
+        #     y = 0.5 * (ey + 0.5) - 0.5
+
+        #     i0 = int(np.floor(x))
+        #     j0 = int(np.floor(y))
+        #     tx = x - i0
+        #     ty = y - j0
+
+        #     i0 = clamp(i0, 0, nxe_c - 1)
+        #     j0 = clamp(j0, 0, nxe_c - 1)
+        #     i1 = clamp(i0 + 1, 0, nxe_c - 1)
+        #     j1 = clamp(j0 + 1, 0, nxe_c - 1)
+
+        #     if i1 == i0: tx = 0.0
+        #     if j1 == j0: ty = 0.0
+
+        #     w00 = (1.0 - tx) * (1.0 - ty)
+        #     w10 = (tx)       * (1.0 - ty)
+        #     w01 = (1.0 - tx) * (ty)
+        #     w11 = (tx)       * (ty)
+
+        #     e00 = i0 + j0 * nxe_c
+        #     e10 = i1 + j0 * nxe_c
+        #     e01 = i0 + j1 * nxe_c
+        #     e11 = i1 + j1 * nxe_c
+
+        #     rf = 4 * ielem_f
+        #     for comp in range(4):
+        #         P_gam[rf + comp, 4 * e00 + comp] += w00
+        #         P_gam[rf + comp, 4 * e10 + comp] += w10
+        #         P_gam[rf + comp, 4 * e01 + comp] += w01
+        #         P_gam[rf + comp, 4 * e11 + comp] += w11
+
+        # Elementwise injection for tying strains (4-per-elem)
+        P_gam = np.zeros((4 * nelems_f, 4 * nelems_c), dtype=float)
+        for ielem_f in range(nelems_f):
+            ex = ielem_f % nxe_f
+            ey = ielem_f // nxe_f
+            ielem_c = (ex // 2) + (ey // 2) * nxe_c
+
+            rf = 4 * ielem_f
+            rc = 4 * ielem_c
+            P_gam[rf + 0, rc + 0] = 1.0
+            P_gam[rf + 1, rc + 1] = 1.0
+            P_gam[rf + 2, rc + 2] = 1.0
+            P_gam[rf + 3, rc + 3] = 1.0
+
+        RHS_full = P_gam @ G_c  # dense (4*nelems_f, 3*nnodes_c)
+
+        # baseline P0 (csr) already has BCs applied correctly
+        P_0 = self._build_P2_uncoupled3(nxe_c)
+        P_0 = self._apply_bcs_to_P(P_0, nxe_c)
+
+        lam = float(self.lam)
+        constrained_dofs = (0, 1, 2) if self.clamped else (0,)
+
+        # coarse constrained cols (still computed, but NOT eliminated from solve)
+        fixed_cols_c = []
+        for inode in range(nnodes_c):
+            i = inode % nx_c
+            j = inode // nx_c
+            if (i == 0) or (i == nx_c - 1) or (j == 0) or (j == nx_c - 1):
+                base = 3 * inode
+                for a in constrained_dofs:
+                    fixed_cols_c.append(base + a)
+        fixed_cols_c = np.array(sorted(set(fixed_cols_c)), dtype=int)
+
+        # fine constrained rows
+        fixed_rows_f = []
+        for inode in range(nnodes_f):
+            i = inode % nx_f
+            j = inode // nx_f
+            if (i == 0) or (i == nx_f - 1) or (j == 0) or (j == nx_f - 1):
+                base = 3 * inode
+                for a in constrained_dofs:
+                    fixed_rows_f.append(base + a)
+        fixed_rows_f = np.array(sorted(set(fixed_rows_f)), dtype=int)
+
+        solve_rows_f = np.arange(N_f, dtype=int)  # keep all rows
+
+        # -----------------------------
+        # v5: impose coarse BCs by zeroing constrained coarse columns
+        # in BOTH RHS term and P0 (so system has N_c cols but BC cols are forced to 0)
+        # -----------------------------
+        if fixed_cols_c.size > 0:
+            RHS_full[:, fixed_cols_c] = 0.0
+            # also guarantee P0 has those cols zero (in case _apply_bcs_to_P doesn't)
+            P_0 = P_0.tolil(copy=True)
+            P_0[:, fixed_cols_c] = 0.0
+            P_0 = P_0.tocsr()
+
+        # Build normal equations without augmentation (FULL columns)
+        A = G_f[:, solve_rows_f]           # (4*nelems_f, N_f)
+        B = RHS_full                       # (4*nelems_f, N_c)
+        P0_all = P_0[solve_rows_f, :].toarray()  # (N_f, N_c), cols multiple of 3
+
+        M   = A.T @ A + lam * np.eye(solve_rows_f.size)
+        rhs = A.T @ B + lam * P0_all
+
+        # -----------------------------
+        # enforce fine BCs by row/col elimination on M, set rhs row to P0 row (ALL cols)
+        # -----------------------------
+        if fixed_rows_f.size > 0:
+            M[fixed_rows_f, :] = 0.0
+            M[:, fixed_rows_f] = 0.0
+            for d in fixed_rows_f:
+                M[d, d] = 1.0
+            rhs[fixed_rows_f, :] = P0_all[fixed_rows_f, :]
+
+        # -----------------------------
+        # SpMM Jacobi solve (same structure, but X/RHS have N_c cols)
+        # -----------------------------
+        LHS = sp.csr_matrix(M)
+        RHS_csr = sp.csr_matrix(rhs)
+        X = sp.csr_matrix(P0_all)  # initial guess
+
+        # mask_mode = 1
+        mask_mode = 2
+
+        if mask_mode == 1:
+            mask = None
+            if (not with_fillin) and use_mask:
+                S_lock = (LHS @ RHS_csr)
+                tol = 1e-24
+                mask = (abs(S_lock) > tol).astype(np.int8)
+
+        elif mask_mode == 2:
+            def _structural_mask(A: sp.csr_matrix, B: sp.csr_matrix) -> sp.csr_matrix:
+                """Structural pattern of A@B (no numeric cancellation)."""
+                A1 = A.copy()
+                if A1.nnz:
+                    A1.data[:] = 1.0
+                B1 = B.copy()
+                if B1.nnz:
+                    B1.data[:] = 1.0
+                S = A1 @ B1
+                S.eliminate_zeros()
+                return (S != 0).astype(np.int8)
+
+            mask = None
+            if (not with_fillin) and use_mask:
+                P0_pat = (sp.csr_matrix(P0_all) != 0).astype(np.int8)
+                MR_pat = _structural_mask(LHS, RHS_csr)
+                mask = (P0_pat + MR_pat)
+                mask.data[:] = 1
+                mask.eliminate_zeros()
+
+        def sparse_control(Z):
+            if mask is None:
+                return Z
+            if not sp.issparse(Z):
+                Z = sp.csr_matrix(Z)
+            return Z.multiply(mask)
+
+        block_size = 3
+        n_unknown = X.shape[0]
+        assert n_unknown % block_size == 0
+        n_blk = n_unknown // block_size
+
+        Mb = LHS.tobsr(blocksize=(block_size, block_size))
+
+        diag_blocks = np.zeros((n_blk, block_size, block_size), dtype=float)
+        for i in range(n_blk):
+            start, end = Mb.indptr[i], Mb.indptr[i + 1]
+            cols = Mb.indices[start:end]
+            data = Mb.data[start:end]
+            matches = np.where(cols == i)[0]
+            if matches.size == 0:
+                raise RuntimeError("Missing diagonal block in M (unexpected).")
+            Db = data[matches[0]]
+            Db = 0.5 * (Db + Db.T)
+            diag_blocks[i, :, :] = np.linalg.inv(Db)
+
+        Dinv_indptr  = np.arange(n_blk + 1, dtype=np.int32)
+        Dinv_indices = np.arange(n_blk,     dtype=np.int32)
+        Dinv_data    = diag_blocks
+
+        Dinv_op = sp.bsr_matrix(
+            (Dinv_data, Dinv_indices, Dinv_indptr),
+            shape=(n_unknown, n_unknown),
+            blocksize=(block_size, block_size),
+        ).tocsr()
+
+        X = sparse_control(X)
+
+        if with_fillin or (mask is None):
+            for _ in range(int(n_sweeps)):
+                MX  = LHS @ X
+                RES = RHS_csr - MX
+                X   = X + float(omega) * (Dinv_op @ RES)
+        else:
+            for _ in range(int(n_sweeps)):
+                # LHS /= 64.0; RHS_csr /= 32.0; Dinv_op *= 64.0 # DEBUG
+                MX  = sparse_control(LHS @ X) 
+                RES = sparse_control(RHS_csr - MX)
+                X   = sparse_control(X + float(omega) * (Dinv_op @ RES))
+
+        P_sol = X.toarray()  # (N_f, N_c)
+
+        # -----------------------------
+        # Assemble full P (dense)
+        # -----------------------------
+        P = P_0.toarray()                 # already has coarse BC columns zeroed (we enforced above)
+        if fixed_cols_c.size > 0:
+            P[:, fixed_cols_c] = 0.0      # safety
+        P[solve_rows_f, :] = P_sol        # overwrite all rows/cols (including coarse BC cols which remain 0)
+
+        # stash debug
+        self.G_f = G_f
+        self.G_c = G_c
+        self.P_gam = P_gam
+        self.P_0 = P_0
+        self.M = M
+        self.RHS = rhs
+        self.fixed_cols_c = fixed_cols_c
+        self.solve_rows_f = solve_rows_f
+        self.fixed_rows_f = fixed_rows_f
+        self.P = P
 
         self._lock_P_cache[cache_key] = P.copy()
         return P
@@ -2640,7 +3184,8 @@ class MITCPlateElement_OptProlong:
             # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
             # P = self._locking_aware_prolong_local_mitc_v3_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
             # test more GPU-friendly version with v4 (BCs enforced on fine and coarse BCs instead of extra eqns)
-            P = self._locking_aware_prolong_local_mitc_v4_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
+            # P = self._locking_aware_prolong_local_mitc_v4_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
+            P = self._locking_aware_prolong_local_mitc_v5_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
         elif self.prolong_mode == "standard":
             P = self._build_P2_uncoupled3(nxe_coarse)
             P = self._apply_bcs_to_P(P, nxe_coarse)
@@ -2673,7 +3218,8 @@ class MITCPlateElement_OptProlong:
             # P = self._locking_aware_prolong_local_mitc_v2_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
             # P = self._locking_aware_prolong_local_mitc_v3_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
             # test more GPU-friendly version with v4 (BCs enforced on fine and coarse BCs instead of extra eqns)
-            P = self._locking_aware_prolong_local_mitc_v4_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
+            # P = self._locking_aware_prolong_local_mitc_v4_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
+            P = self._locking_aware_prolong_local_mitc_v5_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
         elif self.prolong_mode == "standard":
             P = self._build_P2_uncoupled3(nxe_coarse)
             P = self._apply_bcs_to_P(P, nxe_coarse)

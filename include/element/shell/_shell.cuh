@@ -51,7 +51,7 @@ __GLOBAL__ static void k_add_jacobian_fast(int32_t vars_num_nodes, int32_t num_e
     const int32_t *vars_elem_conn = &_vars_conn[global_elem * Basis::num_nodes];
     vars.copyElemValuesToShared(active_thread, tid_xy, nthreads_xy, Phys::vars_per_node,
                                 Basis::num_nodes, vars_elem_conn, block_vars[local_elem]);
-     __syncthreads();
+    __syncthreads();
     
 
     if (tid_xy == 0) {
@@ -354,8 +354,8 @@ __GLOBAL__ static void k_add_lockstrain_jacobian_fast(int32_t vars_num_nodes, in
     int ideriv = global_elem_col % vars_per_elem;
     int iquad = threadIdx.x;
 
-    T local_mat_col[vars_per_elem];
-    memset(local_mat_col, 0.0, sizeof(T) * vars_per_elem);
+    T local_mat_row[vars_per_elem];
+    memset(local_mat_row, 0.0, sizeof(T) * vars_per_elem);
 
     
     // some prelim computations with xpts and quadrature point
@@ -363,6 +363,8 @@ __GLOBAL__ static void k_add_lockstrain_jacobian_fast(int32_t vars_num_nodes, in
     // the lockstrain G_f^T G_f product uses the tying strains at their MITC points which is before tying to quadpt interp
     T pt[2] = {0.0, 0.0}; // just choose centroid of element in [-1,1]^2 comp domain for anything quadpt related like detXd, etc.
     T weight = 1.0;
+    // T pt[2]; // actually do need quadpt in order to get physical coords
+    // T weight = Quadrature::getQuadraturePoint(iquad, pt);
     T fn[nxpts_per_elem];
     ShellComputeNodeNormals<T, Basis>(block_xpts[local_elem], fn);
     T detXd = getDetXd<T, Basis>(pt, block_xpts[local_elem], fn);
@@ -376,6 +378,8 @@ __GLOBAL__ static void k_add_lockstrain_jacobian_fast(int32_t vars_num_nodes, in
     memset(p_vars, 0.0, sizeof(T) * vars_per_elem);
     p_vars[ideriv] = 1.0;
 
+    // const bool method 
+
     // // compute drill strains
     // NOTE : need drill strains in the lock-strain prod? prob not for now.. Check this later..
     // ElemGroup::template add_element_lockstrain_jacobian_col_fast<Data, DRILL>(
@@ -385,17 +389,38 @@ __GLOBAL__ static void k_add_lockstrain_jacobian_fast(int32_t vars_num_nodes, in
     // __syncthreads();
 
     // // // compute tying strains
-    ElemGroup::template add_element_lockstrain_jacobian_col_fast<Data, TYING>(
+    // ElemGroup::template add_element_lockstrain_jacobian_col_fast_v1
+    ElemGroup::template add_element_lockstrain_jacobian_col_fast_v2<Data, TYING>(
         pt, scale, block_xpts[local_elem], fn, 
         XdinvT, Tmat, XdinvzT, block_data[local_elem],
-        block_vars[local_elem], p_vars, local_mat_col);
+        block_vars[local_elem], p_vars, local_mat_row);
     __syncthreads();
 
     // no quadrature point sum here (uses tying points instead)
     int elem_block_row = ideriv / Phys::vars_per_node;
     int elem_inner_row = ideriv % Phys::vars_per_node;
     mat.addElementMatRow(true, elem_block_row, elem_inner_row, global_elem, 0, 1,
-        Phys::vars_per_node, Basis::num_nodes, vars_elem_conn, local_mat_col);
+        Phys::vars_per_node, Basis::num_nodes, vars_elem_conn, local_mat_row);
+    
+    // /* warp shuffle here.. */
+    // // only works for 4 quadpts or linear quadrature
+    // int lane = tid % 32;
+    // int group_start = (lane / 4) * 4;
+    // for (int idof = 0; idof < vars_per_elem; idof++) {
+    //     T lane_val = local_mat_row[idof];
+    //     lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 2);
+    //     lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 1);
+
+    //     // warp broadcast
+    //     lane_val = __shfl_sync(0xFFFFFFFF, lane_val, group_start);
+    //     local_mat_row[idof] = lane_val;
+    // }
+    // __syncthreads();
+
+    // int elem_block_row = ideriv / Phys::vars_per_node;
+    // int elem_inner_row = ideriv % Phys::vars_per_node;
+    // mat.addElementMatRow(true, elem_block_row, elem_inner_row, global_elem, iquad, Quadrature::num_quad_pts,
+    //     Phys::vars_per_node, Basis::num_nodes, vars_elem_conn, local_mat_row);
 
 }  // end of add_lockstrain_jacobian_fast
 
@@ -493,6 +518,8 @@ __GLOBAL__ static void k_add_lockstrain_fc_jacobian_fast(
     // the lockstrain G_f^T G_f product uses the tying strains at their MITC points which is before tying to quadpt interp
     T pt[2] = {0.0, 0.0}; // just choose centroid of element in [-1,1]^2 comp domain for anything quadpt related like detXd, etc.
     T weight = 1.0;
+    // T pt[2]; // actually do need quadpt in order to get physical coords
+    // T weight = Quadrature::getQuadraturePoint(iquad, pt);
     T fine_fn[nxpts_per_elem];
     ShellComputeNodeNormals<T, Basis>(block_fine_xpts[local_elem], fine_fn);
     T coarse_fn[nxpts_per_elem];
@@ -515,7 +542,8 @@ __GLOBAL__ static void k_add_lockstrain_fc_jacobian_fast(
     // compute tying strains (fine-coarse version)
     // since we are doing matRow not matCol (because more efficient on GPU), p_vars now represents fine 
     // and output mat_row is like coarse dim
-    ElemGroup::template add_element_lockstrain_fc_jacobian_row_fast<Data, TYING>(
+    // ElemGroup::template add_element_lockstrain_fc_jacobian_row_fast_v1
+    ElemGroup::template add_element_lockstrain_fc_jacobian_row_fast_v2<Data, TYING>(
         pt, scale, 
         block_fine_xpts[local_elem], block_coarse_xpts[local_elem], 
         fine_fn, coarse_fn,
@@ -526,12 +554,6 @@ __GLOBAL__ static void k_add_lockstrain_fc_jacobian_fast(
         p_vars, local_mat_row);
     __syncthreads();
 
-    // if (threadIdx.y == 0 && blockIdx.x == 0) {
-    //     printf("local_mat_row: ");
-    //     printVec<T>(24, local_mat_row);
-    // }
-    // return;
-
     // no quadrature point sum here (uses tying points instead)
     // need to add properly as elemMatCol instead of elemMatRow (transpose trick) into prolong matrix
     // P = G_f^T * P_gam * G_c + lam * P_0   is not symmetric [F,C] dimensions
@@ -539,5 +561,25 @@ __GLOBAL__ static void k_add_lockstrain_fc_jacobian_fast(
     int elem_inner_row = ideriv % Phys::vars_per_node;
     mat.addElementMatRow(true, elem_block_row, elem_inner_row, global_elem, 0, 1,
         Phys::vars_per_node, Basis::num_nodes, fine_vars_elem_conn, local_mat_row);
+    
+    // /* warp shuffle here.. */
+    // // only works for 4 quadpts or linear quadrature
+    // int lane = tid % 32;
+    // int group_start = (lane / 4) * 4;
+    // for (int idof = 0; idof < vars_per_elem; idof++) {
+    //     T lane_val = local_mat_row[idof];
+    //     lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 2);
+    //     lane_val += __shfl_down_sync(0xFFFFFFFF, lane_val, 1);
+
+    //     // warp broadcast
+    //     lane_val = __shfl_sync(0xFFFFFFFF, lane_val, group_start);
+    //     local_mat_row[idof] = lane_val;
+    // }
+    // __syncthreads();
+
+    // int elem_block_row = ideriv / Phys::vars_per_node;
+    // int elem_inner_row = ideriv % Phys::vars_per_node;
+    // mat.addElementMatRow(true, elem_block_row, elem_inner_row, global_elem, iquad, Quadrature::num_quad_pts,
+    //     Phys::vars_per_node, Basis::num_nodes, _fine_vars_conn, local_mat_row);
 
 }  // end of k_add_lockstrain_fc_jacobian_fast

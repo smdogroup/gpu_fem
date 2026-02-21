@@ -131,12 +131,15 @@ elif args.elem == 'mitc_lp':
         n_lock_sweeps=args.nprolong,
         # n_lock_sweeps=20,
         # n_lock_sweeps=30,
+        a=1.0, b=1.0, # true MITC shells use edge tying points for first order (but leads to slower and a bit more unstable smooth prolong conv) than a,b = 1/sqrt(3) below
+        # a=1.0/np.sqrt(3), b=1.0/np.sqrt(3)
     )
 
 elif args.elem == 'mitc_ep':
     ELEMENT = MITCPlateElement_OptProlong(
         prolong_mode='energy-jacobi',
         # omega=0.4, # needed smaller omega for coarser mesh (in general should use CG-Lanczos to get spectral radius.. helps)
+        # omega=0.4,
         omega=0.5, # NOPE nvm, 0.5 is better
         # omega=0.7,
         # n_lock_sweeps=4,
@@ -145,6 +148,8 @@ elif args.elem == 'mitc_ep':
         # n_lock_sweeps=10, # default,
         n_lock_sweeps=args.nprolong,
         # n_lock_sweeps=30,
+        a=1.0, b=1.0, # true MITC shells use edge tying points for first order (but leads to slower and a bit more unstable smooth prolong conv) than a,b = 1/sqrt(3) below
+        # a=1.0/np.sqrt(3), b=1.0/np.sqrt(3)
     )
 
 # ================================
@@ -313,6 +318,7 @@ if args.solve == 'direct':
     assembler.direct_solve()
 elif args.solve == 'vmg':
 
+    # mitc_ep does better without line search btw
     line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
     # if args.elem == 'mitcp':
     #     line_search = ELEMENT.prolong_mode != 'locking-local'
@@ -333,7 +339,8 @@ elif args.solve == 'vmg':
 
 elif args.solve == 'kmg':
 
-    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
+    # mitc_ep does better without line search btw
+    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']  
     # if args.elem == 'mitcp':
     #     line_search = ELEMENT.prolong_mode != 'locking-local'
 
@@ -366,6 +373,7 @@ elif args.solve == 'kmg':
             A=assembler.kmat, b=assembler.force,
             M=pc, rtol=1e-6, atol=1e-12,
             max_iter=200,
+            print_freq=3
         )
 
     total_vcyc = vmg2.total_vcycles

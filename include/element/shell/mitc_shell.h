@@ -96,6 +96,10 @@ class MITCShellAssembler
 
         mat.zeroValues();
         int cols_per_elem = (Basis::order == 1 ? 24 : Basis::order == 2 ? 9 : 4);
+        // dim3 block(
+        //     num_quad_pts,
+        //     cols_per_elem,     // no num_quad_pts here, because uses tying points not num_quadpts
+        //     elems_per_block);  // better order for consecutive threads and mem reads
         dim3 block(
             1, cols_per_elem,  // no num_quad_pts here, because uses tying points not num_quadpts
             elems_per_block);  // better order for consecutive threads and mem reads
@@ -120,6 +124,10 @@ class MITCShellAssembler
 
         mat.zeroValues();
         int cols_per_elem = (Basis::order == 1 ? 24 : Basis::order == 2 ? 9 : 4);
+        // dim3 block(
+        //     num_quad_pts,
+        //     cols_per_elem,     // no num_quad_pts here, because uses tying points not num_quadpts
+        //     elems_per_block);  // better order for consecutive threads and mem reads
         dim3 block(
             1, cols_per_elem,  // no num_quad_pts here, because uses tying points not num_quadpts
             elems_per_block);  // better order for consecutive threads and mem reads
@@ -759,7 +767,7 @@ class MITCShellAssembler
 
     template <class Data, STRAIN strain = ALL>
     __DEVICE__ static void
-    add_element_lockstrain_jacobian_col_fast(  // __noinline__ is slower actually
+    add_element_lockstrain_jacobian_col_fast_v1(  // __noinline__ is slower actually
         const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
         const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
         const T vars[dof_per_elem], const T pvars[dof_per_elem], T matCol[dof_per_elem]) {
@@ -778,33 +786,27 @@ class MITCShellAssembler
             // forward section
             // --------------------------------
             T d[3 * num_nodes];  // need directors in reverse for nonlinear strains
+            T ety[Basis::num_all_tying_points];
             if constexpr (is_nonlinear) {
                 Director::template computeDirector<vars_per_node, num_nodes>(vars, fn, d);
-
-                T ety[Basis::num_all_tying_points];
                 computeMITCTyingStrain<T, Phys, Basis, is_nonlinear>(xpts, fn, vars, d, ety);
                 A2D::SymMat<T, 3> gty;
                 interpTyingStrain<T, Basis>(pt, ety, gty.get_data());
-
                 A2D::SymMatRotateFrame<T, 3>(XdinvT, gty, e0ty.value());
-
                 computeEngineerTyingStrains<T>(e0ty.value());
-                // __syncthreads();
+                __syncthreads();
             }
 
             // pforward section
             // -------------------------------
             T p_d[3 * num_nodes];
+            T p_ety[Basis::num_all_tying_points];
             {
                 Director::template computeDirectorHfwd<vars_per_node, num_nodes>(pvars, fn, p_d);
-
-                T p_ety[Basis::num_all_tying_points];
                 computeMITCTyingStrainHfwd<T, Phys, Basis>(xpts, fn, vars, d, pvars, p_d, p_ety);
                 A2D::SymMat<T, 3> p_gty;
                 interpTyingStrain<T, Basis>(pt, p_ety, p_gty.get_data());
-
                 A2D::SymMatRotateFrame<T, 3>(XdinvT, p_gty, e0ty.pvalue());
-
                 computeEngineerTyingStrains<T>(e0ty.pvalue());
             }
             // __syncthreads();
@@ -813,13 +815,13 @@ class MITCShellAssembler
             A2D::Vec<T, Basis::num_all_tying_points> ety_bar;  // zeroes out on init
             if constexpr (is_nonlinear) {
                 Phys::computeIdentityTyingStress(scale, e0ty.value(), e0ty.bvalue());
+                // Phys::computeIdentityTyingPtStresses(scale, Basis::num_all_tying_points, ety,
+                //                                      ety_bar.get_data());
 
                 computeEngineerTyingStrains<T>(e0ty.bvalue());
-
                 A2D::SymMat<T, 3> gty_bar;
                 A2D::SymMat3x3RotateFrameReverse<T>(XdinvT, e0ty.bvalue().get_data(),
                                                     gty_bar.get_data());
-
                 interpTyingStrainTranspose<T, Basis>(pt, gty_bar.get_data(), ety_bar.get_data());
                 // __syncthreads();
             }
@@ -829,14 +831,14 @@ class MITCShellAssembler
                 Phys::computeIdentityTyingStress(scale, e0ty.pvalue(), e0ty.hvalue());
 
                 computeEngineerTyingStrains<T>(e0ty.hvalue());
-
                 A2D::SymMat<T, 3> gty_hat;
                 A2D::SymMat3x3RotateFrameReverse<T>(XdinvT, e0ty.hvalue().get_data(),
                                                     gty_hat.get_data());
-
                 A2D::Vec<T, 3 * num_nodes> d_hat;
                 A2D::Vec<T, Basis::num_all_tying_points> ety_hat;  // zeroes out on init
                 interpTyingStrainTranspose<T, Basis>(pt, gty_hat.get_data(), ety_hat.get_data());
+                // Phys::computeIdentityTyingPtStresses(scale, Basis::num_all_tying_points, p_ety,
+                //                                      ety_hat.get_data());
                 computeMITCTyingStrainHrev<T, Phys, Basis>(xpts, fn, vars, d, pvars, p_d,
                                                            ety_bar.get_data(), ety_hat.get_data(),
                                                            matCol, d_hat.get_data());
@@ -850,7 +852,7 @@ class MITCShellAssembler
 
     template <class Data, STRAIN strain = ALL>
     __DEVICE__ static void
-    add_element_lockstrain_fc_jacobian_row_fast(  // __noinline__ is slower actually
+    add_element_lockstrain_fc_jacobian_row_fast_v1(  // __noinline__ is slower actually
         const T pt[2], const T &scale, const T fine_xpts[xpts_per_elem],
         const T coarse_xpts[xpts_per_elem], const T fine_fn[xpts_per_elem],
         const T coarse_fn[xpts_per_elem], const T fine_XdinvT[9], const T fine_Tmat[9],
@@ -873,19 +875,229 @@ class MITCShellAssembler
             // forward section
             // --------------------------------
             T fine_d[3 * num_nodes];  // need directors in reverse for nonlinear strains
+            T ety[Basis::num_all_tying_points];
             if constexpr (is_nonlinear) {
                 Director::template computeDirector<vars_per_node, num_nodes>(fine_vars, fine_fn,
                                                                              fine_d);
-
-                T ety[Basis::num_all_tying_points];
                 computeMITCTyingStrain<T, Phys, Basis, is_nonlinear>(fine_xpts, fine_fn, fine_vars,
                                                                      fine_d, ety);
                 A2D::SymMat<T, 3> gty;
                 interpTyingStrain<T, Basis>(pt, ety, gty.get_data());
-
                 A2D::SymMatRotateFrame<T, 3>(fine_XdinvT, gty, e0ty.value());
-
                 computeEngineerTyingStrains<T>(e0ty.value());
+                __syncthreads();
+            }
+
+            T coarse_d[3 * num_nodes];  // need directors in reverse for nonlinear strains
+            if constexpr (is_nonlinear) {
+                Director::template computeDirector<vars_per_node, num_nodes>(coarse_vars, coarse_fn,
+                                                                             coarse_d);
+            }
+
+            // pforward section
+            // -------------------------------
+            T p_d[3 * num_nodes];
+            T p_ety[Basis::num_all_tying_points];
+            {
+                Director::template computeDirectorHfwd<vars_per_node, num_nodes>(pvars, fine_fn,
+                                                                                 p_d);
+
+                computeMITCTyingStrainHfwd<T, Phys, Basis>(fine_xpts, fine_fn, fine_vars, fine_d,
+                                                           pvars, p_d, p_ety);
+                A2D::SymMat<T, 3> p_gty;
+                interpTyingStrain<T, Basis>(pt, p_ety, p_gty.get_data());
+                A2D::SymMatRotateFrame<T, 3>(fine_XdinvT, p_gty, e0ty.pvalue());
+                computeEngineerTyingStrains<T>(e0ty.pvalue());
+            }
+            // __syncthreads();
+
+            // 1st order brev
+            A2D::Vec<T, Basis::num_all_tying_points> ety_bar;  // zeroes out on init
+            if constexpr (is_nonlinear) {
+                // Phys::computeIdentityTyingPtStresses(scale, Basis::num_all_tying_points, ety,
+                //                                      ety_bar.get_data());
+
+                Phys::computeIdentityTyingStress(scale, e0ty.value(), e0ty.bvalue());
+                computeEngineerTyingStrains<T>(e0ty.bvalue());
+                A2D::SymMat<T, 3> gty_bar;
+                A2D::SymMat3x3RotateFrameReverse<T>(coarse_XdinvT, e0ty.bvalue().get_data(),
+                                                    gty_bar.get_data());
+                interpTyingStrainTranspose<T, Basis>(pt, gty_bar.get_data(), ety_bar.get_data());
+                __syncthreads();
+            }
+
+            // 2nd order hrev
+            {
+                Phys::computeIdentityTyingStress(scale, e0ty.pvalue(), e0ty.hvalue());
+                computeEngineerTyingStrains<T>(e0ty.hvalue());
+                A2D::SymMat<T, 3> gty_hat;
+                A2D::SymMat3x3RotateFrameReverse<T>(coarse_XdinvT, e0ty.hvalue().get_data(),
+                                                    gty_hat.get_data());
+                A2D::Vec<T, 3 * num_nodes> d_hat;
+                A2D::Vec<T, Basis::num_all_tying_points> ety_hat;  // zeroes out on init
+                interpTyingStrainTranspose<T, Basis>(pt, gty_hat.get_data(), ety_hat.get_data());
+
+                // Phys::computeIdentityTyingPtStresses(scale, Basis::num_all_tying_points, p_ety,
+                //                                      ety_hat.get_data());
+                computeMITCTyingStrainHrev<T, Phys, Basis>(
+                    coarse_xpts, coarse_fn, coarse_vars, coarse_d, pvars, p_d, ety_bar.get_data(),
+                    ety_hat.get_data(), matRow, d_hat.get_data());
+
+                Director::template computeDirectorHrev<vars_per_node, num_nodes>(
+                    coarse_fn, d_hat.get_data(), matRow);
+            }
+        }
+
+    }  // add_element_lockstrain_fc_jacobian_row_fast
+
+    template <class Data, STRAIN strain = ALL>
+    __DEVICE__ static void
+    add_element_lockstrain_jacobian_col_fast_v2(  // __noinline__ is slower actually
+        const T pt[2], const T &scale, const T xpts[xpts_per_elem], const T fn[xpts_per_elem],
+        const T XdinvT[9], const T Tmat[9], const T XdinvzT[9], const Data &compData,
+        const T vars[dof_per_elem], const T pvars[dof_per_elem], T matCol[dof_per_elem]) {
+        constexpr bool bending = strain == BENDING || strain == ALL;
+        constexpr bool tying = strain == TYING || strain == ALL;
+        constexpr bool drill = strain == DRILL || strain == ALL;
+
+        // data to store in forwards + backwards section
+        static constexpr bool is_nonlinear = Phys::is_nonlinear;
+
+        if constexpr (tying) {
+            // // TODO : only need 1st order obj not 2nd order here since e0ty is linear to
+            // energy
+            // // nonlinear part of tying strains happens in earlier step before e0ty
+            A2D::A2DObj<A2D::SymMat<T, 3>> e0ty;
+
+            // forward section
+            // --------------------------------
+            T d[3 * num_nodes];  // need directors in reverse for nonlinear strains
+            T ety[Basis::num_all_tying_points];
+            if constexpr (is_nonlinear) {
+                Director::template computeDirector<vars_per_node, num_nodes>(vars, fn, d);
+                computeMITCTyingStrain<T, Phys, Basis, is_nonlinear>(xpts, fn, vars, d, ety);
+                // A2D::SymMat<T, 3> gty;
+                // interpTyingStrain<T, Basis>(pt, ety, gty.get_data());
+                // A2D::SymMatRotateFrame<T, 3>(XdinvT, gty, e0ty.value());
+                // computeEngineerTyingStrains<T>(e0ty.value());
+                // __syncthreads();
+            }
+
+            // pforward section
+            // -------------------------------
+            T p_d[3 * num_nodes];
+            T p_ety[Basis::num_all_tying_points];
+            {
+                Director::template computeDirectorHfwd<vars_per_node, num_nodes>(pvars, fn, p_d);
+
+                computeMITCTyingStrainHfwd<T, Phys, Basis>(xpts, fn, vars, d, pvars, p_d, p_ety);
+
+                // TEMP process for plate linear case: converts to physical coords
+                // normally needs XdinvT^T * strains * XdinvT (and with g_{13} uses XdinvT_{11} and
+                // XdinvT_{33} in this product where XdinvT_{33} = 1 so still works)
+                p_ety[5] *= XdinvT[4];
+                p_ety[6] *= XdinvT[4];
+                p_ety[7] *= XdinvT[0];
+                p_ety[8] *= XdinvT[0];
+
+                // A2D::SymMat<T, 3> p_gty;
+                // interpTyingStrain<T, Basis>(pt, p_ety, p_gty.get_data());
+                // A2D::SymMatRotateFrame<T, 3>(XdinvT, p_gty, e0ty.pvalue());
+                // computeEngineerTyingStrains<T>(e0ty.pvalue());
+
+                // DEBUG: check the tying strains strain-disp matrix
+                // if (blockIdx.x == 0) {
+                //     int trv_shear[4] = {5, 6, 7, 8};
+                //     for (int i = 0; i < 4; i++) {
+                //         int j = trv_shear[i];
+                //         printf("ideriv %d, trv shear %d => %.4e\n", threadIdx.y, i, p_ety[j]);
+                //     }
+                // }
+            }
+            // __syncthreads();
+
+            // 1st order brev
+            A2D::Vec<T, Basis::num_all_tying_points> ety_bar;  // zeroes out on init
+            if constexpr (is_nonlinear) {
+                // Phys::computeIdentityTyingStress(scale, e0ty.value(), e0ty.bvalue());
+                Phys::computeIdentityTyingPtStresses(scale, Basis::num_all_tying_points, ety,
+                                                     ety_bar.get_data());
+
+                //     computeEngineerTyingStrains<T>(e0ty.bvalue());
+                // A2D::SymMat<T, 3> gty_bar;
+                // A2D::SymMat3x3RotateFrameReverse<T>(XdinvT, e0ty.bvalue().get_data(),
+                //                                     gty_bar.get_data());
+                // interpTyingStrainTranspose<T, Basis>(pt, gty_bar.get_data(),
+                // ety_bar.get_data();
+                // // __syncthreads();
+            }
+
+            // 2nd order hrev
+            {
+                // Phys::computeIdentityTyingStress(scale, e0ty.pvalue(), e0ty.hvalue());
+
+                // computeEngineerTyingStrains<T>(e0ty.hvalue());
+                // A2D::SymMat<T, 3> gty_hat;
+                // A2D::SymMat3x3RotateFrameReverse<T>(XdinvT, e0ty.hvalue().get_data(),
+                //                                     gty_hat.get_data());
+                A2D::Vec<T, 3 * num_nodes> d_hat;
+                A2D::Vec<T, Basis::num_all_tying_points> ety_hat;  // zeroes out on init
+                // interpTyingStrainTranspose<T, Basis>(pt, gty_hat.get_data(), ety_hat.get_data());
+                Phys::computeIdentityTyingPtStresses(scale, Basis::num_all_tying_points, p_ety,
+                                                     ety_hat.get_data());
+                // TEMP process for plate linear case: converts to physical coords
+                ety_hat[5] *= XdinvT[4];
+                ety_hat[6] *= XdinvT[4];
+                ety_hat[7] *= XdinvT[0];
+                ety_hat[8] *= XdinvT[0];
+                computeMITCTyingStrainHrev<T, Phys, Basis>(xpts, fn, vars, d, pvars, p_d,
+                                                           ety_bar.get_data(), ety_hat.get_data(),
+                                                           matCol, d_hat.get_data());
+
+                Director::template computeDirectorHrev<vars_per_node, num_nodes>(
+                    fn, d_hat.get_data(), matCol);
+            }
+        }
+
+    }  // add_lockstrain_jacobian_col
+
+    template <class Data, STRAIN strain = ALL>
+    __DEVICE__ static void
+    add_element_lockstrain_fc_jacobian_row_fast_v2(  // __noinline__ is slower actually
+        const T pt[2], const T &scale, const T fine_xpts[xpts_per_elem],
+        const T coarse_xpts[xpts_per_elem], const T fine_fn[xpts_per_elem],
+        const T coarse_fn[xpts_per_elem], const T fine_XdinvT[9], const T fine_Tmat[9],
+        const T fine_XdinvzT[9], const T coarse_XdinvT[9], const T coarse_Tmat[9],
+        const T coarse_XdinvzT[9], const Data &compData, const T fine_vars[dof_per_elem],
+        const T coarse_vars[dof_per_elem], const T pvars[dof_per_elem], T matRow[dof_per_elem]) {
+        constexpr bool bending = strain == BENDING || strain == ALL;
+        constexpr bool tying = strain == TYING || strain == ALL;
+        constexpr bool drill = strain == DRILL || strain == ALL;
+        // should be FINE is like p_vars and the input side, COARSE DOF and xpts for output side
+
+        // data to store in forwards + backwards section
+        static constexpr bool is_nonlinear = Phys::is_nonlinear;
+
+        if constexpr (tying) {
+            // // TODO : only need 1st order obj not 2nd order here since e0ty is linear to
+            // energy
+            // // nonlinear part of tying strains happens in earlier step before e0ty
+            A2D::A2DObj<A2D::SymMat<T, 3>> e0ty;
+
+            // forward section
+            // --------------------------------
+            T fine_d[3 * num_nodes];  // need directors in reverse for nonlinear strains
+            T ety[Basis::num_all_tying_points];
+            if constexpr (is_nonlinear) {
+                Director::template computeDirector<vars_per_node, num_nodes>(fine_vars, fine_fn,
+                                                                             fine_d);
+
+                computeMITCTyingStrain<T, Phys, Basis, is_nonlinear>(fine_xpts, fine_fn, fine_vars,
+                                                                     fine_d, ety);
+                // A2D::SymMat<T, 3> gty;
+                // interpTyingStrain<T, Basis>(pt, ety, gty.get_data());
+                // A2D::SymMatRotateFrame<T, 3>(fine_XdinvT, gty, e0ty.value());
+                // computeEngineerTyingStrains<T>(e0ty.value());
                 // __syncthreads();
             }
 
@@ -898,50 +1110,61 @@ class MITCShellAssembler
             // pforward section
             // -------------------------------
             T p_d[3 * num_nodes];
+            T p_ety[Basis::num_all_tying_points];
             {
                 Director::template computeDirectorHfwd<vars_per_node, num_nodes>(pvars, fine_fn,
                                                                                  p_d);
 
-                T p_ety[Basis::num_all_tying_points];
                 computeMITCTyingStrainHfwd<T, Phys, Basis>(fine_xpts, fine_fn, fine_vars, fine_d,
                                                            pvars, p_d, p_ety);
-                A2D::SymMat<T, 3> p_gty;
-                interpTyingStrain<T, Basis>(pt, p_ety, p_gty.get_data());
+                // A2D::SymMat<T, 3> p_gty;
+                // interpTyingStrain<T, Basis>(pt, p_ety, p_gty.get_data());
+                // A2D::SymMatRotateFrame<T, 3>(fine_XdinvT, p_gty, e0ty.pvalue());
+                // computeEngineerTyingStrains<T>(e0ty.pvalue());
 
-                A2D::SymMatRotateFrame<T, 3>(fine_XdinvT, p_gty, e0ty.pvalue());
-
-                computeEngineerTyingStrains<T>(e0ty.pvalue());
+                // TEMP process for plate linear case: converts to physical coords
+                // normally needs XdinvT^T * strains * XdinvT (and with g_{13} uses XdinvT_{11} and
+                // XdinvT_{33} in this product where XdinvT_{33} = 1 so still works)
+                p_ety[5] *= fine_XdinvT[4];
+                p_ety[6] *= fine_XdinvT[4];
+                p_ety[7] *= fine_XdinvT[0];
+                p_ety[8] *= fine_XdinvT[0];
             }
             // __syncthreads();
 
             // 1st order brev
             A2D::Vec<T, Basis::num_all_tying_points> ety_bar;  // zeroes out on init
             if constexpr (is_nonlinear) {
-                Phys::computeIdentityTyingStress(scale, e0ty.value(), e0ty.bvalue());
+                Phys::computeIdentityTyingPtStresses(scale, Basis::num_all_tying_points, ety,
+                                                     ety_bar.get_data());
 
-                computeEngineerTyingStrains<T>(e0ty.bvalue());
-
-                A2D::SymMat<T, 3> gty_bar;
-                A2D::SymMat3x3RotateFrameReverse<T>(coarse_XdinvT, e0ty.bvalue().get_data(),
-                                                    gty_bar.get_data());
-
-                interpTyingStrainTranspose<T, Basis>(pt, gty_bar.get_data(), ety_bar.get_data());
+                // Phys::computeIdentityTyingStress(scale, e0ty.value(), e0ty.bvalue());
+                // computeEngineerTyingStrains<T>(e0ty.bvalue());
+                // A2D::SymMat<T, 3> gty_bar;
+                // A2D::SymMat3x3RotateFrameReverse<T>(coarse_XdinvT, e0ty.bvalue().get_data(),
+                //                                     gty_bar.get_data());
+                // interpTyingStrainTranspose<T, Basis>(pt, gty_bar.get_data(), ety_bar.get_data());
                 // __syncthreads();
             }
 
             // 2nd order hrev
             {
-                Phys::computeIdentityTyingStress(scale, e0ty.pvalue(), e0ty.hvalue());
-
-                computeEngineerTyingStrains<T>(e0ty.hvalue());
-
-                A2D::SymMat<T, 3> gty_hat;
-                A2D::SymMat3x3RotateFrameReverse<T>(coarse_XdinvT, e0ty.hvalue().get_data(),
-                                                    gty_hat.get_data());
-
+                // Phys::computeIdentityTyingStress(scale, e0ty.pvalue(), e0ty.hvalue());
+                // computeEngineerTyingStrains<T>(e0ty.hvalue());
+                // A2D::SymMat<T, 3> gty_hat;
+                // A2D::SymMat3x3RotateFrameReverse<T>(coarse_XdinvT, e0ty.hvalue().get_data(),
+                //                                     gty_hat.get_data());
                 A2D::Vec<T, 3 * num_nodes> d_hat;
                 A2D::Vec<T, Basis::num_all_tying_points> ety_hat;  // zeroes out on init
-                interpTyingStrainTranspose<T, Basis>(pt, gty_hat.get_data(), ety_hat.get_data());
+                // interpTyingStrainTranspose<T, Basis>(pt, gty_hat.get_data(), ety_hat.get_data());
+
+                Phys::computeIdentityTyingPtStresses(scale, Basis::num_all_tying_points, p_ety,
+                                                     ety_hat.get_data());
+                // TEMP process for plate linear case: converts to physical coords
+                ety_hat[5] *= coarse_XdinvT[4];
+                ety_hat[6] *= coarse_XdinvT[4];
+                ety_hat[7] *= coarse_XdinvT[0];
+                ety_hat[8] *= coarse_XdinvT[0];
                 computeMITCTyingStrainHrev<T, Phys, Basis>(
                     coarse_xpts, coarse_fn, coarse_vars, coarse_d, pvars, p_d, ety_bar.get_data(),
                     ety_hat.get_data(), matRow, d_hat.get_data());

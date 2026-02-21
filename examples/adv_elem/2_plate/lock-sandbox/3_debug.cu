@@ -35,8 +35,8 @@
 #include "multigrid/solvers/multilevel/twolevel.h"
 
 // local utils
-#include "../2_plate/include/lock_prolongation.h"
-#include "../2_plate/include/lock_smoother.h"
+#include "../include/lock_prolongation.h"
+#include "../include/lock_smoother.h"
 
 /* command line args:
     [direct/mg] [--nxe int] [--SR float] [--nvcyc int]
@@ -95,7 +95,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         mg = new MG();
     }
 
-    int pre_nxe_min = nxe > 32 ? 32 : 8;
+    // int pre_nxe_min = 8;
+    int pre_nxe_min = 2; // so 2^2 -> 4^2 elem levels here
+    // int pre_nxe_min = nxe > 32 ? 32 : 8;
     int nxe_min = pre_nxe_min;
     for (int c_nxe = nxe; c_nxe >= pre_nxe_min; c_nxe /= 2) {
         nxe_min = c_nxe;
@@ -104,17 +106,14 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
     // make each grid
     for (int c_nxe = nxe; c_nxe >= nxe_min; c_nxe /= 2) {
         // make the assembler
-        int c_nhe = c_nxe;
-        double L = 1.0, R = 0.5, thick = L / SR;
-        double E = 70e9, nu = 0.3;
-        // double rho = 2500, ys = 350e6;
-        bool imperfection = false; // option for geom imperfection
-        int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-        auto assembler = createCylinderAssembler<Assembler>(c_nxe, c_nhe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
-        constexpr bool compressive = false;
-        const int load_case = 3; // petal and chirp load
+        int c_nye = c_nxe;
+        double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+        int nxe_per_comp = c_nxe, nye_per_comp = c_nye; // for now (should have 25 grids)
+        bool theta_ss_bc = false;
+        auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, 
+            rho, ys, nxe_per_comp, nye_per_comp, theta_ss_bc);
         double Q = 1.0; // load magnitude
-        T *my_loads = getCylinderLoads<T, Basis, Physics, load_case>(c_nxe, c_nhe, L, R, Q);
+        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -123,7 +122,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         // make the grid
         bool full_LU = c_nxe == nxe_min;
         if (full_LU) {
-            bsr_data.AMD_reordering();
+            printf("WARNING - turned AMD ordering on coarse grid off for DEBUG\n");
+            // bsr_data.AMD_reordering();
             bsr_data.compute_full_LU_pattern(10.0, false);
         } else {
             bsr_data.compute_nofill_pattern();
@@ -176,8 +176,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
 
         printf("Step 0 : get fine grid data on grid %d\n", i);
         // register the coarse assemblers to the prolongations..
-        // double lam = 1e-12; // see python locking script
-        double lam = 1e-6;
+        double lam = 1e-12; // see python locking script
         // if (is_kcycle) {
         // clear and re-assemble kmat to hold G_f^T G_f + lam * I
         auto &f_assembler = grids[i].assembler;
@@ -189,6 +188,48 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         CHECK_CUDA(cudaDeviceSynchronize()); // slower but for debugging
         f_assembler.apply_bcs(f_kmat);
         f_kmat.add_diag_nugget(lam);
+
+        // DEBUG : printout LHS
+        auto d_kmat_vec = f_kmat.getVec();
+        int size = d_kmat_vec.getSize();
+        T *h_kmat_vals = d_kmat_vec.createHostVec().getPtr();
+        auto d_kmat_bsr_data = f_kmat.getBsrData();
+        int nnodes_fine = f_assembler.get_num_nodes();
+        int kmat_nnzb = d_kmat_bsr_data.nnzb;
+        int *h_kmat_rowp = DeviceVec<int>(nnodes_fine + 1, d_kmat_bsr_data.rowp).createHostVec().getPtr();
+        int *h_kmat_rows = DeviceVec<int>(kmat_nnzb, d_kmat_bsr_data.rows).createHostVec().getPtr();
+        int *h_kmat_cols = DeviceVec<int>(kmat_nnzb, d_kmat_bsr_data.cols).createHostVec().getPtr();
+        // printf("locking-kmat with nnzb %d\n", kmat_nnzb);
+        // printf("h_kmat_rowp (same as locking): ");
+        // printVec<int>(nnodes_fine + 1, h_kmat_rowp);
+        // printf("h_kmat_cols (same as locking): ");
+        // printVec<int>(kmat_nnzb, h_kmat_cols);
+
+        int keep_dof[3] = {2, 3, 4}; // {w, thx, thy}
+        // for (int iblock = 0; iblock < kmat_nnzb; iblock++) {
+        //     T *block_vals = &h_kmat_vals[36 * iblock];
+        //     int node_row = h_kmat_rows[iblock], node_col = h_kmat_cols[iblock];
+        //     printf("\n\nlocking-kmat block node (%d,%d):\n", node_row, node_col);
+        //     // for (int i = 0; i < 6; i++) {
+        //     //     printf("\t");
+        //     //     printVec<T>(6, &block_vals[6 * i]);
+        //     // }
+        //     for (int i = 0; i < 3; i++) {
+        //         int j = keep_dof[i];
+        //         printf("\t");
+        //         for (int i2 = 0; i2 < 3; i2++) {
+        //             int j2 = keep_dof[i2];
+        //             // *64.0 = 8^2 (*8 missing in each strain side) cause we keep in comp coords for plate..
+        //             T val = block_vals[6 * j + j2];
+        //             bool is_one = abs(val - 1.0) < 1e-10;
+        //             val = is_one ? 1.0 : 64.0 * val;
+        //             printf("%.6e  ", val);
+        //         }
+        //         printf("\n");
+        //     }
+        //     printf("\n");
+        // }
+        // printf("\ndone with h_kmat (G_f^T G_f + lam*I) matrix vals\n");
 
         // make device fine-coarse elem map (here just use structured pattern)
         printf("Step 2 - compute device fc elem map\n");
@@ -221,6 +262,43 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         P_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
         P_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
 
+        // DEBUG print initial prolongation matrix
+        auto P_bsr_data = P_mat->getBsrData();
+        int nnodes_coarse = P_bsr_data.nb;
+        int P_nnzb = P_bsr_data.nnzb;
+        int *h_P0_rowp = DeviceVec<int>(nnodes_fine + 1, P_bsr_data.rowp).createHostVec().getPtr();
+        int *h_P0_rows = DeviceVec<int>(P_nnzb, P_bsr_data.rows).createHostVec().getPtr();
+        int *h_P0_cols = DeviceVec<int>(P_nnzb, P_bsr_data.cols).createHostVec().getPtr();
+        T *h_P0_vals = P_mat->getVec().createHostVec().getPtr();
+        // printf("init-prolongMat with nnzb %d\n", P_nnzb);
+        // printf("h_P0_rowp: ");
+        // printVec<int>(nnodes_fine + 1, h_P0_rowp);
+        // printf("h_P0_cols: ");
+        // printVec<int>(P_nnzb, h_P0_cols);
+        // for (int iblock = 0; iblock < P_nnzb; iblock++) {
+        //     T *block_vals = &h_P0_vals[36 * iblock];
+        //     int node_row = h_P0_rows[iblock], node_col = h_P0_cols[iblock];
+        //     printf("\n\ninit-prolongMat block node (%d,%d):\n", node_row, node_col);
+        //     // for (int i = 0; i < 6; i++) {
+        //     //     printf("\t");
+        //     //     printVec<T>(6, &block_vals[6 * i]);
+        //     // }
+        //     for (int i = 0; i < 3; i++) {
+        //         int j = keep_dof[i];
+        //         printf("\t");
+        //         for (int i2 = 0; i2 < 3; i2++) {
+        //             int j2 = keep_dof[i2];
+        //             // all vals here should be either {0, 0.25, 0.5, 1} so let's round it so I can do quick compare
+        //             T val = block_vals[6 * j + j2]; // I checked and there are sometimes like 1e-7 errors because I do optimization of (xi,eta) pairs
+        //             val = std::round(val * 100) / 100; // rounds to two decimal places (so txt file comparison will work better)
+        //             printf("%.6e  ", val);
+        //         }
+        //         printf("\n");
+        //     }
+        //     printf("\n");
+        // }
+        // printf("\ndone with init prolong P0 mat\n");
+
         // now assemble G_f^T * P_gam * G_c + lam * P_0  RHS prolong matrix with K*P0 sparsity
         printf("Step 5 - compute locking RHS fine-coarse matrix\n");
         f_assembler.add_lockstrain_fc_jacobian_fast(c_assembler, d_fc_elem_map, *RHS_mat);
@@ -229,26 +307,61 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         // apply bcs to P_rhs matrix
         RHS_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
         RHS_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
+
+        // auto rhs_bsr_data = RHS_mat->getBsrData();
+        // int rhs_nnzb = rhs_bsr_data.nnzb;
+        // int *h_rhs_rowp = DeviceVec<int>(nnodes_fine + 1, rhs_bsr_data.rowp).createHostVec().getPtr();
+        // int *h_rhs_rows = DeviceVec<int>(rhs_nnzb, rhs_bsr_data.rows).createHostVec().getPtr();
+        // int *h_rhs_cols = DeviceVec<int>(rhs_nnzb, rhs_bsr_data.cols).createHostVec().getPtr();
+        // T *h_rhs_vals = RHS_mat->getVec().createHostVec().getPtr();
+        // printf("locking-p-rhs mat with nnzb %d\n", rhs_nnzb);
+        // printf("h_rhs_rowp: ");
+        // printVec<int>(nnodes_fine + 1, h_rhs_rowp);
+        // printf("h_rhs_cols: ");
+        // printVec<int>(rhs_nnzb, h_rhs_cols);
+        // for (int iblock = 0; iblock < rhs_nnzb; iblock++) {
+        //     T *block_vals = &h_rhs_vals[36 * iblock];
+        //     int node_row = h_rhs_rows[iblock], node_col = h_rhs_cols[iblock];
+        //     printf("\n\nlocking-p-rhs block node (%d,%d):\n", node_row, node_col);
+        //     // for (int i = 0; i < 6; i++) {
+        //     //     printf("\t");
+        //     //     printVec<T>(6, &block_vals[6 * i]);
+        //     // }
+        //     for (int i = 0; i < 3; i++) {
+        //         int j = keep_dof[i];
+        //         printf("\t");
+        //         for (int i2 = 0; i2 < 3; i2++) {
+        //             int j2 = keep_dof[i2];
+        //             // all vals here should be either {0, 0.25, 0.5, 1} so let's round it so I can do quick compare
+        //             T val = block_vals[6 * j + j2]; // I checked and there are sometimes like 1e-7 errors because I do optimization of (xi,eta) pairs
+        //             val *= 32; // 1/2 the 64 of fine-fine matrix (because the coarse dimension has strain derivs one degree lower and I still have strains in param (xi,eta) not physical space (x,y))
+        //             // val = std::round(val * 100) / 100; // rounds to two decimal places (so txt file comparison will work better)
+        //             printf("%.6e  ", val);
+        //         }
+        //         printf("\n");
+        //     }
+        //     printf("\n");
+        // }
+        // printf("\ndone with locking-p-rhs mat\n");
         
         // apply bcs to standard prolongator then add it into P_rhs
         // RHS_mat.add(lam, P0_mat); // make new add method here for P_rhs += lam * P_0
         printf("Step 6 - compute full RHS including lam*P_0 term\n");
         auto bsr_data = P_mat->getBsrData();
-        int P_nnzb = bsr_data.nnzb, block_dim = bsr_data.block_dim;
+        // int P_nnzb = bsr_data.nnzb;
+        int block_dim = bsr_data.block_dim;
         T *d_P_vals = P_mat->getPtr(), *d_RHS_vals = RHS_mat->getPtr();
         k_add_colored_submat_PFP<T>
             <<<P_nnzb, 64>>>(P_nnzb, block_dim, lam, 0, d_P_vals, d_RHS_vals);
 
         // do jacobi smoothing of P_0 => P matrix using kmat and rhs
         printf("Step 7 - perform block-Jacobi smoothing using locking energy for the prolongator\n");
-        // T omega_p = 0.5;
-        // T omega_p = 0.3; // omega for prolongation
-        // T omega_p = 0.1;
-
-        T omega_p = 0.9;
+        T omega_p = 0.5; // omega for prolongation
+        // T omega_p = 0.3;
+        // T omega_p = 0.9; // if spectral radius defined below
         auto lock_smoother = new LockingSmoother(cublasHandle, cusparseHandle, f_assembler, f_kmat, omega_p);
         // do CG-Lanczos for spectral radius
-        lock_smoother->setup_cg_lanczos(grids[i].d_defect, 10);
+        // lock_smoother->setup_cg_lanczos(grids[i].d_defect, 10);
 
         // TBD : See unstruct prolongation class
         // use new ./include/lock_prolongation.h class here
@@ -260,6 +373,36 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
                                 prolong->d_K_prodBlocks, prolong->d_P_prodBlocks,
                                 prolong->d_Z_prodBlocks);
         prolong->update_after_smooth(); // update coarse weights for nonlinear problems by row-sums of P^T
+
+        T *h_P_vals = P_mat->getVec().createHostVec().getPtr();
+        printf("final-prolongMat with nnzb %d\n", P_nnzb);
+        printf("h_P_rowp: ");
+        printVec<int>(nnodes_fine + 1, h_P0_rowp);
+        printf("h_P_cols: ");
+        printVec<int>(P_nnzb, h_P0_cols);
+        for (int iblock = 0; iblock < P_nnzb; iblock++) {
+            T *block_vals = &h_P_vals[36 * iblock];
+            int node_row = h_P0_rows[iblock], node_col = h_P0_cols[iblock];
+            printf("\n\nfinal-prolongMat block node (%d,%d):\n", node_row, node_col);
+            // for (int i = 0; i < 6; i++) {
+            //     printf("\t");
+            //     printVec<T>(6, &block_vals[6 * i]);
+            // }
+            for (int i = 0; i < 3; i++) {
+                int j = keep_dof[i];
+                printf("\t");
+                for (int i2 = 0; i2 < 3; i2++) {
+                    int j2 = keep_dof[i2];
+                    // all vals here should be either {0, 0.25, 0.5, 1} so let's round it so I can do quick compare
+                    T val = block_vals[6 * j + j2]; // I checked and there are sometimes like 1e-7 errors because I do optimization of (xi,eta) pairs
+                    // val = std::round(val * 100) / 100; // rounds to two decimal places (so txt file comparison will work better)
+                    printf("%.6e  ", val);
+                }
+                printf("\n");
+            }
+            printf("\n");
+        }
+        printf("\ndone with final prolong P0 mat\n");
 
         // re-assemble usual kmat (proceed with multigrid solve after that..)
         printf("Step 8 - reassemble kmat on grid %d\n", i);
@@ -337,13 +480,14 @@ void direct_solve(int nxe, double SR) {
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
 
-    int nhe = nxe;
-    double L = 1.0, R = 0.5, thick = L / SR;
-    double E = 70e9, nu = 0.3;
-    // double rho = 2500, ys = 350e6;
-    bool imperfection = false; // option for geom imperfection
-    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-    auto assembler = createCylinderAssembler<Assembler>(nxe, nhe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
+    int c_nxe = nxe;
+    int c_nye = c_nxe;
+    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+    int nxe_per_comp = c_nxe / 4, nye_per_comp = c_nye/4; // for now (should have 25 grids)
+    auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+    double Q = 1.0; // load magnitude
+    T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+    printf("making grid with nxe %d\n", c_nxe);
 
     // BSR symbolic factorization
     // must pass by ref to not corrupt pointers
@@ -353,11 +497,6 @@ void direct_solve(int nxe, double SR) {
     bsr_data.AMD_reordering();
     bsr_data.compute_full_LU_pattern(fillin, print);
     assembler.moveBsrDataToDevice();
-
-    // get the loads
-    constexpr bool compressive = false;
-    double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderLoads<T, Basis, Physics, compressive>(nxe, nhe, L, R, Q);
 
     auto loads = assembler.createVarsVec(my_loads);
     assembler.apply_bcs(loads);
@@ -407,13 +546,13 @@ int main(int argc, char **argv) {
     // input ----------
     bool is_multigrid = true;
     // int nxe = 256; // default value
-    int nxe = 256; // for comparison with python GMG
+    int nxe = 4; // for comparison with python GMG
     double SR = 1e3; // default
     double omega = 0.2; // smaller omega for ASW
 
-    int nsmooth = 4; // typically faster right now
+    int nsmooth = 2; // typically faster right now
     int ninnercyc = 1;
-    int nsmooth_mat = 2; // more iterations not converging yet
+    int nsmooth_mat = 1; // more iterations not converging yet
     // int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     // std::string cycle_type = "V"; // "V", "F", "W", "K"
