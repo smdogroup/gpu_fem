@@ -92,6 +92,17 @@ def get_lagrange_basis_2d_all(xi, eta):
         Neta[n] = N1[i] * dN2[j]
     return N, Nxi, Neta
 
+def get_lagrange_basis_2d_all_standard(xi, eta):
+    N1, dN1 = get_lagrange_basis(xi)
+    N2, dN2 = get_lagrange_basis(eta)
+    N = np.zeros(4);  Nxi = np.zeros(4);  Neta = np.zeros(4)
+    
+    for n in range(4):
+        i = n % 2; j = n // 2
+        N[n] = N1[i] * N2[j]
+        Nxi[n] = dN1[i] * N2[j]
+        Neta[n] = N1[i] * dN2[j]
+    return N, Nxi, Neta
 # ====================================
 # multigrid interpolations
 # ====================================
