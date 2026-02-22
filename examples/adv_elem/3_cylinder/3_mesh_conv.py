@@ -96,8 +96,6 @@ def compute_Rc(eps_list, h_list, mode="overall"):
     return Rc
 
 
-
-
 # ----------------------------
 # problem setup
 # ----------------------------

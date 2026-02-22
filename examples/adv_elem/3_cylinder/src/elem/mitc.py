@@ -55,6 +55,7 @@ class MITCShellElement:
         kelem = np.zeros((self.ndof, self.ndof))
 
         comp_data = (E, nu, thick)
+        fn = self._get_shell_normals(elem_xpts)
 
         for iquad in range(4):
             
@@ -63,9 +64,9 @@ class MITCShellElement:
             xi = pts[ixi]; eta = pts[ieta]
             wt = wts[ixi] * wts[ieta]
             pt = [xi, eta]
-            
+
+            # print(f"{pt=}")
             # get xpts related data
-            fn = self._get_shell_normals(elem_xpts)
             detXd = self._get_detXd(pt, elem_xpts, fn)
             scale = detXd * wt
             XdinvT, Tmat, XdinvzT = self._get_shell_rotations(
@@ -99,11 +100,16 @@ class MITCShellElement:
                 # add mat col into the kelem
                 kelem[:, ideriv] += local_mat_col
 
+        # import matplotlib.pyplot as plt
+        # plt.imshow(kelem)
+        # plt.show()
+
         return kelem
     
     def _interp_fields(self, pt:list, vpn:int, num_fields:int, vec:np.ndarray):
         out = np.zeros(num_fields)
         N, _, _ = get_lagrange_basis_2d_all_standard(pt[0], pt[1])
+        # print(f"{pt=} {N=}")
         for ifield in range(num_fields):
             for inode in range(4):
                 out[ifield] += N[inode] * vec[vpn * inode + ifield]
@@ -146,19 +152,23 @@ class MITCShellElement:
             xi = -1 + 2.0 * ixi
             eta = -1 + 2.0 * ieta
             node_pt = [xi, eta]
+            # print(f"{elem_xpts=}")
 
             dX_dxi, dX_deta = self._interp_fields_grad(node_pt, vpn=3, num_fields=3, vec=elem_xpts)
             normal = np.cross(dX_dxi, dX_deta)
             normal /= np.linalg.norm(normal)
             fn[3*i:(3*i+3)] += normal
-        # print(f"{fn=}")
+
+            # xpt = self._interp_fields(node_pt, vpn=3, num_fields=3, vec=elem_xpts)
+            # print(f"{dX_dxi=} {dX_deta=} {normal=}")
         return fn
     
     def _get_detXd(self, pt:list, elem_xpts:np.ndarray, fn:np.ndarray):
         n0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=fn)
         dX_dxi, dX_deta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)        
         Xd = np.column_stack((dX_dxi, dX_deta, n0))
-        return np.linalg.det(Xd)
+        _detXd = np.linalg.det(Xd)
+        return np.abs(_detXd)
     
     def _shell_compute_transform(
         self, 
@@ -172,9 +182,10 @@ class MITCShellElement:
         t1hat /= np.linalg.norm(t1hat)
         t2hat = np.cross(nhat, t1hat)
         Tmat = np.column_stack((t1hat, t2hat, nhat))
-        # should just be eye(3)
+        # should just be eye(3) or rotation mat version of that often times
+        # but not on cylindrical shell, then changes some depending on curvilinear spot
+        # print(f"{Tmat=}")
         return Tmat
-
     
     def _get_shell_rotations(self, pt, elem_xpts, fn):
         # compute Tmat, XdinvT, XdinvzT transformation matrices for shell rotation
@@ -188,6 +199,8 @@ class MITCShellElement:
         Xdinv = np.linalg.inv(Xd)
         XdinvT = Xdinv @ Tmat
         XdinvzT = -Xdinv @ Xdz @ XdinvT
+
+        # print(f"{XdinvT=} {Tmat=} {XdinvzT=}")
         return XdinvT, Tmat, XdinvzT
         
     def _add_jac_col_drill(
@@ -197,13 +210,12 @@ class MITCShellElement:
         XdinvzT:np.ndarray, comp_data:list,
         p_vars:np.ndarray
     ):
-        mat_col = np.zeros(self.ndof)
 
         # just the linear drill strains here (so no nonlinearity)
         # et = self._compute_drill_strain(pt, Tmat, XdinvT, p_vars)
         # done explicitly here
-        u0xi, u0eta = self._interp_fields_grad(pt, vpn=6, num_fields=6, vec=p_vars)
-        u0xn = np.column_stack((u0xi[:3], u0eta[:3], np.zeros(3)))
+        u0xi, u0eta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
+        u0xn = np.column_stack((u0xi, u0eta, np.zeros(3)))
         u0 = self._interp_fields(pt, vpn=6, num_fields=6, vec=p_vars)
         thx, thy, thz = u0[3], u0[4], u0[5]
         C0 = np.array([ # rotation matrix for drill strain
@@ -248,7 +260,7 @@ class MITCShellElement:
         u0_sens[4] += thy_hat
         u0_sens[5] += thz_hat
 
-        mat_col += self._interp_fields_transpose(
+        mat_col = self._interp_fields_transpose(
             pt, vpn=6, num_fields=6, vec=u0_sens
         )
         mat_col += self._interp_fields_grad_transpose(
@@ -343,7 +355,7 @@ class MITCShellElement:
         mat_col : sensitivity w.r.t. p_vars (same shape as p_vars)
         d_bar   : sensitivity w.r.t. p_d   (same shape as p_d)
         """
-        ety_bar = np.asarray(ety_bar, dtype=float).reshape(9,)
+        # ety_bar = np.asarray(ety_bar, dtype=float).reshape(9,)
 
         mat_col = np.zeros_like(p_vars, dtype=float)
         d_bar   = np.zeros_like(p_d, dtype=float)
@@ -481,18 +493,18 @@ class MITCShellElement:
         gty = np.zeros((3, 3))
 
         # membrane normals
-        gty[0, 0] = self._1d_tying_interp(u=eta, vec=[p_ety[0], p_ety[1]])
-        gty[1, 1] = self._1d_tying_interp(u=xi,  vec=[p_ety[2], p_ety[3]])
+        gty[0, 0] = self._1d_tying_interp(u=eta, vec=[p_ety[0], p_ety[1]]) # g11
+        gty[1, 1] = self._1d_tying_interp(u=xi,  vec=[p_ety[2], p_ety[3]]) # g22
 
         # in-plane shear (symmetric)
-        gty[0, 1] = gty[1, 0] = p_ety[4]
+        gty[0, 1] = gty[1, 0] = p_ety[4] # g12
 
         # transverse shear terms (symmetric)
         val12 = self._1d_tying_interp(u=xi,  vec=[p_ety[5], p_ety[6]])
-        gty[1, 2] = gty[2, 1] = val12
+        gty[1, 2] = gty[2, 1] = val12 # g23
 
         val02 = self._1d_tying_interp(u=eta, vec=[p_ety[7], p_ety[8]])
-        gty[0, 2] = gty[2, 0] = val02
+        gty[0, 2] = gty[2, 0] = val02 # g12
 
         return gty
     
@@ -534,7 +546,6 @@ class MITCShellElement:
         XdinvzT:np.ndarray, comp_data:list,
         p_vars:np.ndarray
     ):
-        mat_col = np.zeros(self.ndof)
 
         # just do pforward and hrev part cause linear
         p_d = self._compute_director(p_vars, fn)
@@ -545,7 +556,7 @@ class MITCShellElement:
         # membrane strains
         p_em = np.array([p_e0ty[0,0], p_e0ty[1,1], 2.0 * p_e0ty[0,1]]) 
         # trv shear strains 
-        p_es = 2.0 * np.array([p_e0ty[0,2], p_e0ty[1,2]])
+        p_es = 2.0 * np.array([p_e0ty[0,2], p_e0ty[1,2]]) # or just sym sums here which means reverse is copy to each component
 
         # tangent stiffness 2D matrix
         E, nu, thick = comp_data
@@ -554,6 +565,7 @@ class MITCShellElement:
             [nu, 1, 0],
             [0, 0, (1.0 - nu) / 2.0]
         ])
+        # print(f"{E=} {nu=} {thick=}")
         A = C * thick * scale # A matrix from shell theory
         # B matrix is zero
         # trv shear A matrix
@@ -564,16 +576,18 @@ class MITCShellElement:
         h_sm = np.dot(A, p_em)
         h_ss = np.dot(As, p_es)
 
+        # forward is double that or you can just add both off-diag entries
+        # so reverse / transpose is still copy to each off-diag component not double
         h_e0ty = np.array([
-            [h_sm[0], 2 * h_sm[2], 2 * h_ss[0]],
-            [2 * h_sm[2], h_sm[1], 2 * h_ss[1]],
-            [2 * h_ss[0], 2 * h_ss[1], 0.0],
+            [h_sm[0], h_sm[2], h_ss[0]],
+            [h_sm[2], h_sm[1], h_ss[1]],
+            [h_ss[0], h_ss[1], 0.0],
         ])
 
         h_gty = XdinvT @ h_e0ty @ XdinvT.T
         h_ety = self._interp_tying_strains_transpose(pt, h_gty)
         add_mat_col, d_hat = self._compute_mitc_tying_strains_transpose(elem_xpts, fn, p_vars, p_d, h_ety)
-        mat_col += add_mat_col
+        mat_col = add_mat_col
         mat_col += self._compute_director_sens(fn, d_hat)
         return mat_col
     
@@ -624,7 +638,6 @@ class MITCShellElement:
         XdinvzT:np.ndarray, comp_data:list,
         p_vars:np.ndarray
     ):
-        mat_col = np.zeros(self.ndof)
 
         # p-forward section
         p_d = self._compute_director(p_vars, fn)
@@ -644,46 +657,37 @@ class MITCShellElement:
         # h-reverse section
         h_u0x, h_u1x = self._compute_bending_strain_sens(h_ek)
         add_mat_col, h_d = self._compute_bending_disp_grad_sens(pt, Tmat, XdinvT, XdinvzT, h_u0x, h_u1x)
-        mat_col += add_mat_col
+        mat_col = add_mat_col
         mat_col += self._compute_director_sens(fn, h_d)
         return mat_col
-        
-    
-    def get_felem(self, mag, elem_xpts:np.ndarray):
-        """get element load vector"""
 
+    def get_felem(self, mag, elem_xpts: np.ndarray):
         pts, wts = first_order_quadrature()
         felem = np.zeros(self.ndof)
-        
+
+        fn = self._get_shell_normals(elem_xpts)  # once
+
         for iquad in range(4):
-            
-            # get quad pt
             ixi, ieta = iquad % 2, iquad // 2
             xi = pts[ixi]; eta = pts[ieta]
             wt = wts[ixi] * wts[ieta]
             pt = [xi, eta]
-            
-            # get xpts related data
-            fn = self._get_shell_normals(elem_xpts)
-            detXd = self._get_detXd(pt, elem_xpts, fn)
-            scale = detXd * wt
-            # XdinvT, Tmat, XdinvzT = self._get_shell_rotations(
-            #     pt, elem_xpts, fn
-            # )
 
-            N, _, _= get_lagrange_basis_2d_all_standard(
-                xi, eta, 
-            )
+            detXd = self._get_detXd(pt, elem_xpts, fn)
+            scale = abs(detXd) * wt   # consider abs
+
+            N, _, _ = get_lagrange_basis_2d_all_standard(xi, eta)
 
             xyzq = self._interp_fields(pt, vpn=3, num_fields=3, vec=elem_xpts)
             q = float(mag(xyzq[0], xyzq[1], xyzq[2]))
-            scale *= q # load by load mag
 
             n0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=fn)
-            # add bending load mags as normal trv loads
-            for j in range(3):
-                felem[j::6] += n0[j] * scale * N
-        
+
+            # add q*n0 to translational DOFs (u,v,w) at each node
+            felem[0::6] += n0[0] * (scale * q) * N
+            felem[1::6] += n0[1] * (scale * q) * N
+            felem[2::6] += n0[2] * (scale * q) * N
+
         return felem
 
     # # ----------------------------

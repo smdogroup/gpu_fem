@@ -106,6 +106,13 @@ class StandardCylinderAssembler:
         # store as sorted list for reproducibility
         self.bcs = sorted(bc_dofs)
 
+        # # print(f"{self.bcs=}")
+        # for bc in self.bcs:
+        #     inode = bc // 6
+        #     idof = bc - 6 * inode
+        #     ix, iy = inode % self.nnx, inode // self.nnx
+        #     print(f"{inode=} ({ix},{iy}) {idof=} constrained")
+
         # ---- ELEMENT connectivity: 4 nodes per quad ----
         # node layout per element (Q1):
         # 0:(ex,ey), 1:(ex+1,ey), 2:(ex,ey+1), 3:(ex+1,ey+1)
@@ -117,6 +124,7 @@ class StandardCylinderAssembler:
                 n2 = ex + self.nnx * (ey + 1)
                 n3 = (ex + 1) + self.nnx * (ey + 1)
                 self.conn.append(np.array([n0, n1, n2, n3], dtype=int))
+                # self.conn.append(np.array([n0, n1, n3, n2], dtype=int))
 
         # DOF connectivity (4*dpn = 12 dof per elem)
         dpn = self.dof_per_node
@@ -211,9 +219,13 @@ class StandardCylinderAssembler:
     def direct_solve(self):
         self._assemble_system()
         self.u = sp.linalg.spsolve(self.kmat.tocsc(), self.force)
+
+        resid = self.force - self.kmat.dot(self.u)
+        rel_nrm = np.linalg.norm(resid) / np.linalg.norm(self.force)
+        # print(f"direct solve {rel_nrm=:.4e}")
         return self.u
 
-    def plot_disp(self, disp_mag:float, mode:str):
+    def plot_disp(self, disp_mag: float = 0.2, mode:str = 'normal'):
         import matplotlib.colors as mcolors
         import matplotlib.cm as cm
             
@@ -222,13 +234,37 @@ class StandardCylinderAssembler:
 
         dpn = self.dof_per_node
         U = self.u.reshape((self.nnodes, dpn))
-        w = U[:, 2]
 
-        W = w.reshape((self.nnx, self.nnx))
         x = np.arange(self.nnx) * self.dx
         s = np.arange(self.nnx) * self.dy
         # s = np.linspace(-self.Ly, 0.0, self.nnx)
         phi = s / self.radius
+
+        ix_vec = np.array([inode % self.nnx for inode in range(self.nnodes)])
+        iy_vec = np.array([inode // self.nnx for inode in range(self.nnodes)])
+        x_flat = ix_vec * self.dx
+        s_flat = iy_vec * self.dy
+        phi_flat = s_flat / self.radius
+
+        # plot normal deflection v * yhat + w * zhat
+        y_flat = -self.radius * np.cos(phi_flat)
+        z_flat = self.radius * np.sin(phi_flat)
+        yhat = y_flat / self.radius; zhat = z_flat / self.radius
+        w = U[:, 1] * yhat + U[:,2] * zhat # true normal deflection
+        W = w.reshape((self.nnx, self.nnx))
+
+        X, Phi = np.meshgrid(x, phi, indexing="xy")
+        Y = (self.radius + W) * -np.cos(Phi)
+        Z = (self.radius + W) * np.sin(Phi)
+
+        print(f"{phi*180/np.pi=}")
+
+        orig_mag = np.max(np.abs(w))
+        W0 = W.copy()
+        W = W0 * disp_mag / orig_mag
+
+        # print(f"{W=}")
+
         X, Phi = np.meshgrid(x, phi, indexing="xy")
         Y = (self.radius + W) * -np.cos(Phi)
         Z = (self.radius + W) * np.sin(Phi)
@@ -245,7 +281,7 @@ class StandardCylinderAssembler:
         # plt.tight_layout()
 
         # ---- color by selected field ----
-        C = np.abs(W)
+        C = np.abs(W0)
         C_face = 0.25 * (C[:-1, :-1] + C[1:, :-1] + C[:-1, 1:] + C[1:, 1:])
 
         norm = mcolors.Normalize(vmin=float(C_face.min()), vmax=float(C_face.max()))
@@ -273,6 +309,8 @@ class StandardCylinderAssembler:
         ax.set_zlabel("radial")
         # ax.set_title(f"color={'w'}")
         ax.view_init(elev=25, azim=-135)
+
+        ax.set_box_aspect((1,1,1))
 
         # if created_fig:
         mappable = cm.ScalarMappable(norm=norm, cmap=cmap)

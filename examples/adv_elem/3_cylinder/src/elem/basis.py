@@ -75,8 +75,11 @@ def get_lagrange_basis_01(xi):
     return N, dN
 
 def get_lagrange_basis(xi):
-    N, dN = get_lagrange_basis_01(xi)
-    return 0.5*N, 0.5*dN
+    # N, dN = get_lagrange_basis_01(xi)
+    # return 0.5*N, 0.5*dN
+    N = 0.5 * np.array([1.0 - xi, 1.0 + xi])
+    dN = 0.5 * np.array([-1.0, 1.0])
+    return N, dN
 
 def get_lagrange_basis_2d_all(xi, eta):
     N1, dN1 = get_lagrange_basis(xi)

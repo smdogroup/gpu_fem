@@ -173,6 +173,10 @@ def runTacsToVTK(bdf_file, E:float, nu:float, load_fcn, xpts, thickness):
     problem.solve()
     problem.writeSolution(outputDir=os.path.dirname(__file__))
 
+    # get and return solution
+    soln = problem.u.getArray()
+    return soln
+
 
 def plot_cylinder_vec(nxe, vec, ax, sort_fw, cmap='viridis'):
     """Plot cylinder displacement or field (assumes 1 DOF per node)"""
@@ -517,15 +521,20 @@ def gen_cylinder_mesh_quarter(nel_circ: int = 12, nel_axial: int = 10,
 if __name__ == "__main__":
     # make TACS objects and run cylinder case
 
-    nxe = 128
+    # nxe = 128
     # nxe = 64
     # nxe = 32
+    # nxe = 16
     # nxe = 8
+    nxe = 4
+
     radius = 1.0
     length = 1.0
-    thickness = 1.0e-2
+    # thickness = 1.0e-2
+    thickness = 1.0e-3
     bdf_file = "cylinder.bdf"
-    load_fcn = lambda x, y, z : 1.0
+    # load_fcn = lambda x, y, z : 1.0
+    load_fcn = lambda x, y, z : 1.0 * np.sin(np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * y)
     # have to account for cylinder arc area
     # nodal_load_fcn = lambda x, y, z : load_fcn(x,y,z) * 2.0 * np.pi
 
@@ -535,7 +544,11 @@ if __name__ == "__main__":
     K_bsr, force, xpts = get_tacs_matrix(bdf_file, E=70e9, nu=0.3, load_fcn=load_fcn, thickness=thickness)
 
     # also run TACS with standard API so we can view stresses in VTK files
-    runTacsToVTK(bdf_file, E=70e9, nu=0.3, load_fcn=load_fcn, xpts=xpts, thickness=thickness)
+    disp = runTacsToVTK(bdf_file, E=70e9, nu=0.3, load_fcn=load_fcn, xpts=xpts, thickness=thickness)
+
+    norm_disp = disp[1::6] * xpts[1::3] + disp[2::6] * xpts[2::3]
+    norm_nrm = np.max(np.abs(norm_disp))
+    print(f"{norm_nrm=:.4e}")
 
     # soln = sp.linalg.spsolve(K_bsr, force)
     # # sort_fw_map, sort_bk_map = sort_vis_maps(nxe, xpts, 
