@@ -1,6 +1,8 @@
 import scipy.sparse as sp
 import numpy as np
 import matplotlib.pyplot as plt
+import sys
+sys.path.append("../2_plate/src/")
 from _sparse_utils import build_csr_from_conn
 
 class StandardCylinderAssembler:
@@ -21,7 +23,7 @@ class StandardCylinderAssembler:
         length: float = 1.0,
         radius: float = 1.0,
         hoop_length: float = np.pi,
-        load_fcn=lambda x, y: 1.0,
+        load_fcn=lambda x, y, z: 1.0,
         clamped: bool = False,
         split_disp_bc: bool = False,
     ):
@@ -140,8 +142,8 @@ class StandardCylinderAssembler:
             iy = gnode // self.nnx
             phi = iy * self.dth
             elem_xpts[3*lnode + 0] = ix * self.dx
-            elem_xpts[3*lnode + 1] = self.radius * np.sin(phi)
-            elem_xpts[3*lnode + 2] = self.radius * np.cos(phi)
+            elem_xpts[3*lnode + 1] = -self.radius * np.cos(phi)
+            elem_xpts[3*lnode + 2] = self.radius * np.sin(phi)
         return elem_xpts
 
     def _apply_bcs(self, dpn: int):
@@ -211,7 +213,7 @@ class StandardCylinderAssembler:
         self.u = sp.linalg.spsolve(self.kmat.tocsc(), self.force)
         return self.u
 
-    def plot_disp(self):
+    def plot_disp(self, disp_mag:float, mode:str):
         import matplotlib.colors as mcolors
         import matplotlib.cm as cm
             
@@ -224,10 +226,12 @@ class StandardCylinderAssembler:
 
         W = w.reshape((self.nnx, self.nnx))
         x = np.arange(self.nnx) * self.dx
-        phi = np.arange(self.nnx) * self.dth
+        s = np.arange(self.nnx) * self.dy
+        # s = np.linspace(-self.Ly, 0.0, self.nnx)
+        phi = s / self.radius
         X, Phi = np.meshgrid(x, phi, indexing="xy")
-        Y = (self.radius + W) * np.sin(Phi)
-        Z = (self.radius + W) * np.cos(Phi)
+        Y = (self.radius + W) * -np.cos(Phi)
+        Z = (self.radius + W) * np.sin(Phi)
 
         # fig = plt.figure(figsize=(9, 6))
         # ax = fig.add_subplot(111, projection="3d")
@@ -248,13 +252,13 @@ class StandardCylinderAssembler:
         cmap = cm.get_cmap("viridis")
         facecolors = cmap(norm(C_face))
 
-        created_fig = False
-        if ax is None:
-            fig = plt.figure(figsize=(9, 6))
-            ax = fig.add_subplot(111, projection="3d")
-            created_fig = True
-        else:
-            fig = ax.figure
+        # created_fig = False
+        # if ax is None:
+        fig = plt.figure(figsize=(9, 6))
+        ax = fig.add_subplot(111, projection="3d")
+        # created_fig = True
+        # else:
+        #     fig = ax.figure
 
         ax.plot_surface(
             X, Y, Z,
@@ -270,12 +274,12 @@ class StandardCylinderAssembler:
         # ax.set_title(f"color={'w'}")
         ax.view_init(elev=25, azim=-135)
 
-        if created_fig:
-            mappable = cm.ScalarMappable(norm=norm, cmap=cmap)
-            mappable.set_array([])
-            fig.colorbar(mappable, ax=ax, shrink=0.6, pad=0.08, label=f"|w|")
-            plt.tight_layout()
-            plt.show()
+        # if created_fig:
+        mappable = cm.ScalarMappable(norm=norm, cmap=cmap)
+        mappable.set_array([])
+        fig.colorbar(mappable, ax=ax, shrink=0.6, pad=0.08, label=f"|w|")
+        plt.tight_layout()
+        plt.show()
         plt.show()
 
     # ------------------------

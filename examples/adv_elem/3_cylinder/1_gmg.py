@@ -5,6 +5,10 @@ from elem import DeRhamIsogeometricCylinderElement, MixedDeRhamIGACylinderElemen
 from drig_assembler import DeRhamIGACylinderAssembler
 from drig_assembler2 import MixedDeRhamIGACylinderAssembler
 
+# MITC
+from elem import MITCShellElement
+from std_assembler import StandardCylinderAssembler
+
 # sys.path.append("../2_plate/src/")
 # from asw_derham import TwoDimAddSchwarzDeRhamVertexEdges
 from dasw_cyl import TwoDimAddSchwarzDeRhamCylinderVertexEdges, MixedTwoDimAddSchwarzDeRhamCylinderVertexEdges
@@ -18,7 +22,7 @@ from asw import TwodimAddSchwarz
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--elem", type=str, default='drig', help="--elem, options: tbd")
+parser.add_argument("--elem", type=str, default='mitc', help="--elem, options: tbd")
 parser.add_argument("--nxe", type=int, default=16, help="number of elements") # 32
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
 parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
@@ -68,6 +72,9 @@ elif args.elem == 'mdrig':
         # curvature_on=False,
     )
     ASSEMBLER = MixedDeRhamIGACylinderAssembler
+elif args.elem == 'mitc':
+    ELEMENT = MITCShellElement()
+    ASSEMBLER = StandardCylinderAssembler
     
 
 # standard assembler construction
@@ -80,7 +87,8 @@ assembler = ASSEMBLER(
     # hoop_length=np.pi*0.5*R, # quarter-cylinder
     hoop_length=args.width,
     radius=R,
-    load_fcn = lambda x,s : 1.0,
+    # load_fcn = lambda x,s : 1.0,
+    load_fcn = lambda x, y, z : 1.0e2,
     clamped=clamped,
 )
 
@@ -110,8 +118,8 @@ if 'mg' in args.solve:
             load_fcn = lambda x,s : 1.0,
             clamped=clamped,
         )
-        print(f"{nxe=} with {grid.force.shape=}")
         grid._assemble_system()
+        print(f"{nxe=} with {grid.force.shape=}")
         grids += [grid]
         if args.smoother == 'gs':
             smoother = BlockGaussSeidel.from_assembler(

@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.sparse as sp
 
-from .basis import second_order_quadrature
+from .basis import second_order_quadrature, first_order_quadrature
 from .basis import get_lagrange_basis_2d_all_standard
 
 import numpy as np
@@ -50,7 +50,7 @@ class MITCShellElement:
         """
         Method based on k_add_jacobian_fast assembly from MITC shell GPU code
         """
-        pts, wts = second_order_quadrature()
+        pts, wts = first_order_quadrature()
 
         kelem = np.zeros((self.ndof, self.ndof))
 
@@ -101,41 +101,41 @@ class MITCShellElement:
 
         return kelem
     
-    def _interp_fields(pt:list, num_fields:int, vec:np.ndarray):
+    def _interp_fields(self, pt:list, vpn:int, num_fields:int, vec:np.ndarray):
         out = np.zeros(num_fields)
         N, _, _ = get_lagrange_basis_2d_all_standard(pt[0], pt[1])
         for ifield in range(num_fields):
             for inode in range(4):
-                out[ifield] += N[inode] * vec[6 * inode + ifield]
+                out[ifield] += N[inode] * vec[vpn * inode + ifield]
         return out
     
-    def _interp_fields_transpose(pt:list, num_fields:int, vec:np.ndarray):
-        out = np.zeros(num_fields * 4)
+    def _interp_fields_transpose(self, pt:list, vpn:int, num_fields:int, vec:np.ndarray):
+        out = np.zeros(vpn * 4)
         N, _, _ = get_lagrange_basis_2d_all_standard(pt[0], pt[1])
         for ifield in range(num_fields):
             for inode in range(4):
-                out[6 * inode + ifield] += N[inode] * vec[ifield]
+                out[vpn * inode + ifield] += N[inode] * vec[ifield]
         return out
 
-    def _interp_fields_grad(pt:list, num_fields:int, vec:np.ndarray):
+    def _interp_fields_grad(self, pt:list, vpn:int, num_fields:int, vec:np.ndarray):
         dxi = np.zeros(num_fields); deta = np.zeros(num_fields)
         
         _, dNdxi, dNdeta = get_lagrange_basis_2d_all_standard(pt[0], pt[1])
         for ifield in range(num_fields):
             for inode in range(4):
-                dxi[ifield] += dNdxi[inode] * vec[6 * inode + ifield]
-                deta[ifield] += dNdeta[inode] * vec[6 * inode + ifield]
+                dxi[ifield] += dNdxi[inode] * vec[vpn * inode + ifield]
+                deta[ifield] += dNdeta[inode] * vec[vpn * inode + ifield]
         return dxi, deta
     
-    def _interp_fields_grad_transpose(pt:list, num_fields:int, dxi:np.ndarray, deta:np.ndarray):
-        dout = np.zeros(num_fields * 4)
+    def _interp_fields_grad_transpose(self, pt:list, vpn:int, num_fields:int, dxi:np.ndarray, deta:np.ndarray):
+        dout = np.zeros(vpn * 4)
 
         _, dNdxi, dNdeta = get_lagrange_basis_2d_all_standard(pt[0], pt[1])
         for ifield in range(num_fields):
             for inode in range(4):
-                dout[6 * inode + ifield] += dxi[ifield] * dNdxi[inode] + \
+                dout[vpn * inode + ifield] += dxi[ifield] * dNdxi[inode] + \
                     deta[ifield] * dNdeta[inode]
-        return dxi, deta
+        return dout
 
     def _get_shell_normals(self, elem_xpts:np.ndarray):
         fn = np.zeros(12)
@@ -147,15 +147,16 @@ class MITCShellElement:
             eta = -1 + 2.0 * ieta
             node_pt = [xi, eta]
 
-            dX_dxi, dX_deta = self._interp_fields_grad(node_pt, num_fields=3, vec=elem_xpts)
+            dX_dxi, dX_deta = self._interp_fields_grad(node_pt, vpn=3, num_fields=3, vec=elem_xpts)
             normal = np.cross(dX_dxi, dX_deta)
             normal /= np.linalg.norm(normal)
             fn[3*i:(3*i+3)] += normal
+        # print(f"{fn=}")
         return fn
     
     def _get_detXd(self, pt:list, elem_xpts:np.ndarray, fn:np.ndarray):
-        n0 = self._interp_fields(pt, num_fields=3, vec=fn)
-        dX_dxi, dX_deta = self._interp_fields_grad(pt, num_fields=3, vec=elem_xpts)        
+        n0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=fn)
+        dX_dxi, dX_deta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)        
         Xd = np.column_stack((dX_dxi, dX_deta, n0))
         return np.linalg.det(Xd)
     
@@ -168,6 +169,7 @@ class MITCShellElement:
         nhat = n0 / np.linalg.norm(n0)
         t1 = ref_axis
         t1hat = t1 - np.dot(t1, nhat) * nhat
+        t1hat /= np.linalg.norm(t1hat)
         t2hat = np.cross(nhat, t1hat)
         Tmat = np.column_stack((t1hat, t2hat, nhat))
         # should just be eye(3)
@@ -176,9 +178,9 @@ class MITCShellElement:
     
     def _get_shell_rotations(self, pt, elem_xpts, fn):
         # compute Tmat, XdinvT, XdinvzT transformation matrices for shell rotation
-        n0 = self._interp_fields(pt, num_fields=3, vec=fn)
-        dX_dxi, dX_deta = self._interp_fields_grad(pt, num_fields=3, vec=elem_xpts)        
-        nxi, neta = self._interp_fields_grad(pt, num_fields=3, vec=fn)
+        n0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=fn)
+        dX_dxi, dX_deta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)        
+        nxi, neta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=fn)
         Xd = np.column_stack((dX_dxi, dX_deta, n0))
         Xdz = np.column_stack((nxi, neta, np.zeros(3)))
         Tmat = self._shell_compute_transform(n0, ref_axis=np.array([1, 0, 0]))
@@ -200,9 +202,9 @@ class MITCShellElement:
         # just the linear drill strains here (so no nonlinearity)
         # et = self._compute_drill_strain(pt, Tmat, XdinvT, p_vars)
         # done explicitly here
-        u0xi, u0eta = self._interp_fields_grad(pt, num_fields=6, vec=p_vars)
+        u0xi, u0eta = self._interp_fields_grad(pt, vpn=6, num_fields=6, vec=p_vars)
         u0xn = np.column_stack((u0xi[:3], u0eta[:3], np.zeros(3)))
-        u0 = self._interp_fields(pt, num_fields=6, vec=p_vars)
+        u0 = self._interp_fields(pt, vpn=6, num_fields=6, vec=p_vars)
         thx, thy, thz = u0[3], u0[4], u0[5]
         C0 = np.array([ # rotation matrix for drill strain
             [1.0, thz, -thy],
@@ -247,11 +249,10 @@ class MITCShellElement:
         u0_sens[5] += thz_hat
 
         mat_col += self._interp_fields_transpose(
-            pt, num_fields=6, vec=u0_sens
+            pt, vpn=6, num_fields=6, vec=u0_sens
         )
-
         mat_col += self._interp_fields_grad_transpose(
-            pt, num_fields=6, dxi=u0xi_hat, deta=u0eta_hat
+            pt, vpn=6, num_fields=3, dxi=u0xi_hat, deta=u0eta_hat
         )
         
         return mat_col
@@ -268,7 +269,7 @@ class MITCShellElement:
     def _compute_director_sens(self, fn, d_bar):
         mat_col = np.zeros(24)
         for i in range(4):
-            mat_col[(6*i+3):(6*i+6)], += np.cross(
+            mat_col[(6*i+3):(6*i+6)] += np.cross(
                 fn[3*i:(3*i+3)],
                 d_bar[3*i:(3*i+3)],
             )
@@ -285,92 +286,246 @@ class MITCShellElement:
         for j in range(2):
             # tying pt
             pt = [0.0, -1 + 2 * j]
-            Xxi, Xeta = self._interp_fields_grad(pt, num_fields=3, vec=elem_xpts)
-            Uxi, Ueta = self._interp_fields_grad(pt, num_fields=6, vec=p_vars)
+            Xxi, Xeta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)
+            Uxi, Ueta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
             ety[j] = np.dot(Uxi, Xxi)
 
         # g22 tying strain
         for j in range(2):
             # tying pt
             pt = [-1 + 2 * j, 0.0]
-            Xxi, Xeta = self._interp_fields_grad(pt, num_fields=3, vec=elem_xpts)
-            Uxi, Ueta = self._interp_fields_grad(pt, num_fields=6, vec=p_vars)
+            Xxi, Xeta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)
+            Uxi, Ueta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
             ety[2 + j] = np.dot(Ueta, Xeta)
 
         # g12 tying strain
         pt = [0.0, 0.0]
-        Xxi, Xeta = self._interp_fields_grad(pt, num_fields=3, vec=elem_xpts)
-        Uxi, Ueta = self._interp_fields_grad(pt, num_fields=6, vec=p_vars)
+        Xxi, Xeta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)
+        Uxi, Ueta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
         ety[4] = 0.5 * (np.dot(Uxi, Xeta) + np.dot(Ueta, Xxi))
 
         # g23 tying strain
         for j in range(2):
             # tying pt
             pt = [-1 + 2 * j, 0.0]
-            Xxi, Xeta = self._interp_fields_grad(pt, num_fields=3, vec=elem_xpts)
-            Uxi, Ueta = self._interp_fields_grad(pt, num_fields=6, vec=p_vars)
-            n0 = self._interp_fields(pt, num_fields=3, vec=fn)
-            d0 = self._interp_fields(pt, num_fields=3, vec=p_d)
+            Xxi, Xeta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)
+            Uxi, Ueta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
+            n0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=fn)
+            d0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=p_d)
             ety[5 + j] = 0.5 * (np.dot(Xeta, d0) + np.dot(n0, Ueta))
 
         # g13 tying strain
         for j in range(2):
             # tying pt
             pt = [0.0, -1 + 2 * j]
-            Xxi, Xeta = self._interp_fields_grad(pt, num_fields=3, vec=elem_xpts)
-            Uxi, Ueta = self._interp_fields_grad(pt, num_fields=6, vec=p_vars)
-            n0 = self._interp_fields(pt, num_fields=3, vec=fn)
-            d0 = self._interp_fields(pt, num_fields=3, vec=p_d)
+            Xxi, Xeta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)
+            Uxi, Ueta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
+            n0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=fn)
+            d0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=p_d)
             ety[7 + j] = 0.5 * (np.dot(Xxi, d0) + np.dot(n0, Uxi))
 
         return ety
     
-    def _1d_tying_interp(self, u, vec:np.ndarray):
+    def _compute_mitc_tying_strains_transpose(self, elem_xpts, fn, p_vars, p_d, ety_bar):
+        """
+        Transpose/adjoint of _compute_mitc_tying_strains.
+
+        Inputs
+        ------
+        elem_xpts : geometry nodal vector (used in forward for Xxi/Xeta)
+        fn        : nodal director/normal vector (used in forward for n0)
+        p_vars    : nodal dofs (num_fields=6)
+        p_d       : nodal director-like dofs (num_fields=3)
+        ety_bar   : adjoint of ety, shape (9,)
+
+        Returns
+        -------
+        mat_col : sensitivity w.r.t. p_vars (same shape as p_vars)
+        d_bar   : sensitivity w.r.t. p_d   (same shape as p_d)
+        """
+        ety_bar = np.asarray(ety_bar, dtype=float).reshape(9,)
+
+        mat_col = np.zeros_like(p_vars, dtype=float)
+        d_bar   = np.zeros_like(p_d, dtype=float)
+
+        # -------------------------
+        # g11 tying strain (2 pts): ety[j] = dot(Uxi, Xxi)
+        # -------------------------
+        for j in range(2):
+            pt = [0.0, -1.0 + 2.0 * j]
+
+            Xxi, Xeta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)
+            Uxi, Ueta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
+
+            s = float(ety_bar[j])
+
+            # ety = dot(Uxi, Xxi)
+            Uxi_bar  = s * Xxi
+            Ueta_bar = np.zeros_like(Ueta)
+
+            # push back to p_vars via grad-transpose
+            mat_col += self._interp_fields_grad_transpose(
+                pt, vpn=6, num_fields=3, dxi=Uxi_bar, deta=Ueta_bar
+            )
+
+        # -------------------------
+        # g22 tying strain (2 pts): ety[2+j] = dot(Ueta, Xeta)
+        # -------------------------
+        for j in range(2):
+            pt = [-1.0 + 2.0 * j, 0.0]
+
+            Xxi, Xeta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)
+            Uxi, Ueta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
+
+            s = float(ety_bar[2 + j])
+
+            Uxi_bar  = np.zeros_like(Uxi)
+            Ueta_bar = s * Xeta
+
+            mat_col += self._interp_fields_grad_transpose(
+                pt, vpn=6, num_fields=3, dxi=Uxi_bar, deta=Ueta_bar
+            )
+
+        # -------------------------
+        # g12 tying strain (center):
+        # ety[4] = 0.5*(dot(Uxi,Xeta) + dot(Ueta,Xxi))
+        # -------------------------
+        pt = [0.0, 0.0]
+        Xxi, Xeta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)
+        Uxi, Ueta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
+
+        s = float(ety_bar[4])
+
+        Uxi_bar  = 0.5 * s * Xeta
+        Ueta_bar = 0.5 * s * Xxi
+
+        mat_col += self._interp_fields_grad_transpose(
+            pt, vpn=6, num_fields=3, dxi=Uxi_bar, deta=Ueta_bar
+        )
+
+        # -------------------------
+        # g23 tying strain (2 pts):
+        # ety[5+j] = 0.5*(dot(Xeta,d0) + dot(n0,Ueta))
+        # -------------------------
+        for j in range(2):
+            pt = [-1.0 + 2.0 * j, 0.0]
+
+            Xxi, Xeta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)
+            Uxi, Ueta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
+            n0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=fn)
+            d0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=p_d)
+
+            s = float(ety_bar[5 + j])
+
+            # ety = 0.5*(dot(Xeta,d0) + dot(n0,Ueta))
+            # d0_bar from dot(Xeta,d0)
+            d0_bar = 0.5 * s * Xeta
+
+            # Ueta_bar from dot(n0,Ueta)
+            Uxi_bar  = np.zeros_like(Uxi)
+            Ueta_bar = 0.5 * s * n0
+
+            # push back to p_vars and p_d
+            mat_col += self._interp_fields_grad_transpose(
+                pt, vpn=6, num_fields=3, dxi=Uxi_bar, deta=Ueta_bar
+            )
+            d_bar += self._interp_fields_transpose(
+                pt, vpn=3, num_fields=3, vec=d0_bar
+            )
+
+        # -------------------------
+        # g13 tying strain (2 pts):
+        # ety[7+j] = 0.5*(dot(Xxi,d0) + dot(n0,Uxi))
+        # -------------------------
+        for j in range(2):
+            pt = [0.0, -1.0 + 2.0 * j]
+
+            Xxi, Xeta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=elem_xpts)
+            Uxi, Ueta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
+            n0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=fn)
+            d0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=p_d)
+
+            s = float(ety_bar[7 + j])
+
+            # ety = 0.5*(dot(Xxi,d0) + dot(n0,Uxi))
+            d0_bar = 0.5 * s * Xxi
+
+            Uxi_bar  = 0.5 * s * n0
+            Ueta_bar = np.zeros_like(Ueta)
+
+            mat_col += self._interp_fields_grad_transpose(
+                pt, vpn=6, num_fields=3, dxi=Uxi_bar, deta=Ueta_bar
+            )
+            d_bar += self._interp_fields_transpose(
+                pt, vpn=3, num_fields=3, vec=d0_bar
+            )
+
+        return mat_col, d_bar
+    
+    def _1d_tying_interp(self, u, vec: np.ndarray):
         N0 = 0.5 * (1.0 - u)
         N1 = 0.5 * (1.0 + u)
         return N0 * vec[0] + N1 * vec[1]
-    
-    def _1d_tying_interp_transpose(self, u, out:float):
+
+    def _1d_tying_interp_transpose(self, u, out_bar: float):
+        """
+        Transpose of: out = N0*v0 + N1*v1
+        Returns contributions to [v0_bar, v1_bar].
+        """
         N0 = 0.5 * (1.0 - u)
         N1 = 0.5 * (1.0 + u)
-        vec = np.array([N0, N1])
-        return vec
-    
+        return np.array([N0 * out_bar, N1 * out_bar], dtype=float)
+
     def _interp_tying_strains(self, quad_pt, p_ety):
         xi = quad_pt[0]; eta = quad_pt[1]
-        gty = np.zeros((3,3))
-        gty[0,0] = self._1d_tying_interp(
-            u=eta, vec=[p_ety[0], p_ety[1]]
-        )
-        gty[1,1] = self._1d_tying_interp(
-            u=xi, vec=[p_ety[2], p_ety[3]]
-        )
-        gty[0,1] = gty[1,0] = p_ety[4]
-        gty[1,2] = self._1d_tying_interp(
-            u=xi, vec=[p_ety[5], p_ety[6]]
-        )
-        gty[0,2] = self._1d_tying_interp(
-            u=eta, vec=[p_ety[7], p_ety[8]]
-        )
+        gty = np.zeros((3, 3))
+
+        # membrane normals
+        gty[0, 0] = self._1d_tying_interp(u=eta, vec=[p_ety[0], p_ety[1]])
+        gty[1, 1] = self._1d_tying_interp(u=xi,  vec=[p_ety[2], p_ety[3]])
+
+        # in-plane shear (symmetric)
+        gty[0, 1] = gty[1, 0] = p_ety[4]
+
+        # transverse shear terms (symmetric)
+        val12 = self._1d_tying_interp(u=xi,  vec=[p_ety[5], p_ety[6]])
+        gty[1, 2] = gty[2, 1] = val12
+
+        val02 = self._1d_tying_interp(u=eta, vec=[p_ety[7], p_ety[8]])
+        gty[0, 2] = gty[2, 0] = val02
+
         return gty
     
     def _interp_tying_strains_transpose(self, quad_pt, p_gty):
         xi = quad_pt[0]; eta = quad_pt[1]
-        gty = np.zeros((3,3))
-        gty[0,0] = self._1d_tying_interp(
-            u=eta, vec=[p_ety[0], p_ety[1]]
+        p_ety = np.zeros(9, dtype=float)
+
+        # gty[0,0]
+        p_ety[0:2] += self._1d_tying_interp_transpose(
+            u=eta, out_bar=float(p_gty[0, 0])
         )
-        gty[1,1] = self._1d_tying_interp(
-            u=xi, vec=[p_ety[2], p_ety[3]]
+
+        # gty[1,1]
+        p_ety[2:4] += self._1d_tying_interp_transpose(
+            u=xi, out_bar=float(p_gty[1, 1])
         )
-        gty[0,1] = gty[1,0] = p_ety[4]
-        gty[1,2] = self._1d_tying_interp(
-            u=xi, vec=[p_ety[5], p_ety[6]]
+
+        # gty[0,1] = gty[1,0] = p4
+        p_ety[4] += float(p_gty[0, 1]) + float(p_gty[1, 0])
+
+        # gty[1,2] = gty[2,1]
+        shear12_bar = float(p_gty[1, 2]) + float(p_gty[2, 1])
+        p_ety[5:7] += self._1d_tying_interp_transpose(
+            u=xi, out_bar=shear12_bar
         )
-        gty[0,2] = self._1d_tying_interp(
-            u=eta, vec=[p_ety[7], p_ety[8]]
+
+        # gty[0,2] = gty[2,0]
+        shear02_bar = float(p_gty[0, 2]) + float(p_gty[2, 0])
+        p_ety[7:9] += self._1d_tying_interp_transpose(
+            u=eta, out_bar=shear02_bar
         )
-        return gty
+
+        return p_ety
 
     def _add_jac_col_tying(
         self, pt:list, scale:float, 
@@ -406,23 +561,63 @@ class MITCShellElement:
         As = np.eye(2) * A[-1,-1] * ks
 
         # membrane and trv shear stresses
-        p_sm = np.dot(A, p_em)
-        p_ss = np.dot(As, p_es)
+        h_sm = np.dot(A, p_em)
+        h_ss = np.dot(As, p_es)
 
         h_e0ty = np.array([
-            [p_sm[0], 2 * p_sm[2], 2 * p_ss[0]],
-            [2 * p_sm[2], p_sm[1], 2 * p_ss[1]],
-            [2 * p_ss[0], 2 * p_ss[1], 0.0],
+            [h_sm[0], 2 * h_sm[2], 2 * h_ss[0]],
+            [2 * h_sm[2], h_sm[1], 2 * h_ss[1]],
+            [2 * h_ss[0], 2 * h_ss[1], 0.0],
         ])
 
         h_gty = XdinvT @ h_e0ty @ XdinvT.T
         h_ety = self._interp_tying_strains_transpose(pt, h_gty)
-        hcol, d_hat = self._compute_mitc_tying_strains_transpose(elem_xpts, fn, p_vars, p_d, h_ety)
-        mat_col += hcol
+        add_mat_col, d_hat = self._compute_mitc_tying_strains_transpose(elem_xpts, fn, p_vars, p_d, h_ety)
+        mat_col += add_mat_col
         mat_col += self._compute_director_sens(fn, d_hat)
         return mat_col
+    
+    def _compute_bending_disp_grad(self, pt, p_vars, p_d, Tmat, XdinvT, XdinvzT):    
+        d0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=p_d)
+        d0xi, d0eta = self._interp_fields_grad(pt, vpn=3, num_fields=3, vec=p_d)
+        u0xi, u0eta = self._interp_fields_grad(pt, vpn=6, num_fields=3, vec=p_vars)
+        u0x_init = np.column_stack((u0xi, u0eta, d0))
+        u1x_init = np.column_stack((d0xi, d0eta, np.zeros(3)))
 
-    def _add_jac_col_tying(
+        p_u1x = Tmat.T @ (u1x_init @ XdinvT + u0x_init @ XdinvzT)
+        p_u0x = Tmat.T @ u0x_init @ XdinvT
+        return p_u0x, p_u1x
+
+    def _compute_bending_strain(self, p_u0x, p_u1x):
+        # linear strains only here
+        p_ek = np.array([
+            p_u1x[0,0],
+            p_u1x[1,1],
+            p_u1x[0,1] + p_u1x[1,0],
+        ])
+        return p_ek
+
+    def _compute_bending_strain_sens(self, h_ek):
+        h_u0x = np.zeros((3,3))
+        h_u1x = np.zeros((3,3))
+        h_u1x[0,0] += h_ek[0]
+        h_u1x[1,1] += h_ek[1]
+        h_u1x[0,1] += h_ek[2]
+        h_u1x[1,0] += h_ek[2]
+        return h_u0x, h_u1x
+
+    def _compute_bending_disp_grad_sens(self, pt, Tmat, XdinvT, XdinvzT, h_u0x, h_u1x):
+        
+        u0d_barT = XdinvT @ h_u0x.T @ Tmat.T
+        u0d_barT += XdinvzT @ h_u1x.T @ Tmat.T
+        h_d = self._interp_fields_transpose(pt, vpn=3, num_fields=3, vec=u0d_barT[2,:])
+        mat_col = self._interp_fields_grad_transpose(pt, vpn=6, num_fields=3, dxi=u0d_barT[0,:], deta=u0d_barT[1,:])
+
+        u1d_barT = XdinvT @ h_u1x.T @ Tmat.T
+        h_d += self._interp_fields_grad_transpose(pt, vpn=3, num_fields=3, dxi=u1d_barT[0,:], deta=u1d_barT[1,:])
+        return mat_col, h_d
+
+    def _add_jac_col_bending(
         self, pt:list, scale:float, 
         elem_xpts:np.ndarray, fn:np.ndarray,
         XdinvT:np.ndarray, Tmat:np.ndarray, 
@@ -430,138 +625,66 @@ class MITCShellElement:
         p_vars:np.ndarray
     ):
         mat_col = np.zeros(self.ndof)
-        pass
+
+        # p-forward section
+        p_d = self._compute_director(p_vars, fn)
+        p_u0x, p_u1x = self._compute_bending_disp_grad(pt, p_vars, p_d, Tmat, XdinvT, XdinvzT)
+        p_ek = self._compute_bending_strain(p_u0x, p_u1x)
+
+        # compute bending stress (constitutive)
+        E, nu, thick = comp_data
+        C = E / (1.0 - nu**2) * np.array([
+            [1, nu, 0],
+            [nu, 1, 0],
+            [0, 0, (1.0 - nu) / 2.0]
+        ])
+        D = C * thick**3 / 12.0 * scale # A matrix from shell theory
+        h_ek = np.dot(D, p_ek)
+
+        # h-reverse section
+        h_u0x, h_u1x = self._compute_bending_strain_sens(h_ek)
+        add_mat_col, h_d = self._compute_bending_disp_grad_sens(pt, Tmat, XdinvT, XdinvzT, h_u0x, h_u1x)
+        mat_col += add_mat_col
+        mat_col += self._compute_director_sens(fn, h_d)
+        return mat_col
         
-
-    # ----------------------------
-    # MITC helpers using (thy, -thx) directors + grad w ordering
-    # ----------------------------
-    # @staticmethod
-    # def _interp_1d_pm(s: float, a: float) -> np.ndarray:
-    #     """
-    #     Linear 1D Lagrange basis to interpolate from points at [-a, +a] to s.
-    #     Returns [N_- , N_+], where:
-    #     N_- = (a - s)/(2a), N_+ = (a + s)/(2a)
-    #     """
-    #     a = float(a)
-    #     return np.array([(a - s) / (2.0 * a), (a + s) / (2.0 * a)], dtype=float)
-
-    # @staticmethod
-    # def _geom_map_and_grads(Nxi, Neta, x, y, debug: bool = False):
-    #     x_xi = float(np.dot(Nxi, x))
-    #     x_eta = float(np.dot(Neta, x))
-    #     y_xi = float(np.dot(Nxi, y))
-    #     y_eta = float(np.dot(Neta, y))
-
-    #     J = x_xi * y_eta - x_eta * y_xi
-    #     invJ = 1.0 / J
-
-    #     xi_x = y_eta * invJ
-    #     xi_y = -x_eta * invJ
-    #     eta_x = -y_xi * invJ
-    #     eta_y = x_xi * invJ
-
-    #     Nx = Nxi * xi_x + Neta * eta_x
-    #     Ny = Nxi * xi_y + Neta * eta_y
-    #     return J, Nx, Ny
-
-    # def _Bs_rows_at_point(self, xi: float, eta: float, x: np.ndarray, y: np.ndarray):
-    #     """
-    #     Return the *pointwise* shear B rows (two 1x12 rows) for the director choice:
-    #         director = (thy, -thx)
-
-    #     i.e. transverse shear strains:
-    #         gamma_xz = w_x + thy
-    #         gamma_yz = w_y - thx
-
-    #     evaluated at (xi,eta).
-
-    #     DOF ordering per node: [w, thx, thy]
-    #     """
-    #     N, Nxi, Neta = get_lagrange_basis_2d_all(xi, eta)
-    #     J, Nx, Ny = self._geom_map_and_grads(Nxi, Neta, x, y, self.debug)
-
-    #     bx = np.zeros((12,), dtype=float)
-    #     by = np.zeros((12,), dtype=float)
-
-    #     # if self.debug:
-    #     #     print(f"{J=}\n{Nx=}\n{Ny=}\n{N=}")
-
-    #     # gamma_xz = w_x + thy
-    #     bx[0::3] = Nx
-    #     bx[2::3] = +N
-
-    #     # gamma_yz = w_y - thx
-    #     by[0::3] = Ny
-    #     by[1::3] = -N
-
-    #     return J, bx, by
-
-    # def _Bs_mitc_at_quad(self, xi: float, eta: float, x: np.ndarray, y: np.ndarray):
-    #     """
-    #     Build the *effective* MITC shear B matrix (2x12) at the quadrature point (xi,eta):
-
-    #     Uses the same director convention as _Bs_rows_at_point:
-    #         gamma_xz = w_x + thy   tied from (0, ±b) and interpolated in eta
-    #         gamma_yz = w_y - thx   tied from (±a, 0) and interpolated in xi
-    #     """
-    #     # Geometry/J evaluated at the quad point for integration measure
-    #     Nq, Nxi_q, Neta_q = get_lagrange_basis_2d_all(xi, eta)
-    #     Jq, _, _ = self._geom_map_and_grads(Nxi_q, Neta_q, x, y)
-
-    #     # Tying evaluations
-    #     _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x, y)
-    #     _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x, y)
-
-    #     _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x, y)
-    #     _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x, y)
-
-    #     # Interpolation weights
-    #     w_eta = self._interp_1d_pm(eta, self.b)  # from [-b,+b] -> eta
-    #     w_xi  = self._interp_1d_pm(xi,  self.a)  # from [-a,+a] -> xi
-
-    #     row_gx = w_eta[0] * bx_m + w_eta[1] * bx_p
-    #     row_gy = w_xi[0]  * by_m + w_xi[1]  * by_p
-
-    #     Bs = np.vstack([row_gx, row_gy])  # 2x12
-    #     return Jq, Bs
     
-    # def get_felem(self, mag, elem_xpts:np.ndarray):
-    #     """get element load vector"""
+    def get_felem(self, mag, elem_xpts:np.ndarray):
+        """get element load vector"""
 
-    #     pts, wts = second_order_quadrature()
-    #     felem = np.zeros(self.ndof)
-    #     x = elem_xpts[0::3]
-    #     y = elem_xpts[1::3]
+        pts, wts = first_order_quadrature()
+        felem = np.zeros(self.ndof)
+        
+        for iquad in range(4):
+            
+            # get quad pt
+            ixi, ieta = iquad % 2, iquad // 2
+            xi = pts[ixi]; eta = pts[ieta]
+            wt = wts[ixi] * wts[ieta]
+            pt = [xi, eta]
+            
+            # get xpts related data
+            fn = self._get_shell_normals(elem_xpts)
+            detXd = self._get_detXd(pt, elem_xpts, fn)
+            scale = detXd * wt
+            # XdinvT, Tmat, XdinvzT = self._get_shell_rotations(
+            #     pt, elem_xpts, fn
+            # )
 
-    #     for ipt in range(9):
-    #         ii, jj = ipt % 3, ipt // 3
-    #         xi = pts[ii]; eta = pts[jj]
-    #         wt = wts[ii] * wts[jj]
-    #         # basis (need N to map load; Nxi/Neta to get geometry jacobian)
-    #         N, Nxi, Neta= get_lagrange_basis_2d_all(
-    #             xi, eta, 
-    #         )
+            N, _, _= get_lagrange_basis_2d_all_standard(
+                xi, eta, 
+            )
 
-    #         # geometry jacobian determinant
-    #         x_xi  = np.dot(Nxi,  x);  x_eta = np.dot(Neta, x)
-    #         y_xi  = np.dot(Nxi,  y);  y_eta = np.dot(Neta, y)
-    #         J = x_xi * y_eta - x_eta * y_xi
+            xyzq = self._interp_fields(pt, vpn=3, num_fields=3, vec=elem_xpts)
+            q = float(mag(xyzq[0], xyzq[1], xyzq[2]))
+            scale *= q # load by load mag
 
-    #         # physical point (x,y) at this quadrature point
-    #         xq = float(np.dot(N, x))
-    #         yq = float(np.dot(N, y))
-
-    #         q = float(mag(xq, yq))   # distributed transverse load
-    #         # q *= 60.0 # not sure where this correction is coming from tbh
-
-    #         # consistent nodal load contribution: ∫ N^T q dA = Σ N_i q * wt * J
-    #         fN = q * wt * J * N  # length 9
-
-    #         # Apply load to the DOFs that contribute to transverse displacement.
-    #         felem[0::3] += fN  # w
-
-    #     return felem
+            n0 = self._interp_fields(pt, vpn=3, num_fields=3, vec=fn)
+            # add bending load mags as normal trv loads
+            for j in range(3):
+                felem[j::6] += n0[j] * scale * N
+        
+        return felem
 
     # # ----------------------------
     # # Prolongation / Restriction (same as your class, but locking constraints changed)
