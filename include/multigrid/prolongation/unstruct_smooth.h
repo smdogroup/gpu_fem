@@ -32,6 +32,7 @@ class UnstructuredSmoothProlongation {
 
         // init some data from fine assembler, and other startup
         block_dim = fine_assembler.getBsrData().block_dim;
+        h_fine_conn = fine_assembler.getConn().createHostVec().getPtr();
 
         // other startup
         descr_P = 0;
@@ -113,6 +114,8 @@ class UnstructuredSmoothProlongation {
         init_unstructured_grid_maps<T, Assembler, Basis, is_bsr, include_restrict>(
             fine_assembler, coarse_assembler, prolong_mat, restrict_mat, d_coarse_conn, d_n2e_ptr,
             d_n2e_elems, d_n2e_xis, ELEM_MAX);
+
+        h_coarse_conn = coarse_assembler.getConn().createHostVec().getPtr();
 
         // then get some data out of this (for more readable code later)
         P_bsr_data = prolong_mat->getBsrData();
@@ -398,4 +401,5 @@ class UnstructuredSmoothProlongation {
     int nnodes_coarse, N_coarse;
     DeviceVec<int> d_coarse_bcs, d_fine_bcs;
     int nsmooth_iters;
+    int *h_coarse_conn, *h_fine_conn;
 };
