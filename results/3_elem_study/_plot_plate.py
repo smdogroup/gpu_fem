@@ -10,9 +10,9 @@ from matplotlib.lines import Line2D
 # csv_file = 'csv/_plate100.csv'
 # csv_file = 'csv/_plate500.csv'
 
-# csv_file = 'csv/_plate10_A100.csv'
+csv_file = 'csv/_plate10_A100.csv'
 # csv_file = 'csv/_plate100_A100.csv'
-csv_file = 'csv/_plate500_A100.csv'
+# csv_file = 'csv/_plate500_A100.csv'
 
 df = pd.read_csv(csv_file)
 
@@ -30,7 +30,9 @@ plt.rcParams.update({
 })
 
 size = (8, 6.5)
-elem_order = ['MITC4', 'MITC9', 'MITC16', 'CFI4', 'CFI9', 'CFI16', 'HRA4', 'LFI16', 'AIG9']
+# elem_order = ['MITC4', 'MITC9', 'MITC16', 'CFI4', 'CFI9', 'CFI16', 'HRA4', 'LFI16', 'AIG9']
+
+elem_order = ['MITC4', 'MITC9', 'MITC16', 'CFI4', 'CFI9', 'CFI16', 'HRA4', 'LFI16']
 
 # =====================================================
 # Compute mesh convergence error
@@ -124,7 +126,9 @@ plot_variable('lin_runtime(s)', 'mesh_error', "out/plate_lin_error_runtime.png",
 # Legend figure
 # =====================================================
 # legend_order = ['CFI4', 'MITC4', 'CFI9', 'MITC9', 'CFI16', 'MITC16', 'HRA4','LFI16', 'AIG9']
-legend_order = ['CFI4', 'CFI9', 'CFI16', 'MITC4', 'MITC9', 'MITC16', 'HRA4', 'LFI16', 'AIG9']
+# legend_order = ['CFI4', 'CFI9', 'CFI16', 'MITC4', 'MITC9', 'MITC16', 'HRA4', 'LFI16', 'AIG9']
+
+legend_order = ['CFI4', 'CFI9', 'CFI16', 'MITC4', 'MITC9', 'MITC16', 'HRA4', 'LFI16']
 
 legend_handles = []
 for elem_type in legend_order:
