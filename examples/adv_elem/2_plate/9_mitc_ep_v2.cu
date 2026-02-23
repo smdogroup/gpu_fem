@@ -293,7 +293,7 @@ int main(int argc, char **argv) {
 
     int nsmooth = 2; // typically faster right now
     int ninnercyc = 1;
-    int nsmooth_mat = 3; // more iterations not converging yet
+    int nsmooth_mat = 2; // more iterations not converging yet
     // int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     // std::string cycle_type = "V"; // "V", "F", "W", "K"
