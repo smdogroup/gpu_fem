@@ -89,14 +89,15 @@ def plot_variable(xvar, yvar, fname, xlabel, ylabel):
         color = elem_colors[elem_type]
         marker = node_markers.get(nodes, 'o')
         group = df[df['elem_type'] == elem_type]
-        ax.plot(group[xvar], group[yvar],
-                marker=marker,
-                # linestyle='-' if not(elem_type == 'LFI16') else '--',
-                linestyle='--' if str(group['solver'].to_numpy()[-1]) == 'direct' else '-',
-                color=color,
-                linewidth=2.5,
-                markersize=8,
-                alpha=line_alpha)
+        if str(group['solver'].to_numpy()[-1]) != 'direct':
+            ax.plot(group[xvar], group[yvar],
+                    marker=marker,
+                    # linestyle='-' if not(elem_type == 'LFI16') else '--',
+                    linestyle='--' if str(group['solver'].to_numpy()[-1]) == 'direct' else '-',
+                    color=color,
+                    linewidth=2.5,
+                    markersize=8,
+                    alpha=line_alpha)
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -105,6 +106,10 @@ def plot_variable(xvar, yvar, fname, xlabel, ylabel):
     ax.grid(True, which='major', ls='--')
     plt.tight_layout()
     plt.margins(x=0.05, y=0.05)
+
+    # Force bounds
+    ax.set_ylim(1e-10, 2e0)   # displacement error bounds
+    ax.set_xlim(5e-3, 3e1)   # runtime bounds
 
     # Format ticks as powers of 10
     xticks = ax.get_xticks()
@@ -146,7 +151,7 @@ for elem_type in legend_order:
     legend_handles.append(line)
 
 # ncol = 5
-ncol = 9
+ncol = 8
 
 fig, ax = plt.subplots(figsize=(17, 3))
 ax.axis('off')
