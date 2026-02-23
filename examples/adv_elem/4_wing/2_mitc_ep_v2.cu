@@ -33,7 +33,7 @@
 
 // local utils
 // #include "../2_plate/include/lock_prolongation.h"
-#include "../2_plate/include/lock_smoother.h"
+// #include "../2_plate/include/lock_smoother.h"
 
 /* command line args:
     [direct/mg] [--nxe int] [--SR float] [--nvcyc int]
