@@ -90,6 +90,14 @@ class UnstructuredSmoothProlongation {
             compute_matmat_prod_nz_pattern();
         }
 
+
+        // apply bcs to it now
+        printf("apply bcs\n");
+        const bool ones_on_diag = false; // just zero out completely for prolong matrix
+        prolong_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
+        prolong_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
+        printf("\tapply bcs done\n");
+
         printf("smooth matrix\n");
         smoothMatrix();
         printf("unstruct smooth\n");
@@ -292,13 +300,6 @@ class UnstructuredSmoothProlongation {
         k_prolong_mat_assembly<T, Basis, is_bsr>
             <<<grid, block>>>(d_coarse_iperm, d_coarse_conn, d_n2e_ptr, d_n2e_elems, d_n2e_xis,
                               nnodes_fine, d_fine_iperm, d_P_rowp, d_P_cols, block_dim, d_P_vals);
-
-        // apply bcs to it now
-        printf("apply bcs\n");
-        const bool ones_on_diag = false; // just zero out completely for prolong matrix
-        prolong_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
-        prolong_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
-        printf("\tapply bcs done\n");
     }
 
     void update_after_smooth() {
