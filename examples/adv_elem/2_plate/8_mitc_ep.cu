@@ -178,11 +178,13 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         auto &f_kmat = grids[i].Kmat;
         auto d_fine_bcs = f_assembler.getBCs();
 
-        printf("Step 1 - compute G_f^T G_f LHS locking matrix\n");
-        f_assembler.add_lockstrain_jacobian_fast(f_kmat);
-        CHECK_CUDA(cudaDeviceSynchronize()); // slower but for debugging
-        f_assembler.apply_bcs(f_kmat);
-        f_kmat.add_diag_nugget(lam);
+        // energy prolongator has RHS = 0 and LHS = kmat
+
+        // printf("Step 1 - compute G_f^T G_f LHS locking matrix\n");
+        // f_assembler.add_lockstrain_jacobian_fast(f_kmat);
+        // CHECK_CUDA(cudaDeviceSynchronize()); // slower but for debugging
+        // f_assembler.apply_bcs(f_kmat);
+        // f_kmat.add_diag_nugget(lam);
 
         // make device fine-coarse elem map (here just use structured pattern)
         printf("Step 2 - compute device fc elem map\n");
@@ -216,22 +218,22 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         P_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
 
         // now assemble G_f^T * P_gam * G_c + lam * P_0  RHS prolong matrix with K*P0 sparsity
-        printf("Step 5 - compute locking RHS fine-coarse matrix\n");
-        f_assembler.add_lockstrain_fc_jacobian_fast(c_assembler, d_fc_elem_map, *RHS_mat);
-        CHECK_CUDA(cudaDeviceSynchronize()); // slower but for debugging
-        printf("\tdone with assembly FC matrix from step 5\n");
-        // apply bcs to P_rhs matrix
-        RHS_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
-        RHS_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
+        // printf("Step 5 - compute locking RHS fine-coarse matrix\n");
+        // f_assembler.add_lockstrain_fc_jacobian_fast(c_assembler, d_fc_elem_map, *RHS_mat);
+        // CHECK_CUDA(cudaDeviceSynchronize()); // slower but for debugging
+        // printf("\tdone with assembly FC matrix from step 5\n");
+        // // apply bcs to P_rhs matrix
+        // RHS_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
+        // RHS_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
         
         // apply bcs to standard prolongator then add it into P_rhs
         // RHS_mat.add(lam, P0_mat); // make new add method here for P_rhs += lam * P_0
-        printf("Step 6 - compute full RHS including lam*P_0 term\n");
-        auto bsr_data = P_mat->getBsrData();
-        int P_nnzb = bsr_data.nnzb, block_dim = bsr_data.block_dim;
-        T *d_P_vals = P_mat->getPtr(), *d_RHS_vals = RHS_mat->getPtr();
-        k_add_colored_submat_PFP<T>
-            <<<P_nnzb, 64>>>(P_nnzb, block_dim, lam, 0, d_P_vals, d_RHS_vals);
+        // printf("Step 6 - compute full RHS including lam*P_0 term\n");
+        // auto bsr_data = P_mat->getBsrData();
+        // int P_nnzb = bsr_data.nnzb, block_dim = bsr_data.block_dim;
+        // T *d_P_vals = P_mat->getPtr(), *d_RHS_vals = RHS_mat->getPtr();
+        // k_add_colored_submat_PFP<T>
+        //     <<<P_nnzb, 64>>>(P_nnzb, block_dim, lam, 0, d_P_vals, d_RHS_vals);
 
         // do jacobi smoothing of P_0 => P matrix using kmat and rhs
         printf("Step 7 - perform block-Jacobi smoothing using locking energy for the prolongator\n");
@@ -294,7 +296,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start1 = std::chrono::high_resolution_clock::now();
-
     // fastest is K-cycle usually
     if (cycle_type == "V") {
         mg->vcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); //(good option)

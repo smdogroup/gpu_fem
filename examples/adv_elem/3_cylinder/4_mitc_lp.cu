@@ -285,7 +285,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
     auto end0 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> startup_time = end0 - start0;
 
-    auto start1 = std::chrono::high_resolution_clock::now();
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
     bool print = true;
     // bool print = false;
@@ -300,6 +299,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         int n_krylov = 500;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start1 = std::chrono::high_resolution_clock::now();
 
     // fastest is K-cycle usually
     if (cycle_type == "V") {
@@ -381,6 +383,7 @@ void direct_solve(int nxe, double SR) {
     // solve the linear system
     CUSPARSE::direct_LU_solve(kmat, loads, soln);
 
+    CHECK_CUDA(cudaDeviceSynchronize());
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start1;
 
@@ -492,7 +495,7 @@ int main(int argc, char **argv) {
     using Data = ShellIsotropicData<T, has_ref_axis>;
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
-    printf("plate mesh with MITC4-LP elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
+    printf("cylinder mesh with MITC4-LP elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
     gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, nsmooth_mat, omega, cycle_type);

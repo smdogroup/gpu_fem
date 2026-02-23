@@ -28,9 +28,9 @@ class MultilevelKcycleSolver {
         if (grids[0].smooth_matrix_iters > 0) {
             printf("attempting to smooth matrices\n");
         }
-        for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
-            grids[ilevel].smoothMatrix(grids[ilevel].smooth_matrix_iters);
-        }
+        // for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
+        //     grids[ilevel].smoothMatrix(grids[ilevel].smooth_matrix_iters);
+        // }
     }
 
     int getNumLevels() { return grids.size(); }

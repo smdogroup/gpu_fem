@@ -26,7 +26,7 @@ class StructuredProlongation {
     }
 
     // no update required for structured prolongs
-    void update_after_assembly() {}
+    void update_after_assembly(DeviceVec<T> &vars) {}
 
     void init_coarse_data(Assembler &coarse_assembler) {
         // has to be called separately (since coarse grid isn't made at same time as fine grid)

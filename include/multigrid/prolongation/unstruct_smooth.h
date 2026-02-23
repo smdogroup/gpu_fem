@@ -6,7 +6,7 @@
 #include "_unstruct_utils.h"
 #include "_unstructured.cuh"
 
-template <class Assembler_, class Basis_, bool kmat_fillin = true>
+template <class Assembler_, class Basis_, class Smoother, bool kmat_fillin = true>
 class UnstructuredSmoothProlongation {
    public:
     using T = double;
@@ -23,13 +23,16 @@ class UnstructuredSmoothProlongation {
     static constexpr bool smoothed = true;
 
     UnstructuredSmoothProlongation(cusparseHandle_t &cusparseHandle_, Assembler &fine_assembler_,
-                                   int ELEM_MAX_ = 10)
+                                   Smoother *smoother_, int ELEM_MAX_ = 10, int nsmooth_iters_ = 2)
         : handle(cusparseHandle_) {
         fine_assembler = fine_assembler_;
         ELEM_MAX = ELEM_MAX_;
+        smoother = smoother_;
+        nsmooth_iters = nsmooth_iters_;
 
         // init some data from fine assembler, and other startup
         block_dim = fine_assembler.getBsrData().block_dim;
+        h_fine_conn = fine_assembler.getConn().createHostVec().getPtr();
 
         // other startup
         descr_P = 0;
@@ -39,9 +42,18 @@ class UnstructuredSmoothProlongation {
     }
 
     // nothing (though smoother needs to do matrix-smoothing in some cases)
-    void update_after_assembly() {
-        // TODO : need to fix this for nonlinear smooth matrix
-        // assemble_matrices(); // reassemble matrices?
+    void update_after_assembly(DeviceVec<T> &vars) {
+        assemble_matrices(); // reassemble matrices
+        smoother->update_after_assembly(vars);
+        smoothMatrix();
+        update_after_smooth();
+    }
+
+    void smoothMatrix() {
+        smoother->smoothMatrix(nsmooth_iters, prolong_mat, Z_mat,
+                                   Zprev_mat, nnzb_prod,
+                                   d_K_prodBlocks, d_P_prodBlocks,
+                                   d_Z_prodBlocks);
     }
 
     void init_coarse_data(Assembler &coarse_assembler_) {
@@ -55,7 +67,12 @@ class UnstructuredSmoothProlongation {
             apply_kmat_fillin();
         }
         // printf("\tDEBUG: assemble matrices\n");
+        printf("assemble matrices\n");
         assemble_matrices();
+
+
+        d_fine_bcs = fine_assembler.getBCs();
+        d_coarse_bcs = coarse_assembler.getBCs();
 
         if constexpr (kmat_fillin) {
             // allocate extra Z matrix storage and Z mat (for smoothing updates)
@@ -73,6 +90,19 @@ class UnstructuredSmoothProlongation {
             // printf("\tDEBUG: compute matmat nz pattern\n");
             compute_matmat_prod_nz_pattern();
         }
+
+
+        // apply bcs to it now
+        printf("apply bcs\n");
+        const bool ones_on_diag = false; // just zero out completely for prolong matrix
+        prolong_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
+        prolong_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
+        printf("\tapply bcs done\n");
+
+        printf("smooth matrix\n");
+        smoothMatrix();
+        printf("unstruct smooth\n");
+        update_after_smooth();
     }
 
     void construct_nz_pattern() {
@@ -84,6 +114,8 @@ class UnstructuredSmoothProlongation {
         init_unstructured_grid_maps<T, Assembler, Basis, is_bsr, include_restrict>(
             fine_assembler, coarse_assembler, prolong_mat, restrict_mat, d_coarse_conn, d_n2e_ptr,
             d_n2e_elems, d_n2e_xis, ELEM_MAX);
+
+        h_coarse_conn = coarse_assembler.getConn().createHostVec().getPtr();
 
         // then get some data out of this (for more readable code later)
         P_bsr_data = prolong_mat->getBsrData();
@@ -249,10 +281,36 @@ class UnstructuredSmoothProlongation {
 
         // and update the P_bsr_data also
         int *d_fine_perm = P_bsr_data.perm;
-        P_bsr_data = BsrData(nnodes_fine, block_dim, AP_nnzb, d_P_rowp, d_P_cols, d_fine_perm,
-                             d_fine_iperm, false);
+        
+        bool host = true;
+        auto h_P_bsr_data =
+            BsrData(nnodes_fine, block_dim, AP_nnzb, h_AP_rowp, h_AP_cols, nullptr, nullptr, host);
+        h_P_bsr_data.rows = h_AP_rows;
+        // need to add fc_elem map and fine and coarse elem conn in order to get correct elem ind
+        // maps
+        h_P_bsr_data.nelems = fine_assembler.get_num_elements();
+        h_P_bsr_data.elem_conn = h_fine_conn;
+        h_P_bsr_data.cols_elem_conn = h_coarse_conn;
+        // h_P_bsr_data.rc_elem_map = h_fc_elem_map;
+        h_P_bsr_data.rc_elem_map = nullptr;
+        int nodes_per_elem = 4;
+        h_P_bsr_data.nodes_per_elem = nodes_per_elem;
+        h_P_bsr_data.n_eim = h_P_bsr_data.nelems * nodes_per_elem * nodes_per_elem;
+
+        auto c_bsr_data = coarse_assembler.getBsrData();
+        int c_nnodes = coarse_assembler.get_num_nodes();
+        int *h_cperm = DeviceVec<int>(c_nnodes, c_bsr_data.perm).createHostVec().getPtr();
+        int *h_ciperm = DeviceVec<int>(c_nnodes, c_bsr_data.iperm).createHostVec().getPtr();
+        h_P_bsr_data.c_perm = h_cperm;
+        h_P_bsr_data.c_iperm = h_ciperm;
+        h_P_bsr_data.mb = nnodes_fine;
+        h_P_bsr_data.nb = nnodes_coarse;
+
+        P_bsr_data = h_P_bsr_data.createDeviceBsrData();
+        printf("\tdone make P bsr data for FC-matrix\n");
         P_bsr_data.mb = nnodes_fine, P_bsr_data.nb = nnodes_coarse;
         P_bsr_data.rows = d_P_rows;  // need rows
+
         prolong_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_P_vals_vec);
     }
 
@@ -325,6 +383,7 @@ class UnstructuredSmoothProlongation {
    private:
     Assembler fine_assembler, coarse_assembler;
     int ELEM_MAX;  // the max number of nearest neighbor elements for NZ pattern construction
+    Smoother *smoother;
 
     cusparseHandle_t &handle;
     BsrData P_bsr_data;
@@ -340,4 +399,7 @@ class UnstructuredSmoothProlongation {
     int *d_coarse_iperm, *d_fine_iperm;
     int nnodes_fine, block_dim, block_dim2, N_fine;
     int nnodes_coarse, N_coarse;
+    DeviceVec<int> d_coarse_bcs, d_fine_bcs;
+    int nsmooth_iters;
+    int *h_coarse_conn, *h_fine_conn;
 };
