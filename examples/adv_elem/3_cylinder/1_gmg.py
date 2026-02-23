@@ -31,6 +31,32 @@ The assembled kmat and rhs are cached if you run them multiple times to speedup 
 Also caches some prolong matrices in multigrid
 """
 
+
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument("--elem", type=str, default='mitc_gp', help="--elem, options: tbd")
+parser.add_argument("--nxe", type=int, default=32, help="number of elements") # 32
+parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
+parser.add_argument("--coupled", type=int, default=3, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
+parser.add_argument("--thick", type=float, default=1e-3, help="shell thickness")
+parser.add_argument("--cache", action=argparse.BooleanOptionalAction, default=True,
+                    help="Cache assembled kmat/force per MG level to disk") # --no-cache to turn off and reset
+# parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
+parser.add_argument("--curvature", type=float, default=1.0, help="shell curvature (lower gets flatter)")
+parser.add_argument("--length", type=float, default=1.0, help="cylinder length")
+parser.add_argument("--width", type=float, default=np.pi / 2.0, help="cylinder width (hoop length)")
+parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
+# parser.add_argument("--solve", type=str, default='direct', help="--solve : [direct, vmg, kmg]")
+parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
+parser.add_argument("--omega", type=float, default=1.0, help="omega smoother coeff (sometimes needs to be lower)")
+parser.add_argument("--smoother", type=str, default='supp_asw', help="--smooth : [gs, asw]")
+parser.add_argument("--plot", type=str, default=None, help="--plot is str : [w, u, v, thx, thy, thz] or None")
+# parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
+parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="run debug codes")
+parser.add_argument("--verify", action=argparse.BooleanOptionalAction, default=False, help="verify defln with simple load")
+args = parser.parse_args()
+
+
 def _wrap_assemble_with_cache(obj, cache_dir=".mg_cache"):
     raw = obj._assemble_system
 
@@ -77,30 +103,6 @@ def _wrap_prolong_with_cache(obj, cache_dir=".mg_cache"):
             raw()
             sp.save_npz(Pp, obj.element._P_cache[obj.nxe])
     obj._assemble_prolongation = cached
-
-import argparse
-parser = argparse.ArgumentParser()
-parser.add_argument("--elem", type=str, default='mitc_gp', help="--elem, options: tbd")
-parser.add_argument("--nxe", type=int, default=16, help="number of elements") # 32
-parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
-parser.add_argument("--coupled", type=int, default=3, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
-parser.add_argument("--thick", type=float, default=1e-3, help="shell thickness")
-parser.add_argument("--cache", action=argparse.BooleanOptionalAction, default=True,
-                    help="Cache assembled kmat/force per MG level to disk") # --no-cache to turn off and reset
-# parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
-parser.add_argument("--curvature", type=float, default=1.0, help="shell curvature (lower gets flatter)")
-parser.add_argument("--length", type=float, default=1.0, help="cylinder length")
-parser.add_argument("--width", type=float, default=np.pi / 2.0, help="cylinder width (hoop length)")
-parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
-# parser.add_argument("--solve", type=str, default='direct', help="--solve : [direct, vmg, kmg]")
-parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
-parser.add_argument("--omega", type=float, default=1.0, help="omega smoother coeff (sometimes needs to be lower)")
-parser.add_argument("--smoother", type=str, default='supp_asw', help="--smooth : [gs, asw]")
-parser.add_argument("--plot", type=str, default=None, help="--plot is str : [w, u, v, thx, thy, thz] or None")
-# parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
-parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="run debug codes")
-parser.add_argument("--verify", action=argparse.BooleanOptionalAction, default=False, help="verify defln with simple load")
-args = parser.parse_args()
 
 # t/R leads to potential membrane locking
 R = 1.0 / args.curvature
