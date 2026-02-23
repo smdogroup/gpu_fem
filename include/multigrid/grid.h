@@ -57,8 +57,8 @@ class SingleGrid {
 
     void update_after_assembly() {
         // update dependent ILU and other matrices from new assembly
-        if (prolongation) prolongation->update_after_assembly();
-        if (restriction) restriction->update_after_assembly();
+        if (prolongation) prolongation->update_after_assembly(d_vars);
+        // if (restriction) restriction->update_after_assembly(); // redundant call..
         if (smoother) {
             smoother->update_after_assembly(d_vars);
             // moved this call to multilevel solvers update after assembly
@@ -172,16 +172,16 @@ class SingleGrid {
         smoother->smoothDefect(d_defect, d_soln, n_iters, print, print_freq);
     }
 
-    void smoothMatrix(int n_iters = 5) {
-        /* call the smoother on the prolongation matrix */
-        if constexpr (Prolongation::smoothed) {
-            smoother->smoothMatrix(n_iters, prolongation->prolong_mat, prolongation->Z_mat,
-                                   prolongation->Zprev_mat, prolongation->nnzb_prod,
-                                   prolongation->d_K_prodBlocks, prolongation->d_P_prodBlocks,
-                                   prolongation->d_Z_prodBlocks);
-            prolongation->update_after_smooth(); // update coarse weights for nonlinear problems by row-sums of P^T
-        }
-    }
+    // void smoothMatrix(int n_iters = 5) {
+    //     /* call the smoother on the prolongation matrix */
+    //     if constexpr (Prolongation::smoothed) {
+    //         smoother->smoothMatrix(n_iters, prolongation->prolong_mat, prolongation->Z_mat,
+    //                                prolongation->Zprev_mat, prolongation->nnzb_prod,
+    //                                prolongation->d_K_prodBlocks, prolongation->d_P_prodBlocks,
+    //                                prolongation->d_Z_prodBlocks);
+    //         prolongation->update_after_smooth(); // update coarse weights for nonlinear problems by row-sums of P^T
+    //     }
+    // }
 
     void prolongate(DeviceVec<T> coarse_soln_in) {
         /* prolongate from a coarser grid to this fine grid */

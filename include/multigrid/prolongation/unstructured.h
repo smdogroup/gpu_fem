@@ -37,7 +37,7 @@ class UnstructuredProlongation {
     }
 
     // nothing
-    void update_after_assembly() {}
+    void update_after_assembly(DeviceVec<T> &vars) {}
 
     void init_coarse_data(Assembler &coarse_assembler_) {
         coarse_assembler = coarse_assembler_;

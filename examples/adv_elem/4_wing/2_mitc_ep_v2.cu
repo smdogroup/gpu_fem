@@ -27,11 +27,12 @@
 #include "multigrid/solvers/solve_utils.h"
 #include "multigrid/solvers/direct/cusp_directLU.h"
 #include "multigrid/solvers/krylov/bsr_pcg.h"
+#include "multigrid/prolongation/unstruct_smooth.h"
 #include "multigrid/solvers/multilevel/kcycle.h"
 #include "multigrid/solvers/multilevel/twolevel.h"
 
 // local utils
-#include "../2_plate/include/lock_prolongation.h"
+// #include "../2_plate/include/lock_prolongation.h"
 #include "../2_plate/include/lock_smoother.h"
 
 /* command line args:

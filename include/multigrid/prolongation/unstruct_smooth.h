@@ -6,7 +6,7 @@
 #include "_unstruct_utils.h"
 #include "_unstructured.cuh"
 
-template <class Assembler_, class Basis_, bool kmat_fillin = true>
+template <class Assembler_, class Basis_, class Smoother, bool kmat_fillin = true>
 class UnstructuredSmoothProlongation {
    public:
     using T = double;
@@ -23,10 +23,12 @@ class UnstructuredSmoothProlongation {
     static constexpr bool smoothed = true;
 
     UnstructuredSmoothProlongation(cusparseHandle_t &cusparseHandle_, Assembler &fine_assembler_,
-                                   int ELEM_MAX_ = 10)
+                                   Smoother *smoother_, int ELEM_MAX_ = 10, int nsmooth_iters_ = 2)
         : handle(cusparseHandle_) {
         fine_assembler = fine_assembler_;
         ELEM_MAX = ELEM_MAX_;
+        smoother = smoother_;
+        nsmooth_iters = nsmooth_iters_;
 
         // init some data from fine assembler, and other startup
         block_dim = fine_assembler.getBsrData().block_dim;
@@ -39,9 +41,18 @@ class UnstructuredSmoothProlongation {
     }
 
     // nothing (though smoother needs to do matrix-smoothing in some cases)
-    void update_after_assembly() {
-        // TODO : need to fix this for nonlinear smooth matrix
-        // assemble_matrices(); // reassemble matrices?
+    void update_after_assembly(DeviceVec<T> &vars) {
+        assemble_matrices(); // reassemble matrices
+        smoother->update_after_assembly(vars);
+        smoothMatrix();
+        update_after_smooth();
+    }
+
+    void smoothMatrix() {
+        smoother->smoothMatrix(nsmooth_iters, prolong_mat, Z_mat,
+                                   Zprev_mat, nnzb_prod,
+                                   d_K_prodBlocks, d_P_prodBlocks,
+                                   d_Z_prodBlocks);
     }
 
     void init_coarse_data(Assembler &coarse_assembler_) {
@@ -56,6 +67,10 @@ class UnstructuredSmoothProlongation {
         }
         // printf("\tDEBUG: assemble matrices\n");
         assemble_matrices();
+
+
+        d_fine_bcs = fine_assembler.getBCs();
+        d_coarse_bcs = coarse_assembler.getBCs();
 
         if constexpr (kmat_fillin) {
             // allocate extra Z matrix storage and Z mat (for smoothing updates)
@@ -266,6 +281,11 @@ class UnstructuredSmoothProlongation {
         k_prolong_mat_assembly<T, Basis, is_bsr>
             <<<grid, block>>>(d_coarse_iperm, d_coarse_conn, d_n2e_ptr, d_n2e_elems, d_n2e_xis,
                               nnodes_fine, d_fine_iperm, d_P_rowp, d_P_cols, block_dim, d_P_vals);
+
+        // apply bcs to it now
+        const bool ones_on_diag = false; // just zero out completely for prolong matrix
+        prolong_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
+        prolong_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
     }
 
     void update_after_smooth() {
@@ -325,6 +345,7 @@ class UnstructuredSmoothProlongation {
    private:
     Assembler fine_assembler, coarse_assembler;
     int ELEM_MAX;  // the max number of nearest neighbor elements for NZ pattern construction
+    Smoother *smoother;
 
     cusparseHandle_t &handle;
     BsrData P_bsr_data;
@@ -340,4 +361,6 @@ class UnstructuredSmoothProlongation {
     int *d_coarse_iperm, *d_fine_iperm;
     int nnodes_fine, block_dim, block_dim2, N_fine;
     int nnodes_coarse, N_coarse;
+    DeviceVec<int> d_coarse_bcs, d_fine_bcs;
+    int nsmooth_iters;
 };
