@@ -1,8 +1,12 @@
 import scipy.sparse as sp
 import numpy as np
 import matplotlib.pyplot as plt
-import sys
-sys.path.append("../2_plate/src/")
+import os, sys
+
+here = os.path.dirname(os.path.abspath(__file__))
+plate_src = os.path.abspath(os.path.join(here, "../", "../", "2_plate", "src"))
+# print(f"{plate_src=}")
+sys.path.append(plate_src)
 from _sparse_utils import build_csr_from_conn
 
 class StandardCylinderAssembler:
@@ -153,6 +157,18 @@ class StandardCylinderAssembler:
             elem_xpts[3*lnode + 1] = -self.radius * np.cos(phi)
             elem_xpts[3*lnode + 2] = self.radius * np.sin(phi)
         return elem_xpts
+    
+    @property
+    def xpts(self) -> np.ndarray:
+        _global_xpts = np.zeros(3 * self.nnodes)
+        for inode in range(self.nnodes):
+            ix = inode % self.nnx
+            iy = inode // self.nnx
+            phi = iy * self.dth
+            _global_xpts[3*inode + 0] = ix * self.dx
+            _global_xpts[3*inode + 1] = -self.radius * np.cos(phi)
+            _global_xpts[3*inode + 2] = self.radius * np.sin(phi)
+        return _global_xpts
 
     def _apply_bcs(self, dpn: int):
         """
@@ -208,7 +224,24 @@ class StandardCylinderAssembler:
                     ]
 
             # RHS scatter (dof-level)
-            np.add.at(self.force, loc_dofs, felem)
+            # np.add.at(self.force, loc_dofs, felem)
+
+        # instead of assembling felem by local integration do this: (like CPU TACS)
+        _xpts = self.xpts
+        x = _xpts[0::3]
+        y = _xpts[1::3]
+        z = _xpts[2::3]
+        r = np.sqrt(y**2 + z**2)
+        C = y / r
+        S = z / r
+
+        nxe = int(np.sqrt(self.nnodes)) - 1
+        int_nnodes = (nxe-1)**2
+        force_mag_vec = np.array([self.load_fcn(x[i], y[i], z[i]) / int_nnodes for i in range(self.nnodes)])
+
+        # assume cylinder on x axis so (y,z) plane in circle)
+        self.force[1::6] += force_mag_vec * C
+        self.force[2::6] += force_mag_vec * S
 
         # BCs
         if bcs: self._apply_bcs(dpn)
@@ -225,7 +258,7 @@ class StandardCylinderAssembler:
         # print(f"direct solve {rel_nrm=:.4e}")
         return self.u
 
-    def plot_disp(self, disp_mag: float = 0.2, mode:str = 'normal'):
+    def plot_disp(self, disp_mag: float = 0.2, mode:str = 'normal', ax=None):
         import matplotlib.colors as mcolors
         import matplotlib.cm as cm
             
@@ -257,7 +290,7 @@ class StandardCylinderAssembler:
         Y = (self.radius + W) * -np.cos(Phi)
         Z = (self.radius + W) * np.sin(Phi)
 
-        print(f"{phi*180/np.pi=}")
+        # print(f"{phi*180/np.pi=}")
 
         orig_mag = np.max(np.abs(w))
         W0 = W.copy()
@@ -269,17 +302,6 @@ class StandardCylinderAssembler:
         Y = (self.radius + W) * -np.cos(Phi)
         Z = (self.radius + W) * np.sin(Phi)
 
-        # fig = plt.figure(figsize=(9, 6))
-        # ax = fig.add_subplot(111, projection="3d")
-        # surf = ax.plot_surface(X, Y, Z, cmap="viridis", linewidth=0, antialiased=True, shade=True)
-
-        # ax.set_xlabel("x")
-        # ax.set_ylabel("y")
-        # ax.set_zlabel("w")
-        # ax.view_init(elev=25, azim=-135)
-        # fig.colorbar(surf, ax=ax, shrink=0.6, pad=0.08, label="w")
-        # plt.tight_layout()
-
         # ---- color by selected field ----
         C = np.abs(W0)
         C_face = 0.25 * (C[:-1, :-1] + C[1:, :-1] + C[:-1, 1:] + C[1:, 1:])
@@ -288,13 +310,13 @@ class StandardCylinderAssembler:
         cmap = cm.get_cmap("viridis")
         facecolors = cmap(norm(C_face))
 
-        # created_fig = False
-        # if ax is None:
-        fig = plt.figure(figsize=(9, 6))
-        ax = fig.add_subplot(111, projection="3d")
+        created_fig = ax is None
+        if ax is None:
+            fig = plt.figure(figsize=(9, 6))
+            ax = fig.add_subplot(111, projection="3d")
         # created_fig = True
-        # else:
-        #     fig = ax.figure
+        else:
+            fig = ax.figure
 
         ax.plot_surface(
             X, Y, Z,
@@ -312,17 +334,19 @@ class StandardCylinderAssembler:
 
         ax.set_box_aspect((1,1,1))
 
-        # if created_fig:
-        mappable = cm.ScalarMappable(norm=norm, cmap=cmap)
-        mappable.set_array([])
-        fig.colorbar(mappable, ax=ax, shrink=0.6, pad=0.08, label=f"|w|")
-        plt.tight_layout()
-        plt.show()
-        plt.show()
+        if created_fig:
+            mappable = cm.ScalarMappable(norm=norm, cmap=cmap)
+            mappable.set_array([])
+            fig.colorbar(mappable, ax=ax, shrink=0.6, pad=0.08, label=f"|w|")
+            plt.tight_layout()
+            plt.show()
 
     # ------------------------
     # Multigrid hooks
     # ------------------------
+    def _assemble_prolongation(self):
+        self.element._assemble_prolongation(self.nxe)
+
     def prolongate(self, coarse_soln):
         return self.element.prolongate(coarse_soln, self.nxe // 2)
     

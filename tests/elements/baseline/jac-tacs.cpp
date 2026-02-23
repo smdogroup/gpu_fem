@@ -26,7 +26,8 @@ int main(int argc, char *argv[]) {
     MPI_Comm_rank(comm, &rank);
 
     std::string nonlinear_str;
-    bool nonlinear = false;
+    // bool nonlinear = false;
+    bool nonlinear = true;
     if (argc == 2) {
         nonlinear_str = argv[1];
         nonlinear = nonlinear_str == "nonlinear";
@@ -40,7 +41,7 @@ int main(int argc, char *argv[]) {
     TacsScalar rho = 2718;
     TacsScalar specific_heat = 0.0;
     TacsScalar E = 70.0e9;
-    TacsScalar nu = 0.3;
+    TacsScalar nu = 0.33;
     TacsScalar ys = 1e11;
     TacsScalar cte = 10e-6;  // double check this value
     TacsScalar kappa = 0.0;
@@ -132,7 +133,7 @@ int main(int argc, char *argv[]) {
         for (int j = 0; j < 24; j++) {
             printf("%.14e,", Kmat[24 * i + j]);
         }
-        printf("\n");
+        // printf("\n");
     }
 
     MPI_Finalize();

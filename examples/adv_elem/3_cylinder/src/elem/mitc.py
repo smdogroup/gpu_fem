@@ -15,13 +15,18 @@ class MITCShellElement:
     Adapted from / extension of adv_elems/2_plate/src/elem/mitc_elem.py
     """
 
+    K_SHEAR = 5.0 / 6.0
+    DRILL_REG = 10.0
+    # DRILL_REG = 0.0 # temp debug
+
     def __init__(
         self,
         prolong_mode: str = "locking-global",  # 'standard'
-        lam: float = 1e-2,
+        lam: float = 1e-5,
         n_lock_sweeps:int=10,
         omega:float=0.5,
         debug:bool=False,
+        strain_debug_mode:str='all', # 'all' is not debug, 'tying', 'bending', 'drill' just does one term
     ):
         assert prolong_mode in ["locking-global", "locking-local", "standard", "energy-jacobi"]
 
@@ -29,6 +34,7 @@ class MITCShellElement:
         self.nodes_per_elem = 4
         self.ndof = self.dof_per_node * self.nodes_per_elem
         self.debug = debug
+        self.strain_debug_mode = strain_debug_mode
 
         self.prolong_mode = prolong_mode
         self.clamped = False
@@ -40,8 +46,10 @@ class MITCShellElement:
         self._P1_cache = {}   # key: nxe_coarse -> P1 (csr)
         self._P2_cache = {}   # key: nxe_coarse -> P2 (csr)
         self._P2_u3_cache = {}
-        self._lock_P_cache = {}
+        # self._lock_P_cache = {}
         self._kmat_cache = {}
+        self._xpts_cache = {}
+        self._P_cache = {}
 
     # ----------------------------
     # Element stiffness (MITC4)
@@ -79,23 +87,35 @@ class MITCShellElement:
                 p_vars[ideriv] = 1.0
                 local_mat_col = np.zeros(self.ndof)
 
-                local_mat_col += self._add_jac_col_drill(
-                    pt, scale, elem_xpts, fn,
-                    XdinvT, Tmat, XdinvzT, comp_data,
-                    p_vars
-                )
+                if self.strain_debug_mode in ['all', 'drill']:
+                    # old mode (not fast version)
+                    # local_mat_col += self._add_jac_col_drill_nodal(
+                    #     pt, scale, elem_xpts, fn,
+                    #     XdinvT, Tmat, XdinvzT, comp_data,
+                    #     p_vars
+                    # )
 
-                local_mat_col += self._add_jac_col_bending(
-                    pt, scale, elem_xpts, fn,
-                    XdinvT, Tmat, XdinvzT, comp_data,
-                    p_vars
-                )
+                    # checked it's fine to use either version of drill strain and it still gives mesh convergence!
+                    # just wanted to be sure
+                    local_mat_col += self._add_jac_col_drill(
+                        pt, scale, elem_xpts, fn,
+                        XdinvT, Tmat, XdinvzT, comp_data,
+                        p_vars
+                    )
 
-                local_mat_col += self._add_jac_col_tying(
-                    pt, scale, elem_xpts, fn,
-                    XdinvT, Tmat, XdinvzT, comp_data,
-                    p_vars
-                )
+                if self.strain_debug_mode in ['all', 'bending']:
+                    local_mat_col += self._add_jac_col_bending(
+                        pt, scale, elem_xpts, fn,
+                        XdinvT, Tmat, XdinvzT, comp_data,
+                        p_vars
+                    )
+
+                if self.strain_debug_mode in ['all', 'tying']:
+                    local_mat_col += self._add_jac_col_tying(
+                        pt, scale, elem_xpts, fn,
+                        XdinvT, Tmat, XdinvzT, comp_data,
+                        p_vars
+                    )
 
                 # add mat col into the kelem
                 kelem[:, ideriv] += local_mat_col
@@ -146,6 +166,8 @@ class MITCShellElement:
     def _get_shell_normals(self, elem_xpts:np.ndarray):
         fn = np.zeros(12)
 
+        # print(f"{elem_xpts.reshape((4,3))=}")
+
         for i in range(4):
             # node pt
             ixi, ieta = i % 2, i // 2
@@ -155,12 +177,16 @@ class MITCShellElement:
             # print(f"{elem_xpts=}")
 
             dX_dxi, dX_deta = self._interp_fields_grad(node_pt, vpn=3, num_fields=3, vec=elem_xpts)
+            # print(f"{dX_dxi=} {dX_deta=}")
             normal = np.cross(dX_dxi, dX_deta)
             normal /= np.linalg.norm(normal)
             fn[3*i:(3*i+3)] += normal
 
             # xpt = self._interp_fields(node_pt, vpn=3, num_fields=3, vec=elem_xpts)
             # print(f"{dX_dxi=} {dX_deta=} {normal=}")
+
+        # fn_rs = fn.reshape((3,4))
+        # print(f"{fn_rs=}")
         return fn
     
     def _get_detXd(self, pt:list, elem_xpts:np.ndarray, fn:np.ndarray):
@@ -196,12 +222,106 @@ class MITCShellElement:
         Xdz = np.column_stack((nxi, neta, np.zeros(3)))
         Tmat = self._shell_compute_transform(n0, ref_axis=np.array([1, 0, 0]))
 
+        # print(f"{Xd=}")
+
         Xdinv = np.linalg.inv(Xd)
         XdinvT = Xdinv @ Tmat
         XdinvzT = -Xdinv @ Xdz @ XdinvT
 
         # print(f"{XdinvT=} {Tmat=} {XdinvzT=}")
         return XdinvT, Tmat, XdinvzT
+    
+    def _add_jac_col_drill_nodal(
+        self, quad_pt:list, scale:float, 
+        elem_xpts:np.ndarray, fn:np.ndarray,
+        _XdinvT:np.ndarray, _Tmat:np.ndarray, 
+        _XdinvzT:np.ndarray, comp_data:list,
+        p_vars:np.ndarray   
+    ):
+        mat_col = np.zeros(24)
+
+        etn = np.zeros(4)
+        for inode in range(4):
+            # node pt
+            ixi, ieta = inode % 2, inode // 2
+            xi = -1 + 2.0 * ixi
+            eta = -1 + 2.0 * ieta
+            node_pt = [xi, eta]
+            # print(f"{elem_xpts=}")
+
+            dX_dxi, dX_deta = self._interp_fields_grad(node_pt, vpn=3, num_fields=3, vec=elem_xpts)        
+            n0 = fn[3*inode:(3*inode+3)]
+            Xd = np.column_stack((dX_dxi, dX_deta, n0))
+            Tmat = self._shell_compute_transform(n0, ref_axis=np.array([1, 0, 0]))
+            u0xi, u0eta = self._interp_fields_grad(node_pt, vpn=6, num_fields=3, vec=p_vars)
+            u0xn = np.column_stack((u0xi, u0eta, np.zeros(3)))
+            u0 = p_vars[6*inode:(6*inode+6)]
+            thx, thy, thz = u0[3], u0[4], u0[5]
+            C0 = np.array([ # rotation matrix for drill strain
+                [1.0, thz, -thy],
+                [-thz, 1.0, thx],
+                [thy, -thx, 1.0]
+            ])
+            C = Tmat.T @ C0 @ Tmat
+            XdinvT = np.linalg.inv(Xd) @ Tmat
+            u0x = Tmat.T @ u0xn @ XdinvT
+            # eval drill strain
+            etn[inode] = 0.5 * (C[1,0] + u0x[1,0] - C[0,1] - u0x[0,1])
+    
+        et = self._interp_fields(quad_pt, vpn=1, num_fields=1, vec=etn)
+        
+        # now compute drill stress
+        # st = self._compute_drill_stress(scale, comp_data, et)
+        E, nu, thick = comp_data
+        G = E / 2.0 / (1.0 + nu)
+        As = self.K_SHEAR * G * thick
+        A_drill = As * self.DRILL_REG
+        st = scale * A_drill * et[0] # equiv to et_bar
+
+        # reverse
+        st_vec = np.zeros(1); st_vec[0] = st
+        stn = self._interp_fields_transpose(quad_pt, vpn=1, num_fields=1, vec=st_vec)
+
+        for inode in range(4):
+            # node pt
+            ixi, ieta = inode % 2, inode // 2
+            xi = -1 + 2.0 * ixi
+            eta = -1 + 2.0 * ieta
+            node_pt = [xi, eta]
+            # print(f"{elem_xpts=}")
+
+            dX_dxi, dX_deta = self._interp_fields_grad(node_pt, vpn=3, num_fields=3, vec=elem_xpts)        
+            n0 = fn[3*inode:(3*inode+3)]
+            Xd = np.column_stack((dX_dxi, dX_deta, n0))
+            Tmat = self._shell_compute_transform(n0, ref_axis=np.array([1, 0, 0]))
+            XdinvT = np.linalg.inv(Xd) @ Tmat            
+            
+            # now do the transpose version of the drill strains
+            # mat_col = self._compute_drill_strain_transpose(pt, Tmat, XdinvT, st)
+            u0x_hat = np.zeros_like(u0x); C_hat = np.zeros_like(C)
+            u0x_hat[1,0] += 0.5 * stn[inode]
+            C_hat[1,0] += 0.5 * stn[inode]
+            u0x_hat[0,1] -= 0.5 * stn[inode]
+            C_hat[0,1] -= 0.5 * stn[inode]
+
+            C0_hat = Tmat @ C_hat @ Tmat.T
+            u0xn_hat = Tmat @ u0x_hat @ XdinvT.T
+            u0xi_hat = u0xn_hat[:,0]
+            u0eta_hat = u0xn_hat[:,1]
+
+            thx_hat = C0_hat[1,2] - C0_hat[2,1]
+            thy_hat = C0_hat[2,0] - C0_hat[0,2]
+            thz_hat = C0_hat[0,1] - C0_hat[1,0]
+
+            mat_col[6*inode+3] += thx_hat
+            mat_col[6*inode+4] += thy_hat
+            mat_col[6*inode+5] += thz_hat
+            
+            mat_col += self._interp_fields_grad_transpose(
+                node_pt, vpn=6, num_fields=3, dxi=u0xi_hat, deta=u0eta_hat
+            )
+
+        return mat_col
         
     def _add_jac_col_drill(
         self, pt:list, scale:float, 
@@ -232,10 +352,8 @@ class MITCShellElement:
         # st = self._compute_drill_stress(scale, comp_data, et)
         E, nu, thick = comp_data
         G = E / 2.0 / (1.0 + nu)
-        ks = 5.0 / 6.0
-        DRILL_REG = 10.0
-        As = ks * G * thick
-        A_drill = As * DRILL_REG
+        As = self.K_SHEAR * G * thick
+        A_drill = As * self.DRILL_REG
         st = scale * A_drill * et # equiv to et_bar
 
         # now do the transpose version of the drill strains
@@ -538,6 +656,38 @@ class MITCShellElement:
         )
 
         return p_ety
+    
+    def _get_tying_strain_matrix(
+        self, quad_pt:list,
+        elem_xpts:np.ndarray
+    ):
+        # for multigrid operators
+        tying_matrix = np.zeros((5, 24))
+
+        fn = self._get_shell_normals(elem_xpts)
+        XdinvT, _, _ = self._get_shell_rotations(
+            quad_pt, elem_xpts, fn
+        )
+        
+        for i in range(24):
+            p_vars = np.zeros(24)
+            p_vars[i] = 1.0
+
+            # just do pforward and hrev part cause linear
+            p_d = self._compute_director(p_vars, fn)
+            p_ety = self._compute_mitc_tying_strains(elem_xpts, fn, p_vars, p_d)
+            p_gty = self._interp_tying_strains(quad_pt, p_ety)
+            # sym mat rotate frame
+            p_e0ty = XdinvT.T @ p_gty @ XdinvT
+            # membrane strains
+            p_em = np.array([p_e0ty[0,0], p_e0ty[1,1], 2.0 * p_e0ty[0,1]]) 
+            # trv shear strains 
+            p_es = 2.0 * np.array([p_e0ty[0,2], p_e0ty[1,2]]) # or just sym sums here which means reverse is copy to each component
+
+            p_tying = np.concatenate([p_em, p_es], axis=0)
+            tying_matrix[:,i] = p_tying
+
+        return tying_matrix # return the five tying strains at this quadpt
 
     def _add_jac_col_tying(
         self, pt:list, scale:float, 
@@ -690,382 +840,538 @@ class MITCShellElement:
 
         return felem
 
-    # # ----------------------------
-    # # Prolongation / Restriction (same as your class, but locking constraints changed)
-    # # ----------------------------
-    # def _build_P1_scalar(self, nxe_coarse: int) -> sp.csr_matrix:
-    #     if nxe_coarse in self._P1_cache:
-    #         return self._P1_cache[nxe_coarse]
+    # ----------------------------
+    # Prolongation / Restriction (same as your class, but locking constraints changed)
+    # ----------------------------
+    def _build_P1_scalar(self, nxe_coarse: int) -> sp.csr_matrix:
+        if nxe_coarse in self._P1_cache:
+            return self._P1_cache[nxe_coarse]
 
-    #     nc = nxe_coarse + 1
-    #     nf = 2 * nxe_coarse + 1  # = 2*nc - 1
+        nc = nxe_coarse + 1
+        nf = 2 * nxe_coarse + 1  # = 2*nc - 1
 
-    #     rows, cols, vals = [], [], []
+        rows, cols, vals = [], [], []
 
-    #     for i in range(nc):
-    #         rows.append(2 * i)
-    #         cols.append(i)
-    #         vals.append(1.0)
+        for i in range(nc):
+            rows.append(2 * i)
+            cols.append(i)
+            vals.append(1.0)
 
-    #     for i in range(nc - 1):
-    #         r = 2 * i + 1
-    #         rows += [r, r]
-    #         cols += [i, i + 1]
-    #         vals += [0.5, 0.5]
+        for i in range(nc - 1):
+            r = 2 * i + 1
+            rows += [r, r]
+            cols += [i, i + 1]
+            vals += [0.5, 0.5]
 
-    #     P1 = sp.coo_matrix((vals, (rows, cols)), shape=(nf, nc)).tocsr()
-    #     self._P1_cache[nxe_coarse] = P1
-    #     return P1
+        P1 = sp.coo_matrix((vals, (rows, cols)), shape=(nf, nc)).tocsr()
+        self._P1_cache[nxe_coarse] = P1
+        return P1
 
-    # def _build_P2_scalar(self, nxe_coarse: int) -> sp.csr_matrix:
-    #     if nxe_coarse in self._P2_cache:
-    #         return self._P2_cache[nxe_coarse]
-    #     P1 = self._build_P1_scalar(nxe_coarse)
-    #     P2 = sp.kron(P1, P1, format="csr")
-    #     self._P2_cache[nxe_coarse] = P2
-    #     return P2
+    def _build_P2_scalar(self, nxe_coarse: int) -> sp.csr_matrix:
+        if nxe_coarse in self._P2_cache:
+            return self._P2_cache[nxe_coarse]
+        P1 = self._build_P1_scalar(nxe_coarse)
+        P2 = sp.kron(P1, P1, format="csr")
+        self._P2_cache[nxe_coarse] = P2
+        return P2
 
-    # def _build_P2_uncoupled3(self, nxe_coarse: int) -> sp.csr_matrix:
-    #     if nxe_coarse in self._P2_u3_cache:
-    #         return self._P2_u3_cache[nxe_coarse]
-    #     P2s = self._build_P2_scalar(nxe_coarse)
-    #     P = sp.kron(P2s, sp.eye(3, format="csr"), format="csr")
-    #     self._P2_u3_cache[nxe_coarse] = P
-    #     return P
+    def _build_P2_uncoupled3(self, nxe_coarse: int) -> sp.csr_matrix:
+        if nxe_coarse in self._P2_u3_cache:
+            return self._P2_u3_cache[nxe_coarse]
+        P2s = self._build_P2_scalar(nxe_coarse)
+        P = sp.kron(P2s, sp.eye(self.dof_per_node, format="csr"), format="csr")
+        self._P2_u3_cache[nxe_coarse] = P
+        return P
     
-    # def _apply_bcs_to_P(self, P: sp.csr_matrix, nxe_c: int) -> sp.csr_matrix:
-    #     """
-    #     Enforce Dirichlet BC structure directly on P (fine rows, coarse cols).
-    #     For simply-supported: constrain w on boundary nodes.
-    #     For clamped: constrain w, thx, thy on boundary nodes.
-    #     """
-    #     nxe_f = 2 * nxe_c
-    #     nx_f = nxe_f + 1
-    #     nx_c = nxe_c + 1
+    def _apply_bcs_to_P(self, P: sp.csr_matrix, nxe_c: int) -> sp.csr_matrix:
+        """
+        Enforce Dirichlet BC structure directly on P (fine rows, coarse cols).
+        For simply-supported: constrain w on boundary nodes.
+        For clamped: constrain w, thx, thy on boundary nodes.
+        """
+        nxe_f = 2 * nxe_c
+        nx_f = nxe_f + 1
+        nx_c = nxe_c + 1
 
-    #     nnodes_f = nx_f * nx_f
-    #     nnodes_c = nx_c * nx_c
+        nnodes_f = nx_f * nx_f
+        nnodes_c = nx_c * nx_c
 
-    #     # which dofs are constrained at a boundary node
-    #     if self.clamped:
-    #         dofs = (0, 1, 2)   # w, thx, thy
-    #     else:
-    #         dofs = (0,)        # w only
+        # need clamped rn, haven't setup non-clamped BCs in multigrid yet (cause diff DOF constrained per node)
+        assert self.clamped
 
-    #     fixed_rows_f = []
-    #     for inode in range(nnodes_f):
-    #         i = inode % nx_f
-    #         j = inode // nx_f
-    #         on_edge = (i == 0) or (i == nx_f - 1) or (j == 0) or (j == nx_f - 1)
-    #         if on_edge:
-    #             base = 3 * inode
-    #             for a in dofs:
-    #                 fixed_rows_f.append(base + a)
+        # which dofs are constrained at a boundary node
+        if self.clamped:
+            dofs = (0, 1, 2, 3, 4, 5)   # u, v, w, thx, thy, thz
+        else:
+            dofs = (0,)        # w only
 
-    #     fixed_cols_c = []
-    #     for inode in range(nnodes_c):
-    #         i = inode % nx_c
-    #         j = inode // nx_c
-    #         on_edge = (i == 0) or (i == nx_c - 1) or (j == 0) or (j == nx_c - 1)
-    #         if on_edge:
-    #             base = 3 * inode
-    #             for a in dofs:
-    #                 fixed_cols_c.append(base + a)
+        fixed_rows_f = []
+        for inode in range(nnodes_f):
+            i = inode % nx_f
+            j = inode // nx_f
+            on_edge = (i == 0) or (i == nx_f - 1) or (j == 0) or (j == nx_f - 1)
+            if on_edge:
+                base = 6 * inode
+                for a in dofs:
+                    fixed_rows_f.append(base + a)
 
-    #     fixed_rows_f = np.array(sorted(set(fixed_rows_f)), dtype=int)
-    #     fixed_cols_c = np.array(sorted(set(fixed_cols_c)), dtype=int)
+        fixed_cols_c = []
+        for inode in range(nnodes_c):
+            i = inode % nx_c
+            j = inode // nx_c
+            on_edge = (i == 0) or (i == nx_c - 1) or (j == 0) or (j == nx_c - 1)
+            if on_edge:
+                base = 6 * inode
+                for a in dofs:
+                    fixed_cols_c.append(base + a)
 
-    #     # IMPORTANT: for Dirichlet dofs, we want the prolongation to output exactly 0,
-    #     # independent of coarse values. So:
-    #     #  - zero those fine rows
-    #     #  - zero those coarse columns (optional but recommended for consistency)
-    #     P = P.tolil()
-    #     P[fixed_rows_f, :] = 0.0
-    #     P[:, fixed_cols_c] = 0.0
-    #     P = P.tocsr()
-    #     P.eliminate_zeros()
-    #     return P
+        fixed_rows_f = np.array(sorted(set(fixed_rows_f)), dtype=int)
+        fixed_cols_c = np.array(sorted(set(fixed_cols_c)), dtype=int)
 
-    # def apply_bcs_2d(self, u: np.ndarray, nxe: int):
-    #     nx = nxe + 1
-    #     U = u.reshape((nx * nx, 3))
-    #     for j in range(nx):
-    #         for i in range(nx):
-    #             on_edge = (i == 0) or (i == nx - 1) or (j == 0) or (j == nx - 1)
-    #             if not on_edge:
-    #                 continue
-    #             k = i + nx * j
-    #             U[k, 0] = 0.0
-    #             if self.clamped:
-    #                 U[k, 1] = 0.0
-    #                 U[k, 2] = 0.0
+        # IMPORTANT: for Dirichlet dofs, we want the prolongation to output exactly 0,
+        # independent of coarse values. So:
+        #  - zero those fine rows
+        #  - zero those coarse columns (optional but recommended for consistency)
+        P = P.tolil()
+        P[fixed_rows_f, :] = 0.0
+        P[:, fixed_cols_c] = 0.0
+        P = P.tocsr()
+        P.eliminate_zeros()
+        return P
 
-    # def _locking_aware_prolong_global_mitc_v1(self, nxe_c: int, length: float = 1.0):
-    #     """
-    #     Locking-aware prolongation where constraints are on MITC tying strains:
-    #       [ gx(0,-b), gx(0,+b), gy(-a,0), gy(+a,0) ] = 0   per element
-    #     => 4 constraints per element.
-    #     """
-    #     if nxe_c in self._lock_P_cache:
-    #         return self._lock_P_cache[nxe_c]
+    def apply_bcs_2d(self, u: np.ndarray, nxe: int):
+        nx = nxe + 1
+        U = u.reshape((nx * nx, 6))
+        assert self.clamped # haven't written it for not clamped yet
+        for j in range(nx):
+            for i in range(nx):
+                on_edge = (i == 0) or (i == nx - 1) or (j == 0) or (j == nx - 1)
+                if not on_edge:
+                    continue
+                k = i + nx * j
+                if self.clamped:
+                    for i in range(6):
+                        U[k,i] = 0.0
 
-    #     # sizes
-    #     nxe_f = 2 * nxe_c
+    def _get_edge_prolong_strain_matrix(self, nxe_c:int):
 
-    #     nx_f = nxe_f + 1
-    #     nnodes_f = nx_f**2
-    #     nelems_f = nxe_f**2
-    #     N_f = 3 * nnodes_f
+        # sizes
+        nxe_f = 2 * nxe_c
+        nelems_f = nxe_f**2
+        nelems_c = nxe_c**2
 
-    #     nx_c = nxe_c + 1
-    #     nnodes_c = nx_c**2
-    #     nelems_c = nxe_c**2
-    #     N_c = 3 * nnodes_c
+        # ---------------------------------------------------------
+        # P_gam: geometry-aware interpolation of tying-strain "samples"
+        # from coarse element tying locations -> fine element tying locations.
+        #
+        # gamma ordering per element (9):
+        # 0 g11n @ (xi=0,eta=-1)  bottom-mid
+        # 1 g13n @ (xi=0,eta=-1)  bottom-mid
+        # 2 g11p @ (xi=0,eta=+1)  top-mid
+        # 3 g13p @ (xi=0,eta=+1)  top-mid
+        # 4 g22n @ (xi=-1,eta=0)  left-mid
+        # 5 g23n @ (xi=-1,eta=0)  left-mid
+        # 6 g22p @ (xi=+1,eta=0)  right-mid
+        # 7 g23p @ (xi=+1,eta=0)  right-mid
+        # 8 g12  @ (xi=0,eta=0)   center
+        # ---------------------------------------------------------
+        P_gam = np.zeros((9 * nelems_f, 9 * nelems_c), dtype=float)
 
-    #     # element reference coords (axis-aligned mapping as in your current code)
-    #     dx_f = length / nxe_f
-    #     x_f = dx_f * np.array([0.0, 1.0, 1.0, 0.0])
-    #     y_f = dx_f * np.array([0.0, 0.0, 1.0, 1.0])
+        hc = 1.0 / float(nxe_c)
+        hf = 1.0 / float(nxe_f)
 
-    #     dx_c = length / nxe_c
-    #     x_c = dx_c * np.array([0.0, 1.0, 1.0, 0.0])
-    #     y_c = dx_c * np.array([0.0, 0.0, 1.0, 1.0])
+        def clamp_int(v, lo, hi):
+            return lo if v < lo else (hi if v > hi else v)
 
-    #     # Build telling-strain operator G_f, G_c (dense):
-    #     # rows per element: [gx(0,-b), gx(0,+b), gy(-a,0), gy(+a,0)]
-    #     G_f = np.zeros((4 * nelems_f, N_f), dtype=float)
-    #     for ielem_f in range(nelems_f):
-    #         ex = ielem_f % nxe_f
-    #         ey = ielem_f // nxe_f
-    #         loc_nodes = np.array([
-    #             ex + nx_f * ey,
-    #             (ex + 1) + nx_f * ey,
-    #             (ex + 1) + nx_f * (ey + 1),
-    #             ex + nx_f * (ey + 1),
-    #         ], dtype=int)
-    #         loc_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
+        def elem_id(ex, ey, nxe):
+            return ex + ey * nxe
 
-    #         # gx at (0, -b) and (0, +b)
-    #         _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x_f, y_f)
-    #         _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_f, y_f)
-    #         # gy at (-a, 0) and (+a, 0)
-    #         _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_f, y_f)
-    #         _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_f, y_f)
+        def bilinear_elems(x, y):
+            """
+            Return up to 4 surrounding coarse elements and bilinear weights
+            for a point (x,y) in [0,1]^2, interpreted in coarse-element cell coords.
+            """
+            # clamp to domain (avoid x==1 -> i==nxe_c)
+            x = min(max(x, 0.0), 1.0 - 1e-15)
+            y = min(max(y, 0.0), 1.0 - 1e-15)
 
-    #         r0 = 4 * ielem_f
-    #         G_f[r0 + 0, loc_dof] += bx_m
-    #         G_f[r0 + 1, loc_dof] += bx_p
-    #         G_f[r0 + 2, loc_dof] += by_m
-    #         G_f[r0 + 3, loc_dof] += by_p
+            i0 = int(np.floor(x / hc))
+            j0 = int(np.floor(y / hc))
+            i0 = clamp_int(i0, 0, nxe_c - 1)
+            j0 = clamp_int(j0, 0, nxe_c - 1)
 
-    #     G_c = np.zeros((4 * nelems_c, N_c), dtype=float)
-    #     for ielem_c in range(nelems_c):
-    #         ex = ielem_c % nxe_c
-    #         ey = ielem_c // nxe_c
-    #         loc_nodes = np.array([
-    #             ex + nx_c * ey,
-    #             (ex + 1) + nx_c * ey,
-    #             (ex + 1) + nx_c * (ey + 1),
-    #             ex + nx_c * (ey + 1),
-    #         ], dtype=int)
-    #         loc_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
+            i1 = min(i0 + 1, nxe_c - 1)
+            j1 = min(j0 + 1, nxe_c - 1)
 
-    #         _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x_c, y_c)
-    #         _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_c, y_c)
-    #         _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_c, y_c)
-    #         _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_c, y_c)
+            tx = (x - i0 * hc) / hc
+            ty = (y - j0 * hc) / hc
 
-    #         r0 = 4 * ielem_c
-    #         G_c[r0 + 0, loc_dof] += bx_m
-    #         G_c[r0 + 1, loc_dof] += bx_p
-    #         G_c[r0 + 2, loc_dof] += by_m
-    #         G_c[r0 + 3, loc_dof] += by_p
+            if i1 == i0:
+                tx = 0.0
+            if j1 == j0:
+                ty = 0.0
 
-    #     # # Elementwise injection for tying strains (4-per-elem)
-    #     # P_gam = np.zeros((4 * nelems_f, 4 * nelems_c), dtype=float)
-    #     # for ielem_f in range(nelems_f):
-    #     #     ex = ielem_f % nxe_f
-    #     #     ey = ielem_f // nxe_f
-    #     #     ielem_c = (ex // 2) + (ey // 2) * nxe_c
+            w00 = (1.0 - tx) * (1.0 - ty)
+            w10 = (tx)       * (1.0 - ty)
+            w01 = (1.0 - tx) * (ty)
+            w11 = (tx)       * (ty)
 
-    #     #     rf = 4 * ielem_f
-    #     #     rc = 4 * ielem_c
-    #     #     P_gam[rf + 0, rc + 0] = 1.0
-    #     #     P_gam[rf + 1, rc + 1] = 1.0
-    #     #     P_gam[rf + 2, rc + 2] = 1.0
-    #     #     P_gam[rf + 3, rc + 3] = 1.0
+            return (i0, j0, w00), (i1, j0, w10), (i0, j1, w01), (i1, j1, w11)
 
-    #     # ---------------------------------------------------------
-    #     # P_gam: bilinear averaging (Q1) from coarse elem-grid to fine elem-grid
-    #     # Each strain component is interpolated independently.
-    #     #
-    #     # coarse elements live on a (nxe_c x nxe_c) grid with indices (Ex_c, Ey_c)
-    #     # fine elements live on a (nxe_f x nxe_f) grid with indices (ex, ey)
-    #     #
-    #     # Map fine element center to coarse-index space:
-    #     #   x_c = (ex + 0.5)/2 - 0.5   in [ -0.25, nxe_c - 0.75 ]
-    #     # so that fine elements in a 2x2 block around a coarse element "see" neighbors.
-    #     #
-    #     # You can tweak the "-0.5" shift if you want less cross-element blending.
-    #     # ---------------------------------------------------------
-    #     P_gam = np.zeros((4 * nelems_f, 4 * nelems_c), dtype=float)
+        def yblend_in_elem(y, ey_c):
+            """
+            For a coarse element (ex,ey_c), compute local y-fraction s in [0,1]
+            so we can blend bottom/top samples (g??n vs g??p).
+            """
+            y0 = ey_c * hc
+            s = (y - y0) / hc
+            return min(max(s, 0.0), 1.0)
 
-    #     # NOTE : elemwise injection gives very similar thin shell perf
+        def xblend_in_elem(x, ex_c):
+            """
+            For a coarse element (ex_c,ey), compute local x-fraction s in [0,1]
+            so we can blend left/right samples (g??n vs g??p).
+            """
+            x0 = ex_c * hc
+            s = (x - x0) / hc
+            return min(max(s, 0.0), 1.0)
 
-    #     def clamp(v, lo, hi):
-    #         return max(lo, min(hi, v))
+        for ielem_f in range(nelems_f):
+            exf = ielem_f % nxe_f
+            eyf = ielem_f // nxe_f
 
-    #     for ielem_f in range(nelems_f):
-    #         ex = ielem_f % nxe_f
-    #         ey = ielem_f // nxe_f
+            rf = 9 * ielem_f
 
-    #         # fine element "center" mapped into coarse-element index space
-    #         x = 0.5 * (ex + 0.5) - 0.5
-    #         y = 0.5 * (ey + 0.5) - 0.5
+            # --- fine tying sample physical locations ---
+            # bottom mid (g11n,g13n)
+            xb = (exf + 0.5) * hf
+            yb = (eyf + 0.0) * hf
 
-    #         i0 = int(np.floor(x))
-    #         j0 = int(np.floor(y))
-    #         tx = x - i0
-    #         ty = y - j0
+            # top mid (g11p,g13p)
+            xt = (exf + 0.5) * hf
+            yt = (eyf + 1.0) * hf
 
-    #         # clamp base so neighbors exist; edge blending degenerates gracefully
-    #         i0 = clamp(i0, 0, nxe_c - 1)
-    #         j0 = clamp(j0, 0, nxe_c - 1)
+            # left mid (g22n,g23n)
+            xl = (exf + 0.0) * hf
+            yl = (eyf + 0.5) * hf
 
-    #         i1 = clamp(i0 + 1, 0, nxe_c - 1)
-    #         j1 = clamp(j0 + 1, 0, nxe_c - 1)
+            # right mid (g22p,g23p)
+            xr = (exf + 1.0) * hf
+            yr = (eyf + 0.5) * hf
 
-    #         # if clamped to boundary, kill the corresponding fraction
-    #         if i1 == i0:
-    #             tx = 0.0
-    #         if j1 == j0:
-    #             ty = 0.0
+            # center (g12)
+            xc = (exf + 0.5) * hf
+            yc = (eyf + 0.5) * hf
 
-    #         w00 = (1.0 - tx) * (1.0 - ty)
-    #         w10 = (tx)       * (1.0 - ty)
-    #         w01 = (1.0 - tx) * (ty)
-    #         w11 = (tx)       * (ty)
+            # -------------------------
+            # g11/g13 rows: blend (n,p) in y inside each coarse elem,
+            # and Q1 across neighboring coarse elems.
+            # -------------------------
+            # fine row 0: g11n at (xb,yb)
+            for (ix, iy, w) in bilinear_elems(xb, yb):
+                if w == 0.0:
+                    continue
+                e = elem_id(ix, iy, nxe_c)
+                rc = 9 * e
+                s = yblend_in_elem(yb, iy)  # blend bottom->top in that coarse elem
+                P_gam[rf + 0, rc + 0] += w * (1.0 - s)  # coarse g11n
+                P_gam[rf + 0, rc + 2] += w * (s)        # coarse g11p
 
-    #         # coarse element ids
-    #         e00 = i0 + j0 * nxe_c
-    #         e10 = i1 + j0 * nxe_c
-    #         e01 = i0 + j1 * nxe_c
-    #         e11 = i1 + j1 * nxe_c
+                P_gam[rf + 1, rc + 1] += w * (1.0 - s)  # coarse g13n
+                P_gam[rf + 1, rc + 3] += w * (s)        # coarse g13p
 
-    #         rf = 4 * ielem_f
+            # fine row 2/3: g11p/g13p at (xt,yt)
+            for (ix, iy, w) in bilinear_elems(xt, yt):
+                if w == 0.0:
+                    continue
+                e = elem_id(ix, iy, nxe_c)
+                rc = 9 * e
+                s = yblend_in_elem(yt, iy)
+                P_gam[rf + 2, rc + 0] += w * (1.0 - s)
+                P_gam[rf + 2, rc + 2] += w * (s)
 
-    #         # for each tying-strain component, interpolate from coarse neighbors
-    #         for comp in range(4):
-    #             P_gam[rf + comp, 4 * e00 + comp] += w00
-    #             P_gam[rf + comp, 4 * e10 + comp] += w10
-    #             P_gam[rf + comp, 4 * e01 + comp] += w01
-    #             P_gam[rf + comp, 4 * e11 + comp] += w11
+                P_gam[rf + 3, rc + 1] += w * (1.0 - s)
+                P_gam[rf + 3, rc + 3] += w * (s)
 
-    #     RHS = P_gam @ G_c  # (4*nelems_f, 3*nnodes_c)
+            # -------------------------
+            # g22/g23 rows: blend (n,p) in x inside each coarse elem,
+            # and Q1 across neighboring coarse elems.
+            # -------------------------
+            # fine row 4/5: left mid (xl,yl)
+            for (ix, iy, w) in bilinear_elems(xl, yl):
+                if w == 0.0:
+                    continue
+                e = elem_id(ix, iy, nxe_c)
+                rc = 9 * e
+                s = xblend_in_elem(xl, ix)  # blend left->right in that coarse elem
+                P_gam[rf + 4, rc + 4] += w * (1.0 - s)  # coarse g22n
+                P_gam[rf + 4, rc + 6] += w * (s)        # coarse g22p
 
-    #     # Baseline nodal prolong
-    #     P_0 = self._build_P2_uncoupled3(nxe_c) # csr
-    #     P_0 = self._apply_bcs_to_P(P_0, nxe_c)
-    #     lam = float(self.lam)
+                P_gam[rf + 5, rc + 5] += w * (1.0 - s)  # coarse g23n
+                P_gam[rf + 5, rc + 7] += w * (s)        # coarse g23p
 
-    #     # Coarse BC columns (same logic as your v2)
-    #     constrained_dofs = (0, 1, 2) if self.clamped else (0,)
+            # fine row 6/7: right mid (xr,yr)
+            for (ix, iy, w) in bilinear_elems(xr, yr):
+                if w == 0.0:
+                    continue
+                e = elem_id(ix, iy, nxe_c)
+                rc = 9 * e
+                s = xblend_in_elem(xr, ix)
+                P_gam[rf + 6, rc + 4] += w * (1.0 - s)
+                P_gam[rf + 6, rc + 6] += w * (s)
 
-    #     fixed_cols_c = []
-    #     for inode in range(nnodes_c):
-    #         i = inode % nx_c
-    #         j = inode // nx_c
-    #         if (i == 0) or (i == nx_c - 1) or (j == 0) or (j == nx_c - 1):
-    #             base = 3 * inode
-    #             for a in constrained_dofs:
-    #                 fixed_cols_c.append(base + a)
-    #     fixed_cols_c = np.array(sorted(set(fixed_cols_c)), dtype=int)
-    #     all_cols_c = np.arange(3 * nnodes_c, dtype=int)
-    #     free_cols_c = np.setdiff1d(all_cols_c, fixed_cols_c, assume_unique=False)
+                P_gam[rf + 7, rc + 5] += w * (1.0 - s)
+                P_gam[rf + 7, rc + 7] += w * (s)
 
-    #     # Fine BC rows with beam-style E-constraint
-    #     fixed_rows_f = []
-    #     for inode in range(nnodes_f):
-    #         i = inode % nx_f
-    #         j = inode // nx_f
-    #         if (i == 0) or (i == nx_f - 1) or (j == 0) or (j == nx_f - 1):
-    #             base = 3 * inode
-    #             for a in constrained_dofs:
-    #                 fixed_rows_f.append(base + a)
-    #     fixed_rows_f = np.array(sorted(set(fixed_rows_f)), dtype=int)
+            # -------------------------
+            # g12 center: Q1 over coarse elements (no extra blend)
+            # -------------------------
+            for (ix, iy, w) in bilinear_elems(xc, yc):
+                if w == 0.0:
+                    continue
+                e = elem_id(ix, iy, nxe_c)
+                rc = 9 * e
+                P_gam[rf + 8, rc + 8] += w
 
-    #     solve_rows_f = np.arange(3 * nnodes_f, dtype=int)
+        return P_gam
 
-    #     nE = fixed_rows_f.size
-    #     Esel = np.zeros((nE, solve_rows_f.size), dtype=float)
-    #     # solve_rows_f is identity, so:
-    #     Esel[np.arange(nE), fixed_rows_f] = 1.0
+    def _get_locking_linear_system(self, nxe_c:int):
+        # sizes
+        nxe_f = 2 * nxe_c
 
-    #     # Least squares solve:
-    #     #   minimize ||G_f P - RHS||^2 + ||E P||^2 + lam ||P - P0||^2
-    #     A = G_f[:, solve_rows_f]                  # (4*nelems_f, nsolve)
-    #     B = RHS[:, free_cols_c]                   # (4*nelems_f, nfreecols)
+        nx_f = nxe_f + 1
+        nnodes_f = nx_f**2
+        nelems_f = nxe_f**2
+        N_f = 6 * nnodes_f
 
-    #     A_aug = np.vstack([A, Esel])
-    #     B_aug = np.vstack([B, np.zeros((nE, B.shape[1]))])
-    #     # A_aug = A
-    #     # B_aug = B
+        nx_c = nxe_c + 1
+        nnodes_c = nx_c**2
+        nelems_c = nxe_c**2
+        N_c = 6 * nnodes_c
 
-    #     idx0 = np.ix_(solve_rows_f, free_cols_c)
-    #     P0_free = P_0[idx0].toarray()
+        # from registration of xpts of assembler to element (in run script)
+        fine_xpts = self._xpts_cache[nxe_f]
+        coarse_xpts = self._xpts_cache[nxe_c]
 
-    #     M = A_aug.T @ A_aug + lam * np.eye(solve_rows_f.size)
-    #     rhs = A_aug.T @ B_aug + lam * P0_free
+        # Build telling-strain operator G_f, G_c (dense):
+        # 9 tying strains per element
+        G_f = np.zeros((9 * nelems_f, N_f), dtype=float)
+        for ielem_f in range(nelems_f):
+            ex = ielem_f % nxe_f
+            ey = ielem_f // nxe_f
+            loc_nodes = np.array([
+                ex + nx_f * ey,
+                (ex + 1) + nx_f * ey,
+                ex + nx_f * (ey + 1),
+                (ex + 1) + nx_f * (ey + 1),
+            ], dtype=int)
+            loc_dof = np.array([6 * node + dof for node in loc_nodes for dof in range(6)], dtype=int)
+            loc_xpt_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
+            elem_xpts = fine_xpts[loc_xpt_dof]
+            # print(f"lock-aware fine {elem_xpts.shape=}")
+
+            # loop over each of the tying points (edge DOF and center point)
+            quad_pt = [0, -1]
+            tying_mat0 = self._get_tying_strain_matrix(quad_pt, elem_xpts)
+            g11n = tying_mat0[0,:]
+            g13n = tying_mat0[4,:]
+
+            quad_pt = [0, 1]
+            tying_mat1 = self._get_tying_strain_matrix(quad_pt, elem_xpts)
+            g11p = tying_mat1[0,:]
+            g13p = tying_mat1[4,:]
+
+            quad_pt = [-1, 0]
+            tying_mat2 = self._get_tying_strain_matrix(quad_pt, elem_xpts)
+            g22n = tying_mat2[1,:]
+            g23n = tying_mat2[3,:]
+
+            quad_pt = [1, 0]
+            tying_mat3 = self._get_tying_strain_matrix(quad_pt, elem_xpts)
+            g22p = tying_mat3[1,:]
+            g23p = tying_mat3[3,:]
+
+            quad_pt = [0, 0]
+            tying_mat4 = self._get_tying_strain_matrix(quad_pt, elem_xpts)
+            g12 = tying_mat4[2,:]
+
+            r0 = 9 * ielem_f
+            G_f[r0 + 0, loc_dof] += g11n
+            G_f[r0 + 1, loc_dof] += g13n
+            G_f[r0 + 2, loc_dof] += g11p
+            G_f[r0 + 3, loc_dof] += g13p
+            G_f[r0 + 4, loc_dof] += g22n
+            G_f[r0 + 5, loc_dof] += g23n
+            G_f[r0 + 6, loc_dof] += g22p
+            G_f[r0 + 7, loc_dof] += g23p
+            G_f[r0 + 8, loc_dof] += g12
+
+
+        G_c = np.zeros((9 * nelems_c, N_c), dtype=float)
+        for ielem_c in range(nelems_c):
+            ex = ielem_c % nxe_c
+            ey = ielem_c // nxe_c
+            loc_nodes = np.array([
+                ex + nx_c * ey,
+                (ex + 1) + nx_c * ey,
+                ex + nx_c * (ey + 1),
+                (ex + 1) + nx_c * (ey + 1),
+            ], dtype=int)
+            loc_dof = np.array([6 * node + dof for node in loc_nodes for dof in range(6)], dtype=int)
+            loc_xpt_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
+            elem_xpts = coarse_xpts[loc_xpt_dof]
+
+            # print(f"lock-aware coarse {elem_xpts.shape=}")
+
+            # loop over each of the tying points (edge DOF and center point)
+            quad_pt = [0, -1]
+            tying_mat0 = self._get_tying_strain_matrix(quad_pt, elem_xpts)
+            g11n = tying_mat0[0,:]
+            g13n = tying_mat0[4,:]
+
+            quad_pt = [0, 1]
+            tying_mat1 = self._get_tying_strain_matrix(quad_pt, elem_xpts)
+            g11p = tying_mat1[0,:]
+            g13p = tying_mat1[4,:]
+
+            quad_pt = [-1, 0]
+            tying_mat2 = self._get_tying_strain_matrix(quad_pt, elem_xpts)
+            g22n = tying_mat2[1,:]
+            g23n = tying_mat2[3,:]
+
+            quad_pt = [1, 0]
+            tying_mat3 = self._get_tying_strain_matrix(quad_pt, elem_xpts)
+            g22p = tying_mat3[1,:]
+            g23p = tying_mat3[3,:]
+
+            quad_pt = [0, 0]
+            tying_mat4 = self._get_tying_strain_matrix(quad_pt, elem_xpts)
+            g12 = tying_mat4[2,:]
+
+            r0 = 9 * ielem_c
+            G_c[r0 + 0, loc_dof] += g11n
+            G_c[r0 + 1, loc_dof] += g13n
+            G_c[r0 + 2, loc_dof] += g11p
+            G_c[r0 + 3, loc_dof] += g13p
+            G_c[r0 + 4, loc_dof] += g22n
+            G_c[r0 + 5, loc_dof] += g23n
+            G_c[r0 + 6, loc_dof] += g22p
+            G_c[r0 + 7, loc_dof] += g23p
+            G_c[r0 + 8, loc_dof] += g12
+
+        # doesn't make much of a difference here..
+        P_gam_method = 'injection'
+        # P_gam_method = 'edges'
+
+        if P_gam_method == 'injection':
+            # Elementwise injection for tying strains (4-per-elem)
+            P_gam = np.zeros((9 * nelems_f, 9 * nelems_c), dtype=float)
+            for ielem_f in range(nelems_f):
+                ex = ielem_f % nxe_f
+                ey = ielem_f // nxe_f
+                ielem_c = (ex // 2) + (ey // 2) * nxe_c
+
+                rf = 9 * ielem_f
+                rc = 9 * ielem_c
+                for i in range(9):
+                    P_gam[rf + i, rc + i] = 1.0
+
+        elif P_gam_method == 'edges':
+            # interpolate more rigidly (bigger stencil)
+            P_gam = self._get_edge_prolong_strain_matrix(nxe_c)
+
+        RHS_full = P_gam @ G_c  # (9*nelems_f, 6*nnodes_c)
+
+        # Baseline nodal prolong
+        P_0 = self._build_P2_uncoupled3(nxe_c) # csr
+        P_0 = self._apply_bcs_to_P(P_0, nxe_c)
+        lam = float(self.lam)
+
+        # Coarse BC columns (same logic as your v2)
+        assert self.clamped # haven't written for not clamped case yet
+        constrained_dofs = (0, 1, 2, 3, 4, 5) if self.clamped else (0,)
+
+        fixed_cols_c = []
+        for inode in range(nnodes_c):
+            i = inode % nx_c
+            j = inode // nx_c
+            if (i == 0) or (i == nx_c - 1) or (j == 0) or (j == nx_c - 1):
+                base = 6 * inode
+                for a in constrained_dofs:
+                    fixed_cols_c.append(base + a)
+        fixed_cols_c = np.array(sorted(set(fixed_cols_c)), dtype=int)
+        all_cols_c = np.arange(6 * nnodes_c, dtype=int)
+        free_cols_c = np.setdiff1d(all_cols_c, fixed_cols_c, assume_unique=False)
+
+        # Fine BC rows with beam-style E-constraint
+        fixed_rows_f = []
+        for inode in range(nnodes_f):
+            i = inode % nx_f
+            j = inode // nx_f
+            if (i == 0) or (i == nx_f - 1) or (j == 0) or (j == nx_f - 1):
+                base = 6 * inode
+                for a in constrained_dofs:
+                    fixed_rows_f.append(base + a)
+        fixed_rows_f = np.array(sorted(set(fixed_rows_f)), dtype=int)
+
+        # -----------------------------
+        # v5: impose coarse BCs by zeroing constrained coarse columns
+        # in BOTH RHS term and P0 (so system has N_c cols but BC cols are forced to 0)
+        # -----------------------------
+        if fixed_cols_c.size > 0:
+            RHS_full[:, fixed_cols_c] = 0.0
+            # also guarantee P0 has those cols zero (in case _apply_bcs_to_P doesn't)
+            P_0 = P_0.tolil(copy=True)
+            P_0[:, fixed_cols_c] = 0.0
+            P_0 = P_0.tocsr()
+
+        # Build normal equations without augmentation (FULL columns)
+        solve_rows_f = np.arange(N_f, dtype=int)  # keep all rows
+        A = G_f[:, solve_rows_f]           # (4*nelems_f, N_f)
+        B = RHS_full                       # (4*nelems_f, N_c)
+        P0_all = P_0[solve_rows_f, :].toarray()  # (N_f, N_c), cols multiple of 3
+
+        M   = A.T @ A + lam * np.eye(solve_rows_f.size)
+        rhs = A.T @ B + lam * P0_all
+
+        # -----------------------------
+        # enforce fine BCs by row/col elimination on M, set rhs row to P0 row (ALL cols)
+        # -----------------------------
+        if fixed_rows_f.size > 0:
+            M[fixed_rows_f, :] = 0.0
+            M[:, fixed_rows_f] = 0.0
+            for d in fixed_rows_f:
+                M[d, d] = 1.0
+            rhs[fixed_rows_f, :] = P0_all[fixed_rows_f, :]
+
+        # same some states to element class for DEBUGGING in locking sandbox 
+        # need to get it out of this class
+        self.G_f = G_f
+        self.G_c = G_c
+        self.P_gam = P_gam
+        self.P_0 = P_0
+        self.M = M
+        self.RHS = rhs
+        self.free_cols_c = free_cols_c
+        self.fixed_cols_c = fixed_cols_c
+        self.solve_rows_f = solve_rows_f
+        # self.P_0_free = P0_free
+        self.Mb = None
+
+    def _locking_aware_prolong_global_mitc_v1(self, nxe_c: int, length: float = 1.0):
+        """
+        Locking-aware prolongation where constraints are on MITC tying strains:
+          [ gx(0,-b), gx(0,+b), gy(-a,0), gy(+a,0) ] = 0   per element
+        => 4 constraints per element.
+        """
         
-    #     # direct solve
-    #     P_free = np.linalg.solve(M, rhs)
-
-    #     # same some states to element class for DEBUGGING in locking sandbox 
-    #     # need to get it out of this class
-    #     self.G_f = G_f
-    #     self.G_c = G_c
-    #     self.P_gam = P_gam
-    #     self.P_0 = P_0
-    #     self.M = M
-    #     self.RHS = rhs
-    #     self.free_cols_c = free_cols_c
-    #     self.fixed_cols_c = fixed_cols_c
-    #     self.solve_rows_f = solve_rows_f
-    #     self.P_0_free = P0_free
-    #     self.Mb = None
-
-    #     # # block-Jacobi smoothing (3x3 nodal) instead of direct solve
-    #     # P_free = P0_free.copy()
-    #     # omega = 0.8
-    #     # # n_smooth = 5 (not enough)
-    #     # # n_smooth = 15
-    #     # # n_smooth = 30 # still takes 80 krylov iterations
-    #     # n_smooth = 60
-
-    #     # n = M.shape[0]
-    #     # assert n % 3 == 0
-
-    #     # # precompute inv(diag 3x3 blocks)
-    #     # Dinv = np.empty((n//3, 3, 3), dtype=M.dtype)
-    #     # for b in range(n // 3):
-    #     #     i = 3 * b
-    #     #     Dinv[b] = np.linalg.inv(M[i:i+3, i:i+3])
-
-    #     # for _ in range(n_smooth):
-    #     #     R = rhs - M @ P_free
-    #     #     for b in range(n // 3):
-    #     #         i = 3 * b
-    #     #         P_free[i:i+3, :] += omega * (Dinv[b] @ R[i:i+3, :])
-
-
-    #     # Assemble full P
-    #     P = P_0.toarray()
-    #     P[:, fixed_cols_c] = 0.0
-    #     P[np.ix_(solve_rows_f, free_cols_c)] = P_free
-    #     # P[fixed_rows_f, :] = 0.0
-
-    #     self._lock_P_cache[nxe_c] = P.copy()
-    #     return P
+        self._get_locking_linear_system(nxe_c)
+        M = self.M
+        rhs = self.RHS
+        
+        # direct solve
+        P = np.linalg.solve(M, rhs)
+        return P
     
     # def _locking_aware_prolong_local_mitc_v5_jacobi(
     #         self,
@@ -1088,203 +1394,6 @@ class MITCShellElement:
     #     Solve (G_f^T G_f + lam I) P = G_f^T (P_gam G_c) + lam P0
     #     using SpMM Jacobi (3x3 block diagonal) with optional fixed sparsity (mask).
     #     """
-
-    #     import numpy as np
-    #     import scipy.sparse as sp
-
-    #     cache_key = ("local_mitc_v5_jacobi_no_coarse_elim",
-    #                 int(nxe_c), float(length), int(n_sweeps),
-    #                 float(omega), bool(with_fillin), bool(use_mask))
-    #     if cache_key in self._lock_P_cache:
-    #         return self._lock_P_cache[cache_key]
-
-    #     # -----------------------------
-    #     # same as v1-v4 up to forming G_f, G_c, P_gam, RHS_full, P0
-    #     # -----------------------------
-    #     nxe_f = 2 * nxe_c
-
-    #     nx_f = nxe_f + 1
-    #     nnodes_f = nx_f**2
-    #     nelems_f = nxe_f**2
-    #     N_f = 3 * nnodes_f
-
-    #     nx_c = nxe_c + 1
-    #     nnodes_c = nx_c**2
-    #     nelems_c = nxe_c**2
-    #     N_c = 3 * nnodes_c
-
-    #     dx_f = length / nxe_f
-    #     x_f = dx_f * np.array([0.0, 1.0, 1.0, 0.0])
-    #     y_f = dx_f * np.array([0.0, 0.0, 1.0, 1.0])
-
-    #     dx_c = length / nxe_c
-    #     x_c = dx_c * np.array([0.0, 1.0, 1.0, 0.0])
-    #     y_c = dx_c * np.array([0.0, 0.0, 1.0, 1.0])
-
-    #     G_f = np.zeros((4 * nelems_f, N_f), dtype=float)
-    #     for ielem_f in range(nelems_f):
-    #         ex = ielem_f % nxe_f
-    #         ey = ielem_f // nxe_f
-    #         loc_nodes = np.array([
-    #             ex + nx_f * ey,
-    #             (ex + 1) + nx_f * ey,
-    #             (ex + 1) + nx_f * (ey + 1),
-    #             ex + nx_f * (ey + 1),
-    #         ], dtype=int)
-    #         loc_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
-
-    #         _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x_f, y_f)
-    #         _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_f, y_f)
-    #         _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_f, y_f)
-    #         _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_f, y_f)
-
-    #         r0 = 4 * ielem_f
-    #         G_f[r0 + 0, loc_dof] += bx_m
-    #         G_f[r0 + 1, loc_dof] += bx_p
-    #         G_f[r0 + 2, loc_dof] += by_m
-    #         G_f[r0 + 3, loc_dof] += by_p
-
-    #     G_c = np.zeros((4 * nelems_c, N_c), dtype=float)
-    #     for ielem_c in range(nelems_c):
-    #         ex = ielem_c % nxe_c
-    #         ey = ielem_c // nxe_c
-    #         loc_nodes = np.array([
-    #             ex + nx_c * ey,
-    #             (ex + 1) + nx_c * ey,
-    #             (ex + 1) + nx_c * (ey + 1),
-    #             ex + nx_c * (ey + 1),
-    #         ], dtype=int)
-    #         loc_dof = np.array([3 * node + dof for node in loc_nodes for dof in range(3)], dtype=int)
-
-    #         _, bx_m, _ = self._Bs_rows_at_point(0.0, -self.b, x_c, y_c)
-    #         _, bx_p, _ = self._Bs_rows_at_point(0.0, +self.b, x_c, y_c)
-    #         _, _, by_m = self._Bs_rows_at_point(-self.a, 0.0, x_c, y_c)
-    #         _, _, by_p = self._Bs_rows_at_point(+self.a, 0.0, x_c, y_c)
-
-    #         r0 = 4 * ielem_c
-    #         G_c[r0 + 0, loc_dof] += bx_m
-    #         G_c[r0 + 1, loc_dof] += bx_p
-    #         G_c[r0 + 2, loc_dof] += by_m
-    #         G_c[r0 + 3, loc_dof] += by_p
-
-    #     # # P_gam (dense) as in v1
-    #     # P_gam = np.zeros((4 * nelems_f, 4 * nelems_c), dtype=float)
-
-    #     # def clamp(v, lo, hi):
-    #     #     return max(lo, min(hi, v))
-
-    #     # for ielem_f in range(nelems_f):
-    #     #     ex = ielem_f % nxe_f
-    #     #     ey = ielem_f // nxe_f
-
-    #     #     x = 0.5 * (ex + 0.5) - 0.5
-    #     #     y = 0.5 * (ey + 0.5) - 0.5
-
-    #     #     i0 = int(np.floor(x))
-    #     #     j0 = int(np.floor(y))
-    #     #     tx = x - i0
-    #     #     ty = y - j0
-
-    #     #     i0 = clamp(i0, 0, nxe_c - 1)
-    #     #     j0 = clamp(j0, 0, nxe_c - 1)
-    #     #     i1 = clamp(i0 + 1, 0, nxe_c - 1)
-    #     #     j1 = clamp(j0 + 1, 0, nxe_c - 1)
-
-    #     #     if i1 == i0: tx = 0.0
-    #     #     if j1 == j0: ty = 0.0
-
-    #     #     w00 = (1.0 - tx) * (1.0 - ty)
-    #     #     w10 = (tx)       * (1.0 - ty)
-    #     #     w01 = (1.0 - tx) * (ty)
-    #     #     w11 = (tx)       * (ty)
-
-    #     #     e00 = i0 + j0 * nxe_c
-    #     #     e10 = i1 + j0 * nxe_c
-    #     #     e01 = i0 + j1 * nxe_c
-    #     #     e11 = i1 + j1 * nxe_c
-
-    #     #     rf = 4 * ielem_f
-    #     #     for comp in range(4):
-    #     #         P_gam[rf + comp, 4 * e00 + comp] += w00
-    #     #         P_gam[rf + comp, 4 * e10 + comp] += w10
-    #     #         P_gam[rf + comp, 4 * e01 + comp] += w01
-    #     #         P_gam[rf + comp, 4 * e11 + comp] += w11
-
-    #     # Elementwise injection for tying strains (4-per-elem)
-    #     P_gam = np.zeros((4 * nelems_f, 4 * nelems_c), dtype=float)
-    #     for ielem_f in range(nelems_f):
-    #         ex = ielem_f % nxe_f
-    #         ey = ielem_f // nxe_f
-    #         ielem_c = (ex // 2) + (ey // 2) * nxe_c
-
-    #         rf = 4 * ielem_f
-    #         rc = 4 * ielem_c
-    #         P_gam[rf + 0, rc + 0] = 1.0
-    #         P_gam[rf + 1, rc + 1] = 1.0
-    #         P_gam[rf + 2, rc + 2] = 1.0
-    #         P_gam[rf + 3, rc + 3] = 1.0
-
-    #     RHS_full = P_gam @ G_c  # dense (4*nelems_f, 3*nnodes_c)
-
-    #     # baseline P0 (csr) already has BCs applied correctly
-    #     P_0 = self._build_P2_uncoupled3(nxe_c)
-    #     P_0 = self._apply_bcs_to_P(P_0, nxe_c)
-
-    #     lam = float(self.lam)
-    #     constrained_dofs = (0, 1, 2) if self.clamped else (0,)
-
-    #     # coarse constrained cols (still computed, but NOT eliminated from solve)
-    #     fixed_cols_c = []
-    #     for inode in range(nnodes_c):
-    #         i = inode % nx_c
-    #         j = inode // nx_c
-    #         if (i == 0) or (i == nx_c - 1) or (j == 0) or (j == nx_c - 1):
-    #             base = 3 * inode
-    #             for a in constrained_dofs:
-    #                 fixed_cols_c.append(base + a)
-    #     fixed_cols_c = np.array(sorted(set(fixed_cols_c)), dtype=int)
-
-    #     # fine constrained rows
-    #     fixed_rows_f = []
-    #     for inode in range(nnodes_f):
-    #         i = inode % nx_f
-    #         j = inode // nx_f
-    #         if (i == 0) or (i == nx_f - 1) or (j == 0) or (j == nx_f - 1):
-    #             base = 3 * inode
-    #             for a in constrained_dofs:
-    #                 fixed_rows_f.append(base + a)
-    #     fixed_rows_f = np.array(sorted(set(fixed_rows_f)), dtype=int)
-
-    #     solve_rows_f = np.arange(N_f, dtype=int)  # keep all rows
-
-    #     # -----------------------------
-    #     # v5: impose coarse BCs by zeroing constrained coarse columns
-    #     # in BOTH RHS term and P0 (so system has N_c cols but BC cols are forced to 0)
-    #     # -----------------------------
-    #     if fixed_cols_c.size > 0:
-    #         RHS_full[:, fixed_cols_c] = 0.0
-    #         # also guarantee P0 has those cols zero (in case _apply_bcs_to_P doesn't)
-    #         P_0 = P_0.tolil(copy=True)
-    #         P_0[:, fixed_cols_c] = 0.0
-    #         P_0 = P_0.tocsr()
-
-    #     # Build normal equations without augmentation (FULL columns)
-    #     A = G_f[:, solve_rows_f]           # (4*nelems_f, N_f)
-    #     B = RHS_full                       # (4*nelems_f, N_c)
-    #     P0_all = P_0[solve_rows_f, :].toarray()  # (N_f, N_c), cols multiple of 3
-
-    #     M   = A.T @ A + lam * np.eye(solve_rows_f.size)
-    #     rhs = A.T @ B + lam * P0_all
-
-    #     # -----------------------------
-    #     # enforce fine BCs by row/col elimination on M, set rhs row to P0 row (ALL cols)
-    #     # -----------------------------
-    #     if fixed_rows_f.size > 0:
-    #         M[fixed_rows_f, :] = 0.0
-    #         M[:, fixed_rows_f] = 0.0
-    #         for d in fixed_rows_f:
-    #             M[d, d] = 1.0
-    #         rhs[fixed_rows_f, :] = P0_all[fixed_rows_f, :]
 
     #     # -----------------------------
     #     # SpMM Jacobi solve (same structure, but X/RHS have N_c cols)
@@ -1373,181 +1482,156 @@ class MITCShellElement:
     #             MX  = sparse_control(LHS @ X) 
     #             RES = sparse_control(RHS_csr - MX)
     #             X   = sparse_control(X + float(omega) * (Dinv_op @ RES))
-
-    #     P_sol = X.toarray()  # (N_f, N_c)
-
-    #     # -----------------------------
-    #     # Assemble full P (dense)
-    #     # -----------------------------
-    #     P = P_0.toarray()                 # already has coarse BC columns zeroed (we enforced above)
-    #     if fixed_cols_c.size > 0:
-    #         P[:, fixed_cols_c] = 0.0      # safety
-    #     P[solve_rows_f, :] = P_sol        # overwrite all rows/cols (including coarse BC cols which remain 0)
-
-    #     # stash debug
-    #     self.G_f = G_f
-    #     self.G_c = G_c
-    #     self.P_gam = P_gam
-    #     self.P_0 = P_0
-    #     self.M = M
-    #     self.RHS = rhs
-    #     self.fixed_cols_c = fixed_cols_c
-    #     self.solve_rows_f = solve_rows_f
-    #     self.fixed_rows_f = fixed_rows_f
-    #     self.P = P
-
-    #     self._lock_P_cache[cache_key] = P.copy()
     #     return P
 
 
-    # def _energy_smooth_jacobi_v1(
-    #     self,
-    #     nxe_c: int,
-    #     length: float = 1.0,
-    #     n_sweeps: int = 10,
-    #     omega: float = 0.7,
-    #     with_fillin: bool = False,
-    #     use_mask: bool = True,
-    # ):
-    #     """
-    #     Standard K-matrix energy smoothing in Jacobi-preconditioned space:
-    #         P <- P - omega * D^{-1} (K P)
+    def _energy_smooth_jacobi_v1(
+        self,
+        nxe_c: int,
+        length: float = 1.0,
+        n_sweeps: int = 10,
+        omega: float = 0.7,
+        with_fillin: bool = False,
+        use_mask: bool = True,
+    ):
+        """
+        Standard K-matrix energy smoothing in Jacobi-preconditioned space:
+            P <- P - omega * D^{-1} (K P)
 
-    #     - K is taken from: self._kmat_cache[nxe_c]   (you provide it)
-    #     - Optional fixed sparsity: mask = pattern(K@P) computed once initially.
-    #     - Cache key is ONLY nxe_c (simple).
-    #     """
+        - K is taken from: self._kmat_cache[nxe_c]   (you provide it)
+        - Optional fixed sparsity: mask = pattern(K@P) computed once initially.
+        - Cache key is ONLY nxe_c (simple).
+        """
 
-    #     import numpy as np
-    #     import scipy.sparse as sp
+        import numpy as np
+        import scipy.sparse as sp
 
-    #     # simple cache: ONLY keyed by nxe_c
-    #     cache_key = ("energy_smooth_jacobi_v1", int(nxe_c))
-    #     if cache_key in self._lock_P_cache:
-    #         return self._lock_P_cache[cache_key]
+        # simple cache: ONLY keyed by nxe_c
+        # cache_key = ("energy_smooth_jacobi_v1", int(nxe_c))
+        # nxe_f = nxe_c * 2
+        # cache_key = int(nxe_f)
+        # if cache_key in self._lock_P_cache:
+        #     return self._lock_P_cache[cache_key]
 
-    #     # baseline P0
-    #     P0 = self._build_P2_uncoupled3(nxe_c)
-    #     P0 = self._apply_bcs_to_P(P0, nxe_c)
-    #     P = P0.tocsr()
+        # baseline P0
+        P0 = self._build_P2_uncoupled3(nxe_c)
+        P0 = self._apply_bcs_to_P(P0, nxe_c)
+        P = P0.tocsr()
 
-    #     # kmat from cache
-    #     if not hasattr(self, "_kmat_cache") or (int(nxe_c) not in self._kmat_cache):
-    #         raise RuntimeError("Expected self._kmat_cache[nxe_c] to exist for energy smoothing.")
-    #     K = self._kmat_cache[int(nxe_c)]
-    #     K = K.tocsr() if sp.isspmatrix(K) else sp.csr_matrix(K)
+        # kmat from cache
+        if not hasattr(self, "_kmat_cache") or (int(nxe_c) not in self._kmat_cache):
+            raise RuntimeError("Expected self._kmat_cache[nxe_c] to exist for energy smoothing.")
+        K = self._kmat_cache[int(nxe_c)]
+        K = K.tocsr() if sp.isspmatrix(K) else sp.csr_matrix(K)
 
-    #     # Jacobi block inverse (3x3 nodal blocks)
-    #     bs = 3
-    #     N = K.shape[0]
-    #     if (N % bs) != 0 or K.shape[1] != N:
-    #         raise ValueError(f"kmat must be square with size multiple of 3, got {K.shape}")
-    #     nblk = N // bs
+        # Jacobi block inverse (3x3 nodal blocks)
+        bs = 3
+        N = K.shape[0]
+        if (N % bs) != 0 or K.shape[1] != N:
+            raise ValueError(f"kmat must be square with size multiple of 3, got {K.shape}")
+        nblk = N // bs
 
-    #     Kb = K.tobsr(blocksize=(bs, bs))
-    #     diag_inv = np.zeros((nblk, bs, bs), dtype=float)
-    #     for i in range(nblk):
-    #         s, e = Kb.indptr[i], Kb.indptr[i + 1]
-    #         cols = Kb.indices[s:e]
-    #         data = Kb.data[s:e]  # (nblocks_in_row, bs, bs)
-    #         k = np.searchsorted(cols, i)
-    #         if k >= cols.size or cols[k] != i:
-    #             raise RuntimeError("Missing diagonal 3x3 block in kmat.")
-    #         Db = data[k]
-    #         Db = 0.5 * (Db + Db.T)
-    #         diag_inv[i] = np.linalg.inv(Db)
+        Kb = K.tobsr(blocksize=(bs, bs))
+        diag_inv = np.zeros((nblk, bs, bs), dtype=float)
+        for i in range(nblk):
+            s, e = Kb.indptr[i], Kb.indptr[i + 1]
+            cols = Kb.indices[s:e]
+            data = Kb.data[s:e]  # (nblocks_in_row, bs, bs)
+            k = np.searchsorted(cols, i)
+            if k >= cols.size or cols[k] != i:
+                raise RuntimeError("Missing diagonal 3x3 block in kmat.")
+            Db = data[k]
+            Db = 0.5 * (Db + Db.T)
+            diag_inv[i] = np.linalg.inv(Db)
 
-    #     Dinv = sp.bsr_matrix(
-    #         (diag_inv, np.arange(nblk, dtype=np.int32), np.arange(nblk + 1, dtype=np.int32)),
-    #         shape=(N, N),
-    #         blocksize=(bs, bs),
-    #     ).tocsr()
+        Dinv = sp.bsr_matrix(
+            (diag_inv, np.arange(nblk, dtype=np.int32), np.arange(nblk + 1, dtype=np.int32)),
+            shape=(N, N),
+            blocksize=(bs, bs),
+        ).tocsr()
 
-    #     # fixed sparsity mask from initial K@P
-    #     mask = None
-    #     if (not with_fillin) and use_mask:
-    #         mask = ((K @ P) != 0).astype(np.int8)
+        # fixed sparsity mask from initial K@P
+        mask = None
+        if (not with_fillin) and use_mask:
+            mask = ((K @ P) != 0).astype(np.int8)
 
-    #     def control(Z):
-    #         if mask is None:
-    #             return Z
-    #         if not sp.issparse(Z):
-    #             Z = sp.csr_matrix(Z)
-    #         return Z.multiply(mask)
+        def control(Z):
+            if mask is None:
+                return Z
+            if not sp.issparse(Z):
+                Z = sp.csr_matrix(Z)
+            return Z.multiply(mask)
 
-    #     P = control(P)
+        P = control(P)
 
-    #     # Jacobi-preconditioned energy smoothing: P <- P - omega * Dinv * (K P)
-    #     if with_fillin or (mask is None):
-    #         for _ in range(int(n_sweeps)):
-    #             KP = K @ P
-    #             P = P - float(omega) * (Dinv @ KP)
-    #     else:
-    #         for _ in range(int(n_sweeps)):
-    #             KP = control(K @ P)
-    #             P = control(P - float(omega) * (Dinv @ KP))
+        # Jacobi-preconditioned energy smoothing: P <- P - omega * Dinv * (K P)
+        if with_fillin or (mask is None):
+            for _ in range(int(n_sweeps)):
+                KP = K @ P
+                P = P - float(omega) * (Dinv @ KP)
+        else:
+            for _ in range(int(n_sweeps)):
+                KP = control(K @ P)
+                P = control(P - float(omega) * (Dinv @ KP))
 
-    #     P_out = P.toarray()
-    #     self._lock_P_cache[cache_key] = P_out
-    #     return P_out
+        P_out = P.toarray()
+        return P_out
 
+    def _assemble_prolongation(self, nxe_fine:int):
+        nxe_coarse = nxe_fine // 2
+        nxe_f = 2 * nxe_coarse
 
-    # def prolongate(self, coarse_u: np.ndarray, nxe_coarse: int):
-    #     dpn = self.dof_per_node
-    #     nxc = nxe_coarse + 1
-    #     Nc = nxc * nxc
-    #     assert coarse_u.size == dpn * Nc
+        if nxe_f in self._P_cache:
+            return self._P_cache[nxe_f]
 
-    #     nxe_f = 2 * nxe_coarse
-    #     nxf = nxe_f + 1
-    #     Nf = nxf * nxf
+        if self.prolong_mode == "locking-global":
+            method = self._locking_aware_prolong_global_mitc_v1
+            P = method(nxe_coarse, length=1.0)
+        elif self.prolong_mode == 'locking-local':
+            P = self._locking_aware_prolong_local_mitc_v5_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
+        elif self.prolong_mode == "standard":
+            P = self._build_P2_uncoupled3(nxe_coarse)
+            P = self._apply_bcs_to_P(P, nxe_coarse)
+        elif self.prolong_mode == "energy-jacobi":
+            P = self._energy_smooth_jacobi_v1(nxe_coarse, n_sweeps=self.n_lock_sweeps, omega=self.omega)
+        else:
+            raise NotImplementedError("locking-local not implemented in this prototype")
+        
+        self._P_cache[nxe_f] = sp.csr_matrix(P)
+        return P
 
-    #     if self.prolong_mode == "locking-global":
-    #         method = self._locking_aware_prolong_global_mitc_v1
-    #         P = method(nxe_coarse, length=1.0)
-    #     elif self.prolong_mode == 'locking-local':
-    #         P = self._locking_aware_prolong_local_mitc_v5_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
-    #     elif self.prolong_mode == "standard":
-    #         P = self._build_P2_uncoupled3(nxe_coarse)
-    #         P = self._apply_bcs_to_P(P, nxe_coarse)
-    #     elif self.prolong_mode == "energy-jacobi":
-    #         P = self._energy_smooth_jacobi_v1(nxe_coarse, n_sweeps=self.n_lock_sweeps, omega=self.omega)
-    #     else:
-    #         raise NotImplementedError("locking-local not implemented in this prototype")
+    def prolongate(self, coarse_u: np.ndarray, nxe_coarse: int):
+        dpn = self.dof_per_node
+        nxc = nxe_coarse + 1
+        Nc = nxc * nxc
+        assert coarse_u.size == dpn * Nc
 
-    #     fine_u = P @ coarse_u
+        nxe_f = 2 * nxe_coarse
+        nxf = nxe_f + 1
+        # Nf = nxf * nxf
+        P = self._assemble_prolongation(nxe_f)
 
-    #     return fine_u
+        fine_u = P @ coarse_u
 
-    # def restrict_defect(self, fine_r: np.ndarray, nxe_fine: int):
-    #     dpn = self.dof_per_node
-    #     nxf = nxe_fine + 1
-    #     Nf = nxf * nxf
-    #     assert fine_r.size == dpn * Nf
-    #     assert (nxe_fine % 2) == 0
+        return fine_u
 
-    #     nxe_coarse = nxe_fine // 2
-    #     nxc = nxe_coarse + 1
-    #     Nc = nxc * nxc
+    def restrict_defect(self, fine_r: np.ndarray, nxe_fine: int):
+        dpn = self.dof_per_node
+        nxf = nxe_fine + 1
+        Nf = nxf * nxf
+        assert fine_r.size == dpn * Nf
+        assert (nxe_fine % 2) == 0
 
-    #     if self.prolong_mode == "locking-global":
-    #         method = self._locking_aware_prolong_global_mitc_v1
-    #         P = method(nxe_coarse, length=1.0)
-    #     elif self.prolong_mode == 'locking-local':
-    #         P = self._locking_aware_prolong_local_mitc_v5_jacobi(nxe_coarse, length=1.0, n_sweeps=self.n_lock_sweeps, omega=self.omega)
-    #     elif self.prolong_mode == "standard":
-    #         P = self._build_P2_uncoupled3(nxe_coarse)
-    #         P = self._apply_bcs_to_P(P, nxe_coarse)
-    #     elif self.prolong_mode == "energy-jacobi":
-    #         P = self._energy_smooth_jacobi_v1(nxe_coarse, n_sweeps=self.n_lock_sweeps, omega=self.omega)
-    #     else:
-    #         raise NotImplementedError("locking-local not implemented in this prototype")
+        # nxe_coarse = nxe_fine // 2
+        # nxc = nxe_coarse + 1
+        # Nc = nxc * nxc
+        
+        P = self._assemble_prolongation(nxe_fine)
+        R = P.T
 
-    #     R = P.T
+        fine_r = fine_r.copy()
+        # self.apply_bcs_2d(fine_r, nxe_fine)
 
-    #     fine_r = fine_r.copy()
-    #     self.apply_bcs_2d(fine_r, nxe_fine)
+        coarse_r = R @ fine_r
 
-    #     coarse_r = R @ fine_r
-
-    #     return coarse_r
+        return coarse_r

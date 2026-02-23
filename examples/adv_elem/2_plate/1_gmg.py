@@ -319,7 +319,8 @@ if args.solve == 'direct':
 elif args.solve == 'vmg':
 
     # mitc_ep does better without line search btw
-    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
+    # line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
+    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep']
     # if args.elem == 'mitcp':
     #     line_search = ELEMENT.prolong_mode != 'locking-local'
 
@@ -339,8 +340,8 @@ elif args.solve == 'vmg':
 
 elif args.solve == 'kmg':
 
-    # mitc_ep does better without line search btw
-    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']  
+    # line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
+    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep']
     # if args.elem == 'mitcp':
     #     line_search = ELEMENT.prolong_mode != 'locking-local'
 
@@ -369,7 +370,7 @@ elif args.solve == 'kmg':
 
     else:
 
-        assembler, nsteps = right_pcg2(
+        assembler.u, nsteps = right_pcg2(
             A=assembler.kmat, b=assembler.force,
             M=pc, rtol=1e-6, atol=1e-12,
             max_iter=200,
