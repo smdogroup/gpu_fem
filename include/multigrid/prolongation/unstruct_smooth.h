@@ -66,6 +66,7 @@ class UnstructuredSmoothProlongation {
             apply_kmat_fillin();
         }
         // printf("\tDEBUG: assemble matrices\n");
+        printf("assemble matrices\n");
         assemble_matrices();
 
 
@@ -88,6 +89,11 @@ class UnstructuredSmoothProlongation {
             // printf("\tDEBUG: compute matmat nz pattern\n");
             compute_matmat_prod_nz_pattern();
         }
+
+        printf("smooth matrix\n");
+        smoothMatrix();
+        printf("unstruct smooth\n");
+        update_after_smooth();
     }
 
     void construct_nz_pattern() {
@@ -268,6 +274,11 @@ class UnstructuredSmoothProlongation {
                              d_fine_iperm, false);
         P_bsr_data.mb = nnodes_fine, P_bsr_data.nb = nnodes_coarse;
         P_bsr_data.rows = d_P_rows;  // need rows
+        
+        auto c_bsr_data = coarse_assembler.getBsrData();
+        P_bsr_data.c_perm = c_bsr_data.perm;
+        P_bsr_data.c_iperm = c_bsr_data.iperm;
+
         prolong_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_P_vals_vec);
     }
 
@@ -283,9 +294,11 @@ class UnstructuredSmoothProlongation {
                               nnodes_fine, d_fine_iperm, d_P_rowp, d_P_cols, block_dim, d_P_vals);
 
         // apply bcs to it now
+        printf("apply bcs\n");
         const bool ones_on_diag = false; // just zero out completely for prolong matrix
         prolong_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
         prolong_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
+        printf("\tapply bcs done\n");
     }
 
     void update_after_smooth() {
