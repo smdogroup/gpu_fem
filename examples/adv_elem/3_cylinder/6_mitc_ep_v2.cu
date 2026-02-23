@@ -178,7 +178,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
     auto end0 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> startup_time = end0 - start0;
 
-    auto start1 = std::chrono::high_resolution_clock::now();
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
     bool print = true;
     // bool print = false;
@@ -193,6 +192,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         int n_krylov = 500;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start1 = std::chrono::high_resolution_clock::now();
 
     // fastest is K-cycle usually
     if (cycle_type == "V") {
@@ -274,6 +276,7 @@ void direct_solve(int nxe, double SR) {
     // solve the linear system
     CUSPARSE::direct_LU_solve(kmat, loads, soln);
 
+    CHECK_CUDA(cudaDeviceSynchronize());
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start1;
 
@@ -306,7 +309,7 @@ int main(int argc, char **argv) {
 
     int nsmooth = 4; // typically faster right now
     int ninnercyc = 1;
-    int nsmooth_mat = 2; // more iterations not converging yet
+    int nsmooth_mat = 1; // more iterations not converging yet
     // int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     // std::string cycle_type = "V"; // "V", "F", "W", "K"

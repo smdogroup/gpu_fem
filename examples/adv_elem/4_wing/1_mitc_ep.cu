@@ -295,7 +295,6 @@ void multigrid_solve(MPI_Comm &comm, int level, double SR, int nsmooth, int ninn
     auto end0 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> startup_time = end0 - start0;
 
-    auto start1 = std::chrono::high_resolution_clock::now();
     T init_resid_nrm = is_kcycle ? kmg->grids[0].getResidNorm() : mg->grids[0].getResidNorm();
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
     bool print = true;
@@ -312,6 +311,9 @@ void multigrid_solve(MPI_Comm &comm, int level, double SR, int nsmooth, int ninn
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, 
             n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start1 = std::chrono::high_resolution_clock::now();
 
     // fastest is K-cycle usually
     if (cycle_type == "V") {
