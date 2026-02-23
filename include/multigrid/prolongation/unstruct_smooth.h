@@ -278,14 +278,35 @@ class UnstructuredSmoothProlongation {
 
         // and update the P_bsr_data also
         int *d_fine_perm = P_bsr_data.perm;
-        P_bsr_data = BsrData(nnodes_fine, block_dim, AP_nnzb, d_P_rowp, d_P_cols, d_fine_perm,
-                             d_fine_iperm, false);
+        
+        bool host = true;
+        auto h_P_bsr_data =
+            BsrData(nnodes_fine, block_dim, AP_nnzb, h_AP_rowp, h_AP_cols, nullptr, nullptr, host);
+        h_P_bsr_data.rows = h_AP_rows;
+        // need to add fc_elem map and fine and coarse elem conn in order to get correct elem ind
+        // maps
+        h_P_bsr_data.nelems = fine_assembler.get_num_elements();
+        h_P_bsr_data.elem_conn = h_fine_conn;
+        h_P_bsr_data.cols_elem_conn = h_coarse_conn;
+        // h_P_bsr_data.rc_elem_map = h_fc_elem_map;
+        h_P_bsr_data.rc_elem_map = nullptr;
+        int nodes_per_elem = 4;
+        h_P_bsr_data.nodes_per_elem = nodes_per_elem;
+        h_P_bsr_data.n_eim = h_P_bsr_data.nelems * nodes_per_elem * nodes_per_elem;
+
+        auto c_bsr_data = coarse_assembler.getBsrData();
+        int c_nnodes = coarse_assembler.get_num_nodes();
+        int *h_cperm = DeviceVec<int>(c_nnodes, c_bsr_data.perm).createHostVec().getPtr();
+        int *h_ciperm = DeviceVec<int>(c_nnodes, c_bsr_data.iperm).createHostVec().getPtr();
+        h_P_bsr_data.c_perm = h_cperm;
+        h_P_bsr_data.c_iperm = h_ciperm;
+        h_P_bsr_data.mb = nnodes_fine;
+        h_P_bsr_data.nb = nnodes_coarse;
+
+        P_bsr_data = h_P_bsr_data.createDeviceBsrData();
+        printf("\tdone make P bsr data for FC-matrix\n");
         P_bsr_data.mb = nnodes_fine, P_bsr_data.nb = nnodes_coarse;
         P_bsr_data.rows = d_P_rows;  // need rows
-        
-        auto c_bsr_data = coarse_assembler.getBsrData();
-        P_bsr_data.c_perm = c_bsr_data.perm;
-        P_bsr_data.c_iperm = c_bsr_data.iperm;
 
         prolong_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_P_vals_vec);
     }
