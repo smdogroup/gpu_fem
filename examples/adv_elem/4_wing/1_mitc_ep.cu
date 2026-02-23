@@ -56,6 +56,7 @@ void multigrid_solve(MPI_Comm &comm, int level, double SR, int nsmooth, int ninn
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
+    using Data = typename Physics::Data;
     const SCALER scaler  = LINE_SEARCH;
     // using Smoother = ChebyshevPolynomialSmoother<Assembler>;
     using Smoother = UnstructuredQuadAdditiveSchwarzSmoother<T, Assembler>;
@@ -96,7 +97,7 @@ void multigrid_solve(MPI_Comm &comm, int level, double SR, int nsmooth, int ninn
         
         // read the ESP/CAPS => nastran mesh for TACS
         TACSMeshLoader mesh_loader{comm};
-        std::string fname = "meshes/aob_wing_L" + std::to_string(i) + ".bdf";
+        std::string fname = "../../3_aob_wing/meshes/aob_wing_L" + std::to_string(i) + ".bdf";
         mesh_loader.scanBDFFile(fname.c_str());
         double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
         // TODO : run optimized design from AOB case
@@ -166,7 +167,7 @@ void multigrid_solve(MPI_Comm &comm, int level, double SR, int nsmooth, int ninn
             kmg->grids.push_back(grid);
         } else {
             mg->grids.push_back(grid);
-            if (full_LU) mg->coarse_solver = new CoarseSolver(cublasHandle, cusparseHandle, assembler, kmat);
+            if (coarsest_grid) mg->coarse_solver = new CoarseSolver(cublasHandle, cusparseHandle, assembler, kmat);
         }
     }
 
@@ -295,11 +296,13 @@ void multigrid_solve(MPI_Comm &comm, int level, double SR, int nsmooth, int ninn
     std::chrono::duration<double> startup_time = end0 - start0;
 
     auto start1 = std::chrono::high_resolution_clock::now();
+    T init_resid_nrm = is_kcycle ? kmg->grids[0].getResidNorm() : mg->grids[0].getResidNorm();
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
     bool print = true;
     // bool print = false;
     T atol = 1e-10, rtol = 1e-6;
     int print_freq = 3;
+    int n_cycles = 500;
 
     bool double_smooth = false;
     // bool double_smooth = true; // true tends to be slightly faster sometimes
@@ -362,7 +365,7 @@ void solve_linear_direct(MPI_Comm &comm, int level, double SR) {
   auto start0 = std::chrono::high_resolution_clock::now();
 
   TACSMeshLoader mesh_loader{comm};
-  std::string fname = "meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+  std::string fname = "../../3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
   mesh_loader.scanBDFFile(fname.c_str());
 
   //   double E = 70e9, nu = 0.3, thick = 0.005;  // material & thick properties
@@ -454,13 +457,18 @@ template <typename T, class Assembler>
 void gatekeeper_method(bool is_multigrid, MPI_Comm &comm, int level, double SR, int nsmooth, int ninnercyc, 
     int nsmooth_mat, T omega, std::string cycle_type) {
     if (is_multigrid) {
-        solve_linear_multigrid<T, Assembler>(comm, level, SR, nsmooth, ninnercyc, nsmooth_mat, omega, cycle_type);
+        multigrid_solve<T, Assembler>(comm, level, SR, nsmooth, ninnercyc, nsmooth_mat, omega, cycle_type);
     } else {
         solve_linear_direct<T, Assembler>(comm, level, SR);
     }
 }
 
 int main(int argc, char **argv) {
+
+    // Intialize MPI and declare communicator
+    MPI_Init(&argc, &argv);
+    MPI_Comm comm = MPI_COMM_WORLD;
+
     // input ----------
     bool is_multigrid = true;
     int level = 2;
@@ -548,12 +556,12 @@ int main(int argc, char **argv) {
     using Data = ShellIsotropicData<T, has_ref_axis>;
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
-    printf("plate mesh with MITC4-LP elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
+    printf("AOB wing mesh with MITC4-EP elements, level %d and SR %.2e\n------------\n", level, SR);
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
     gatekeeper_method<T, Assembler>(is_multigrid, comm, level, SR, nsmooth, ninnercyc, nsmooth_mat, omega, cycle_type);    
 
-    return 0;
-
     
+    MPI_Finalize();
+    return 0;    
 }
