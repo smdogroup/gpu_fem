@@ -46,7 +46,7 @@ class LockingAwareUnstructuredProlongation {
     }
 
     // nothing (though smoother needs to do matrix-smoothing in some cases)
-    void update_after_assembly() {
+    void update_after_assembly(DeviceVec<T> &d_vars) {
         // TODO : need to fix this for nonlinear smooth matrix
         // assemble_matrices(); // reassemble matrices?
     }
@@ -293,9 +293,9 @@ class LockingAwareUnstructuredProlongation {
         h_P_bsr_data.mb = nnodes_fine;
         h_P_bsr_data.nb = nnodes_coarse;
 
-        printf("make P bsr data for FC-matrix\n");
+        // printf("make P bsr data for FC-matrix\n");
         P_bsr_data = h_P_bsr_data.createDeviceBsrData();
-        printf("\tdone make P bsr data for FC-matrix\n");
+        // printf("\tdone make P bsr data for FC-matrix\n");
 
         // P_bsr_data = BsrData(nnodes_fine, block_dim, AP_nnzb, d_P_rowp, d_P_cols, d_fine_perm,
         //                      d_fine_iperm, false);

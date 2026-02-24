@@ -172,11 +172,11 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
     // =====================================================
 
     int nlevels = grids.size();
-    printf("before locking-aware prolongation\n");
+    // printf("before locking-aware prolongation\n");
 
     for (int i = 0; i < nlevels - 1; i++) {
 
-        printf("Step 0 : get fine grid data on grid %d\n", i);
+        // printf("Step 0 : get fine grid data on grid %d\n", i);
         // register the coarse assemblers to the prolongations..
         double lam = 1e-12; // see python locking script
         // if (is_kcycle) {
@@ -185,14 +185,14 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         auto &f_kmat = grids[i].Kmat;
         auto d_fine_bcs = f_assembler.getBCs();
 
-        printf("Step 1 - compute G_f^T G_f LHS locking matrix\n");
+        // printf("Step 1 - compute G_f^T G_f LHS locking matrix\n");
         f_assembler.add_lockstrain_jacobian_fast(f_kmat);
         CHECK_CUDA(cudaDeviceSynchronize()); // slower but for debugging
         f_assembler.apply_bcs(f_kmat);
         f_kmat.add_diag_nugget(lam);
 
         // make device fine-coarse elem map (here just use structured pattern)
-        printf("Step 2 - compute device fc elem map\n");
+        // printf("Step 2 - compute device fc elem map\n");
         int num_fine_elements = f_assembler.get_num_elements();
         int *h_fc_elem_map = new int[num_fine_elements];
         int c_nxe = (int)sqrt(num_fine_elements);
@@ -206,7 +206,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         int *d_fc_elem_map = HostVec<int>(num_fine_elements, h_fc_elem_map).createDeviceVec().getPtr();
 
         // get initial prolongator
-        printf("Step 3 - get initial prolongator\n");
+        // printf("Step 3 - get initial prolongator\n");
         auto &c_assembler = grids[i+1].assembler;
         auto &c_kmat = grids[i+1].Kmat;
         auto d_coarse_bcs = c_assembler.getBCs();
@@ -217,23 +217,23 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         auto &RHS_mat = prolong->RHS_mat;
 
         // apply fine and coarse bcs to P0_mat
-        printf("Step 4 - apply bcs on initial prolongator\n");
+        // printf("Step 4 - apply bcs on initial prolongator\n");
         const bool ones_on_diag = false; // just zero out completely for prolong matrix
         P_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
         P_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
 
         // now assemble G_f^T * P_gam * G_c + lam * P_0  RHS prolong matrix with K*P0 sparsity
-        printf("Step 5 - compute locking RHS fine-coarse matrix\n");
+        // printf("Step 5 - compute locking RHS fine-coarse matrix\n");
         f_assembler.add_lockstrain_fc_jacobian_fast(c_assembler, d_fc_elem_map, *RHS_mat);
         CHECK_CUDA(cudaDeviceSynchronize()); // slower but for debugging
-        printf("\tdone with assembly FC matrix from step 5\n");
+        // printf("\tdone with assembly FC matrix from step 5\n");
         // apply bcs to P_rhs matrix
         RHS_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
         RHS_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
         
         // apply bcs to standard prolongator then add it into P_rhs
         // RHS_mat.add(lam, P0_mat); // make new add method here for P_rhs += lam * P_0
-        printf("Step 6 - compute full RHS including lam*P_0 term\n");
+        // printf("Step 6 - compute full RHS including lam*P_0 term\n");
         auto bsr_data = P_mat->getBsrData();
         int P_nnzb = bsr_data.nnzb, block_dim = bsr_data.block_dim;
         T *d_P_vals = P_mat->getPtr(), *d_RHS_vals = RHS_mat->getPtr();
@@ -241,7 +241,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
             <<<P_nnzb, 64>>>(P_nnzb, block_dim, lam, 0, d_P_vals, d_RHS_vals);
 
         // do jacobi smoothing of P_0 => P matrix using kmat and rhs
-        printf("Step 7 - perform block-Jacobi smoothing using locking energy for the prolongator\n");
+        // printf("Step 7 - perform block-Jacobi smoothing using locking energy for the prolongator\n");
         // T omega_p = 0.5; // omega for prolongation
         // T omega_p = 0.3;
         T omega_p = 0.9; // if spectral radius defined below
@@ -261,12 +261,12 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         prolong->update_after_smooth(); // update coarse weights for nonlinear problems by row-sums of P^T
 
         // re-assemble usual kmat (proceed with multigrid solve after that..)
-        printf("Step 8 - reassemble kmat on grid %d\n", i);
+        // printf("Step 8 - reassemble kmat on grid %d\n", i);
         f_assembler.add_jacobian_fast(f_kmat);
         f_assembler.apply_bcs(f_kmat);
     }
 
-    printf("DONE with lock-aware prolongation\n");
+    // printf("DONE with lock-aware prolongation\n");
 
 
     // I do that explicitly right now..

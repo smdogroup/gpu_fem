@@ -452,7 +452,7 @@ class LockingChebyshevSmoother : public BaseSolver {
         spectral_radius = max_eigval;
         // print current max spectral radius for DEBUG
         if (debug) printf("spectral radius %.8e\n", spectral_radius);
-        printf("spectral radius %.8e\n", spectral_radius);
+        // printf("spectral radius %.8e\n", spectral_radius);
     }
 
     // void debug_print_matrix(std::string mat_name, BsrMat<DeviceVec<T>> *mat) {

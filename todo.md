@@ -28,6 +28,9 @@
 
 ## Wing + Cylinder High Scalability
 
+- [ ] why does extra energy-smoothing steps (MITC-EP) for plate, cylinder / wingbox not converge right now? need lower omega?
+   - [ ] what is happening with it? check fine and coarse BCs (check if those messed up)
+
 - [ ] performance tuning of K-GMG-ASW solver
    - [ ] include all solve components + do percentage + bottleneck checks
    - [ ] better / faster than GS at thin shell / no?
