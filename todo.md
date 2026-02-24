@@ -1,61 +1,56 @@
 # Current Devel tasks
 
+## Thickness-Ind Multigrid
+
+- [ ] further investigate cylinder case
+   - [ ] plot locking strains coarse to fine on small mesh, see if the math makes sense or not => can a prolongation matrix exist that maps zero to zero locking? Or we need C1-cont / new element?
+   - [ ] look at strain manifold and math, deeper understanding. Issue that C0-cont, do tying strains match on edges?
+   * see lit review section on Kirchoff IGA, mem locking and advanced element discretization methods
+
+- [ ] further lit review on curved Reissner-Mindlin shells
+   - [ ] read book on shell theory
+   - [ ] compile various shell theory solution methods (for curved surf)
+   - [ ] read up on and implement Nedelec H1, H-div, H-curl and L2 elements (Seiyon), see if they can do them on curved surfaces. May learn valuable info
+   - [ ] read up on Kirchoff-IGA shells and other manifold methods
+
+- [ ] see if new discretization / better smooth prolong can speedup wing + cylinder cases (more energy-smooth prolong and less V(k,k) smooth steps needed)
 
 
-## AIG Elements
+## Wing + Cylinder High Scalability
 
-- [ ] AIG9 plate element
-    - [x] reused physics and data class from isotropic shell
-    - [x] finish outer plate assembler
-    - [x] CUDA kernels with asymptotic IGA plate assembler
-    - [x] implement StructuredIGAProlongation based on jupyter notebook + ternary operators
-    - [ ] asymptotic solution update for plate bending
-       - [ ] call asymptotic rhs term.. on fext
-       - [ ] subtract derivative terms on output to VTK (cause C0-continuity not subset of C1-continuity, C1 is more restrictive)
-       - [ ] custom IGA VTK writer with exact x,y,z outputs from spline (not same as control points)
-    - [ ] demo + verify plate AIG direct solve on GPU
-       - [ ] fix plate mesh conv loads to work with higher order IGA elements (causes nans if you call that right now)
-    - [ ] devel + demo multigrid plate AIG on GPU
-      - [x] fix and debug structured IGA prolongation and restriction => just ended up removing / penalizing line searches and it does much better..
-    - [ ] verify asymptotic correctness of plateAIG
+- [ ] add 3x3 node-support based smoother to GPU using Cublas and node support sparsity from kmat (so general for cylinder / wingbox)
+   - [ ] see if better performance on wing case (better smoother)
+   - [ ] see if better perf and more stable conv for cylinder
 
-   
-- [ ] AIG9 shell element
-   - [ ] handle multiple matches with T-splines (with each patch one TACS component, use component maps and a new patch bndry array to identify nodes on patch boundaries)
-   - [ ] demo T-splines on uCRM wing
+- [ ] performance tuning of K-GMG-ASW solver
+   - [ ] include all solve components + do percentage + bottleneck checks
+   - [ ] better / faster than GS at thin shell / no?
+   - [ ] check operator complexity of P0 and K*P0 (maybe P0 enough fillin for wing cause of my nearest nodes and elems thing)
+   - [ ] check if + how to fix speedup from RTX 3060 to Milan A100 GPU
 
+- [ ] implement multi-GPU for K-GMG-ASW solver
+   - [ ] start with multi-GPU standalone demo of point-smoothing Jacobi-GMRES for 2D Poisson -> how to split mat-vec prods, etc. distribute data
+   - [ ] read papers from TACS GPU journal on "towards exascale" or AMG highly parallel for GPU, may help a lot (maybe new papers)
+   - [ ] how to do + do multi-GPU for K-GMG-ASW / best solver, domain splitting some? need metis or anything?
+   - [ ] show weak vs strong scaling of multi-GPUs, maybe compare with typical ILU(k) multi-GPU so I can show ASW or my GMG solver way more scalable
 
-## schwarz and thin plate cohomology isogeom elements
-
-- [ ] implement schwarz smoother and isogeometric cohomology stuff here, https://grandmaster.colorado.edu/copper/2016/StudentCompetition/Benzaken_Isogeometric_Multigrid.pdf
-    * shows how isogeometric can be used to make thin plate friendly smoothers using cohomology
-   - [ ] show Kirchoff-like multigrid performance on Reissner-mindlin plate with this method
-   - [ ] extend to new cases
-   - [ ] writeup theory?
-
-
-## Smoothed aggregation AMG
-- [ ] demo SA-AMG on plate in python
+- [ ] do linear + nonlinear optimizations for plate, cylinder + wing with K-GMG
+   - [ ] implement prolong + ASW assembly, factor and other setup steps for nonlinear case, optimization
+   - [ ] add optimization interfaces for the new solver (easy), setup
+   - [ ] setup + debug stiffened shells + buckling, include that as case
+   - [ ] make plots + tables for optimizations with K-GMG-ASW and MITC-EP
+      * thick vs thin shell, linear vs NL, MITC vs MITC-EP, speedup to direct-LU
+      1. unstiffened plate
+      2. unstiffened cylinder
+      3. unstiffened AOB wing
+      4. stiffened AOB wing
+      5. maybe HSCT wing
 
 
-## maybe tasks - theory
+## Other (optional/maybe)
 
-- [ ] investigate if weak form is actually correct for asymptotic plate elem
-   * currently getting worse performance with higher slenderness, and not sure why..
-   * should remove the relation to gamma for condition number or bending to trv shear stiffness disparities..
-   * chatgpt originally said slenderness should still appear in cond # (because higher thickness to 1 but the xyz increase so still bad slenderness). However rotation rescaling should change the differential operator and make it solve like less slender plate too.. you could see this for beam case. So need to check my work on the LHS and see if it really is independent to plate slenderness (not just thickness right)?
-   - [ ] is the rotation transform done correctly now?
-   - [ ] maybe try on beams..
-   - [ ] compare to the direct weak form proposed in the original AIG plate element paper.. see if it matches that.. cause I kind of hacked it and it may not be the exact same..
-
-- [ ] lit review and/or devel AIG element for non-constant thickness
-- [ ] develop some theory on whether the condition number should improve for AIG elements vs CFI
-   * seems like actually condition number is gonna be the same as before..
-   * confirm this with numerical experiments
-   - [ ] add this to paper showing block 2x2 Kelem OMAG
-   - [ ] look at beam case and see if it is possible to recover Kirchoff-like multigrid performance again.. need the strain-gap DOF like HR element?
-   - [ ] extend that to plate and shell case..
-   - [ ] may need a new element that improves condition number after all?
-   * in paper if this is true: explain why asymptotic element would prevent locking but not improve condition number (so restores mesh convergence to high order) but would not necessarily improve multigrid solve times (though IGA may help with that some too as it is better at representing geometries)
-
-# done tasks
+- [ ] look at my AMG method comparisons again
+   - [ ] possible to do support-ASW with AMG (prob would be necessary)
+   - [ ] different coarsening methods + CF, RN, SA
+   - [ ] good in thin plate, cylinder / wing or no?
+   - [ ] machine learning coarsening methods?
