@@ -140,7 +140,7 @@ void chebyshev_polynomial_solve(int level, MPI_Comm comm, double SR, int nsmooth
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
@@ -282,7 +282,7 @@ void gsmc_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
@@ -416,7 +416,7 @@ void ilu_solve(int level, MPI_Comm comm, double SR, T qorder, int fill_level, T 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
@@ -561,7 +561,7 @@ void solve_direct(int level, MPI_Comm comm, double SR, T force = 5.0e7) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver

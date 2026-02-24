@@ -10,23 +10,23 @@
 #include "assembler.h"
 #include "element/shell/basis/lagrange_basis.h"
 #include "element/shell/director/linear_rotation.h"
-#include "element/shell/physics/isotropic_shell.h"
 #include "element/shell/mitc_shell.h"
+#include "element/shell/physics/isotropic_shell.h"
 
 // multigrid imports
 #include "multigrid/grid.h"
-#include "multigrid/utils/fea.h"
-#include "multigrid/smoothers/mc_smooth1.h"
 #include "multigrid/prolongation/structured.h"
+#include "multigrid/smoothers/mc_smooth1.h"
+#include "multigrid/utils/fea.h"
 // #include "multigrid/solvers/gmg.h"
 
 // new multigrid imports for K-cycles, etc.
-#include "multigrid/solvers/solve_utils.h"
+#include "multigrid/interface.h"
 #include "multigrid/solvers/direct/cusp_directLU.h"
 #include "multigrid/solvers/krylov/bsr_pcg.h"
 #include "multigrid/solvers/multilevel/kcycle.h"
 #include "multigrid/solvers/multilevel/twolevel.h"
-#include "multigrid/interface.h"
+#include "multigrid/solvers/solve_utils.h"
 
 // copied and modified from ../uCRM/_src/optim.h (uCRM optimization example)
 
@@ -124,13 +124,13 @@ class TacsGpuMultigridSolver {
             CHECK_CUDA(cudaDeviceSynchronize());
             auto end0 = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> assembly_time = end0 - start0;
-            printf("\tassemble kmat time %.2e\n", assembly_time.count());
+            printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
             // build smoother and prolongations..
             auto smoother = new Smoother(assembler, kmat, h_color_rowp, omega);
             auto prolongation = new Prolongation(assembler);
             auto grid = GRID(assembler, prolongation, smoother, kmat, loads);
-            
+
             mg.grids.push_back(grid);  // add new grid
             if (full_LU) mg->coarse_solver = new CoarseSolver(assembler, kmat);
         }

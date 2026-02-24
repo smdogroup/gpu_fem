@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <vector>
 
@@ -10,15 +11,15 @@
 #include "multigrid/solvers/solve_utils.h"
 
 template <typename T, class Assembler>
-class UnstructuredQuadElementAdditiveSchwarzSmoother : public BaseSolver {
+class UnstructuredQuadSupportAdditiveSchwarzSmoother : public BaseSolver {
     // additive schwarz smoother for unstructured 1st order elements (any mesh)
-    // performs local smoothing on each 4-node element (if tris need to write new version of this)
+    // uses 3x3 node-support blocks (up to 9 nodes per subdomain) as local smoothing
    public:
-    static constexpr int nodes_per_elem = 4;  // num nodes per element
+    // static constexpr int nodes_per_elem = 4;  // num nodes per element
 
     // Constructor: fill specifies how many fill iterations to perform.
     // This implementation assumes T is double.
-    UnstructuredQuadElementAdditiveSchwarzSmoother(cublasHandle_t &cublasHandle_,
+    UnstructuredQuadSupportAdditiveSchwarzSmoother(cublasHandle_t &cublasHandle_,
                                                    cusparseHandle_t &cusparseHandle_,
                                                    Assembler &assembler_,
                                                    BsrMat<DeviceVec<T>> kmat_, T omega_ = 0.25,
@@ -45,16 +46,16 @@ class UnstructuredQuadElementAdditiveSchwarzSmoother : public BaseSolver {
         omega = omega_;
         iters = iters_;
 
-        size = (int)sqrt(nodes_per_elem);
-        size2 = size * size;
-        size4 = size2 * size2;
+        size = 3;               // 3 nodes per direc
+        size2 = size * size;    // 3x3 = 9 nodes in subdomain
+        size4 = size2 * size2;  // 9 x 9 = 81 blocks in subdomain kmat
 
-        nodes_per_elem2 = nodes_per_elem * nodes_per_elem;
+        // nodes_per_elem2 = nodes_per_elem * nodes_per_elem;
         block_dim2 = block_dim * block_dim;
 
-        n = nodes_per_elem * block_dim;  // Block dimension (default leads to 24x24 matrices)
-        int num_elements = assembler.get_num_elements();
-        batchSize = num_elements;
+        n = size2 * block_dim;  // Block dimension (default leads to 24x24 matrices)
+        int num_nodes = assembler.get_num_nodes();
+        batchSize = num_nodes;
         // printf("batchSize = %d\n", batchSize);
 
         static_assert(std::is_same<T, double>::value, "ASW smoother currently requires T=double");
@@ -78,7 +79,9 @@ class UnstructuredQuadElementAdditiveSchwarzSmoother : public BaseSolver {
         _schwarzFactorization();
     }
 
-    void update_after_assembly(DeviceVec<T> &vars) { factor(); }
+    void update_after_assembly(DeviceVec<T> &vars) {
+        // TODO
+    }
     void set_abs_tol(T atol) {}
     void set_rel_tol(T atol) {}
     int get_num_iterations() { return 0; }
@@ -110,13 +113,20 @@ class UnstructuredQuadElementAdditiveSchwarzSmoother : public BaseSolver {
     void smoothDefect(DeviceVec<T> d_defect, DeviceVec<T> d_soln, int __n_iters, bool print = false,
                       int print_freq = 10) {
         const int n_rhs_blocks = batchSize * size2;
-        const int n_rhs_vals = n_rhs_blocks * block_dim;
+        const int n_rhs_vals = n_rhs_blocks * block_dim;  // includes nz subdomain
+        const int n_rhs_nz_vals = nnz_rhs_batch * block_dim;
 
         for (int iter = 0; iter < iters; iter++) {
+            // (0) zero the rhs and soln vecs
+            dim3 grid1((n_rhs_vals + 31) / 32);
+            k_zeroSubdomainVecs_support<T><<<grid1, 32>>>(n_rhs_vals, block_dim, size, d_Xarray);
+            k_zeroSubdomainVecs_support<T><<<grid1, 32>>>(n_rhs_vals, block_dim, size, d_Yarray);
+
             // (1) Collect the defect RHS vectors for each block into d_Xarray.
-            dim3 grid((n_rhs_vals + 31) / 32);
-            k_copyRHSIntoBatched<T><<<grid, 32>>>(n_rhs_vals, block_dim, size, d_RHSblockMap,
-                                                  d_defect.getPtr(), d_Xarray);
+            dim3 grid((n_rhs_nz_vals + 31) / 32);
+            k_copyRHSIntoBatched_support<T><<<grid, 32>>>(n_rhs_nz_vals, block_dim, size,
+                                                          d_rhsDenseMap, d_rhsSDMap,
+                                                          d_defect.getPtr(), d_Xarray);
 
             // (2) Batched matrix–vector multiplication: for each block, compute Y_i = invA_i * X_i.
             const double alpha = 1.0;
@@ -128,8 +138,8 @@ class UnstructuredQuadElementAdditiveSchwarzSmoother : public BaseSolver {
 
             // (3) Scatter the batched solution stored in d_Yarray into the global 'temp' vector.
             cudaMemset(d_temp, 0.0, N * sizeof(T));
-            k_copyBatchedIntoSoln_additive<T>
-                <<<grid, 32>>>(n_rhs_vals, block_dim, size, d_RHSblockMap, d_Yarray, d_temp);
+            k_copyBatchedIntoSoln_additiveSupport<T><<<grid, 32>>>(
+                n_rhs_nz_vals, block_dim, size, d_rhsDenseMap, d_rhsSDMap, d_Yarray, d_temp);
 
             // 4) compute defect update after new solution term..
             //     ..(with soln change stored in d_temp)
@@ -199,30 +209,39 @@ class UnstructuredQuadElementAdditiveSchwarzSmoother : public BaseSolver {
     }
 
     void _copyMatrixValuesToBatched() {
-        // call kernel to copy assembled kmat values to batched locations
+        // zero then set all subdomains to be identity
         block_dim2 = block_dim * block_dim;
-        int n_batch_vals = n_batch_blocks * block_dim2;
-        dim3 grid((n_batch_vals + 31) / 32);
-        k_copyMatValuesToBatched<T>
-            <<<grid, 32>>>(n_batch_vals, block_dim, size, d_blockInds, d_kmat_vals, d_Aarray);
+        int n_subdomain_vals = batchSize * size4 * block_dim2;
+        dim3 grid1((n_subdomain_vals + 31) / 32);
+        k_setSubdomainMatricesToIdentity<T>
+            <<<grid1, 32>>>(n_subdomain_vals, block_dim, size, d_Aarray);
+
+        // call kernel to copy assembled kmat values to batched locations
+        int n_batch_vals = nnz_batch_blocks * block_dim2;
+        dim3 grid2((n_batch_vals + 31) / 32);
+        k_copyMatValuesToBatched_support<T><<<grid2, 32>>>(
+            n_batch_vals, block_dim, size, d_kmatBlockInds, d_sdBlockInds, d_kmat_vals, d_Aarray);
     }
 
     // Performs batched LU factorization followed by explicit matrix inversion.
     void _schwarzFactorization() {
         // DEBUG: check matrices before factorization
         // if (nx <= 5) debugPrintBatchedMatrices("Before getrfBatched");
+        // debugPrintBatchedMatrices("Before getrfBatched");
 
         CHECK_CUBLAS(cublasDgetrfBatched(cublasHandle, n, d_Aarray, n, d_PivotArray, d_InfoArray,
                                          batchSize));
 
         // DEBUG: check LU result
         // if (nx <= 5) debugPrintBatchedMatrices("After getrfBatched");
+        // debugPrintBatchedMatrices("After getrfBatched");
 
         CHECK_CUBLAS(cublasDgetriBatched(cublasHandle, n, (const double **)d_Aarray, n,
                                          d_PivotArray, d_invAarray, n, d_InfoArray, batchSize));
 
         // DEBUG: check inverse
         // if (nx <= 5) debugPrintBatchedMatrices("After getriBatched", batchSize);
+        // debugPrintBatchedMatrices("After getriBatched", batchSize);
     }
 
     void debugPrintBatchedMatrices(const char *tag, int maxBlocks = 4) {
@@ -325,83 +344,160 @@ class UnstructuredQuadElementAdditiveSchwarzSmoother : public BaseSolver {
     DeviceVec<int> d_elem_conn;
     HostVec<int> h_elem_conn;
     int nodes_per_elem2;
-    int n_rhs_batch_blocks;
-    int n_batch_blocks, kmat_nnzb;
+    int nnz_rhs_batch;
+    int nnz_batch_blocks, kmat_nnzb;
     int *h_kmat_rowp, *h_kmat_cols;
     int *d_kmat_rowp, *d_kmat_rows, *d_kmat_cols;
-    int *h_blockInds;  //, *h_rowInds, *h_colInds;
-    int *d_blockInds;  //, *d_rowInds, *d_colInds;
-    int *h_RHSblockMap, *d_RHSblockMap;
+    int *h_sdBlockInds, *h_kmatBlockInds;
+    int *d_sdBlockInds, *d_kmatBlockInds;
+    int *h_rhsSDMap, *h_rhsDenseMap;
+    int *d_rhsSDMap, *d_rhsDenseMap;
 
     void _computeNZPatterns() {
         // compute nonzero patterns for the copying of the matrix kmat into batched form
-        // for a structured plate or cylinder grid in lexigraphic order
+        // uses node support and nofill sparsity therefore
 
         h_kmat_rowp = DeviceVec<int>(nnodes + 1, d_kmat_rowp).createHostVec().getPtr();
         h_kmat_cols = DeviceVec<int>(kmat_nnzb, d_kmat_cols).createHostVec().getPtr();
 
-        // copying batchSize * size2 blocks from original matrix into batched matrix
-        // need to compute nz pattern + map to facilitate the copy process
-        n_batch_blocks = batchSize * nodes_per_elem2;  // number of mat blocks to handle
-        h_blockInds =
-            new int[n_batch_blocks];  // block ind of kmat for each of batchSize * n * n values
-        memset(h_blockInds, 0, n_batch_blocks * sizeof(int));
-        // h_rowInds = new int[n_batch_blocks];
-        // memset(h_rowInds, 0, n_batch_blocks * sizeof(int));
-        // h_colInds = new int[n_batch_blocks];
-        // memset(h_colInds, 0, n_batch_blocks * sizeof(int));
-
+        // first compute the number of batch blocks needed (total across all subdomains)
         // loop over each batch / coupled group
-        int *elem_conn = h_elem_conn.getPtr();
+        nnz_batch_blocks = 0;
+        int *n_supp_nodes = new int[batchSize];
+        memset(n_supp_nodes, 0, batchSize * sizeof(int));
         for (int ibatch = 0; ibatch < batchSize; ibatch++) {
-            int ielem = ibatch;  // equivalent for this unstructured schwarz smoother
+            int _node = ibatch;  // equivalent for this unstructured schwarz smoother
 
-            for (int ij = 0; ij < nodes_per_elem2; ij++) {
-                int i = ij % nodes_per_elem;
-                int j = ij / nodes_per_elem;
+            std::vector<int> supp_nodes;
+            for (int jp = h_kmat_rowp[_node]; jp < h_kmat_rowp[_node + 1]; jp++) {
+                int loc_jp = jp - h_kmat_rowp[_node];
+                if (loc_jp >= size2) break;  // cap at 9 support nodes
+                int jnode = h_kmat_cols[jp];
+                supp_nodes.push_back(jnode);
+                n_supp_nodes[_node]++;
+            }
 
-                int row_node = elem_conn[nodes_per_elem * ielem + i];
-                int col_node = elem_conn[nodes_per_elem * ielem + j];
-                int _jp = -1;
-                for (int jp = h_kmat_rowp[row_node]; jp < h_kmat_rowp[row_node + 1]; jp++) {
-                    if (h_kmat_cols[jp] == col_node) {
-                        _jp = jp;
-                        break;
+            // now compute the block inds of support
+            for (int inode : supp_nodes) {
+                for (int jnode : supp_nodes) {
+                    // check if (inode, jnode) in kmat sparsity (if so increment total number of
+                    // batch blocks across all subdomains
+                    for (int jp = h_kmat_rowp[inode]; jp < h_kmat_rowp[inode + 1]; jp++) {
+                        int knode = h_kmat_cols[jp];
+                        if (jnode == knode) {
+                            // then the (inode, jnode) pair is in the nofill sparsity
+                            nnz_batch_blocks++;
+                            break;
+                        }
                     }
                 }
+            }
+        }
 
-                if (_jp != -1) {
-                    // flattened three tensor
-                    int batch_block_ind = nodes_per_elem2 * ibatch + ij;
-                    h_blockInds[batch_block_ind] = _jp;
+        // then store the support nodes
+
+        // loop over each batch block and now store the batch blocks
+        h_sdBlockInds = new int[nnz_batch_blocks];
+        memset(h_sdBlockInds, 0, nnz_batch_blocks * sizeof(int));
+        h_kmatBlockInds = new int[nnz_batch_blocks];
+        memset(h_kmatBlockInds, 0, nnz_batch_blocks * sizeof(int));
+        int inz_batch = 0;
+        for (int ibatch = 0; ibatch < batchSize; ibatch++) {
+            int _node = ibatch;  // equivalent for this unstructured schwarz smoother
+
+            std::vector<int> supp_nodes;
+            for (int jp = h_kmat_rowp[_node]; jp < h_kmat_rowp[_node + 1]; jp++) {
+                int loc_jp = jp - h_kmat_rowp[_node];
+                if (loc_jp >= size2) break;  // cap at 9 support nodes
+                int jnode = h_kmat_cols[jp];
+                supp_nodes.push_back(jnode);
+                // n_supp_nodes[_node]++;
+            }
+            int n_supp = n_supp_nodes[_node];
+            // printf("subdomain %d with nodes\n", _node);
+            // printVec<int>(supp_nodes.size(), supp_nodes.data());
+
+            // now compute the block inds of support
+            for (int i = 0; i < n_supp; i++) {
+                int inode = supp_nodes[i];
+                for (int j = 0; j < n_supp; j++) {
+                    int jnode = supp_nodes[j];
+                    // check if (inode, jnode) in kmat sparsity (if so increment total number of
+                    // batch blocks across all subdomains
+                    for (int jp = h_kmat_rowp[inode]; jp < h_kmat_rowp[inode + 1]; jp++) {
+                        int knode = h_kmat_cols[jp];
+                        if (jnode == knode) {
+                            // then the (inode, jnode) pair is in the nofill sparsity
+                            // compute block ind in 9x9 max block subdomain storage (not same as
+                            // unique NZ blocks)
+                            int subdomain_block = size4 * ibatch + size2 * j + i;
+                            h_sdBlockInds[inz_batch] = subdomain_block;
+                            h_kmatBlockInds[inz_batch] = jp;
+                            // printf(
+                            //     "subdomain %d with node (%d,%d) and sd block ind %d + global
+                            //     block " "ind %d\n", _node, inode, jnode, subdomain_block, jp);
+                            inz_batch++;
+                        }
+                    }
                 }
             }
         }
 
         // now copy host to device pointers
-        d_blockInds = HostVec<int>(n_batch_blocks, h_blockInds).createDeviceVec().getPtr();
+        // printf("h_sdBlockInds: ");
+        // printVec<int>(nnz_batch_blocks, h_sdBlockInds);
+        // printf("h_sdBlockInds: ");
+        // printVec<int>(nnz_batch_blocks, h_kmatBlockInds);
+        d_sdBlockInds = HostVec<int>(nnz_batch_blocks, h_sdBlockInds).createDeviceVec().getPtr();
+        d_kmatBlockInds =
+            HostVec<int>(nnz_batch_blocks, h_kmatBlockInds).createDeviceVec().getPtr();
 
         // ==================================================
         /* now also compute the RHS block map */
         // ==================================================
 
-        n_rhs_batch_blocks = batchSize * nodes_per_elem;  // number of rhs blocks to handle
-        h_RHSblockMap = new int[n_rhs_batch_blocks];      // block ind of kmat for each of batchSize
-                                                          // * n * n values
-        memset(h_RHSblockMap, 0, n_rhs_batch_blocks * sizeof(int));
+        // num supp nodes total is the nnz rhs
+        nnz_rhs_batch = 0;
+        for (int inode = 0; inode < batchSize; inode++) {
+            nnz_rhs_batch += n_supp_nodes[inode];
+        }
+
+        h_rhsSDMap = new int[nnz_rhs_batch];
+        h_rhsDenseMap = new int[nnz_rhs_batch];
+        // * n * n values
+        memset(h_rhsSDMap, 0, nnz_rhs_batch * sizeof(int));
+        memset(h_rhsDenseMap, 0, nnz_rhs_batch * sizeof(int));
+        int inz_rhs = 0;
 
         for (int ibatch = 0; ibatch < batchSize; ibatch++) {
-            int ielem = ibatch;
+            int _node = ibatch;  // equivalent for this unstructured schwarz smoother
 
-            // loop over batch nodes for each-node
-            for (int i = 0; i < nodes_per_elem; i++) {
-                int inode = elem_conn[nodes_per_elem * ielem + i];
-                int batch_block_ind = nodes_per_elem * ibatch + i;
-                h_RHSblockMap[batch_block_ind] = inode;
+            std::vector<int> supp_nodes;
+            for (int jp = h_kmat_rowp[_node]; jp < h_kmat_rowp[_node + 1]; jp++) {
+                int loc_jp = jp - h_kmat_rowp[_node];
+                if (loc_jp >= size2) break;  // cap at 9 support nodes
+                int jnode = h_kmat_cols[jp];
+                supp_nodes.push_back(jnode);
+                // n_supp_nodes[_node]++;
+            }
+            int n_supp = n_supp_nodes[_node];
+
+            // printf("subdomain %d with supp nodes: ", ibatch);
+            // printVec<int>(n_supp, supp_nodes.data());
+
+            // now assign subdomain and dense locations for each nz in subdomain batch
+            for (int i = 0; i < n_supp; i++) {
+                int inode = supp_nodes[i];
+                h_rhsSDMap[inz_rhs] = size2 * ibatch + i;
+                h_rhsDenseMap[inz_rhs] = inode;
+                // printf("subdomain-rhs %d with glob-node %d and loc-sd node %d\n", ibatch, inode,
+                //        size2 * ibatch + i);
+                inz_rhs++;
             }
         }
 
         // now copy host to device pointers
-        d_RHSblockMap = HostVec<int>(n_rhs_batch_blocks, h_RHSblockMap).createDeviceVec().getPtr();
+        d_rhsSDMap = HostVec<int>(nnz_rhs_batch, h_rhsSDMap).createDeviceVec().getPtr();
+        d_rhsDenseMap = HostVec<int>(nnz_rhs_batch, h_rhsDenseMap).createDeviceVec().getPtr();
     }
 };

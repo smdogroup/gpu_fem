@@ -94,7 +94,8 @@ class LinearPlateSolver {
                                                              rho, ys, nxe_per_comp, nye_per_comp);
             double Q = load_mag;  // load magnitude
             // T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
-            T *my_loads = getPlateNonlinearLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q, in_plane_frac);
+            T *my_loads =
+                getPlateNonlinearLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q, in_plane_frac);
             printf("making grid with nxe %d\n", c_nxe);
 
             auto &bsr_data = assembler.getBsrData();
@@ -128,7 +129,7 @@ class LinearPlateSolver {
             CHECK_CUDA(cudaDeviceSynchronize());
             auto end0 = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> assembly_time = end0 - start0;
-            printf("\tassemble kmat time %.2e\n", assembly_time.count());
+            printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
             // build smoother and prolongations..
             auto smoother =

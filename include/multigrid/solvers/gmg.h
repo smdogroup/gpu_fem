@@ -22,13 +22,13 @@ class GeometricMultigridSolver {
             grids[ilevel + 1].restriction =
                 grids[ilevel].prolongation;  // copy prolong to restriction on coarser grid
         }
-        // do matrix smoothing (if not possible depending upon prolong type, it will be skipped inside)
-        if (grids[0].smooth_matrix_iters > 0) {
-            printf("attempting to smooth matrices\n");
-        }
-        for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
-            grids[ilevel].smoothMatrix(grids[ilevel].smooth_matrix_iters);
-        }
+        // do matrix smoothing (if not possible depending upon prolong type, it will be skipped
+        // inside) if (grids[0].smooth_matrix_iters > 0) {
+        //     printf("attempting to smooth matrices\n");
+        // }
+        // for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
+        //     grids[ilevel].smoothMatrix(grids[ilevel].smooth_matrix_iters);
+        // }
     }
 
     int getNumLevels() { return grids.size(); }
@@ -254,7 +254,7 @@ class GeometricMultigridSolver {
         if (is_outer_call) {  // only for outer call..
             // init defect nrm
             init_defect_nrm = grids[0].getDefectNorm();
-            printf("W-cycles: ||init_defect|| = %.2e\n", init_defect_nrm);
+            if (print) printf("W-cycles: ||init_defect|| = %.2e\n", init_defect_nrm);
             fin_defect_nrm = init_defect_nrm;
         }
         int n_steps = n_wcycles;
@@ -273,7 +273,7 @@ class GeometricMultigridSolver {
                 wcycle_solve(i_level + 1, pre_smooth, post_smooth, 2, print, atol, rtol);
             } else {
                 // coarsest grid full solve
-                if (print) printf("\t--level %d full-solve\n", i_level);
+                // if (print) printf("\t--level %d full-solve\n", i_level);
                 coarse_solver->solve(grids[i_level].d_defect, grids[i_level].d_soln);
             }
 
@@ -288,20 +288,23 @@ class GeometricMultigridSolver {
             if (is_outer_call) {
                 defect_nrm = grids[i_level].getDefectNorm();
                 fin_defect_nrm = defect_nrm;
-                printf("W-cycle step %d, ||defect|| = %.3e\n", i_wcycle, defect_nrm);
+                if (print) printf("W-cycle step %d, ||defect|| = %.3e\n", i_wcycle, defect_nrm);
             }
 
             if (defect_nrm < atol + rtol * init_defect_nrm && is_outer_call) {
-                printf("W-cycle GMG converged in %d steps to defect nrm %.2e from init_nrm %.2e\n",
-                       i_wcycle + 1, defect_nrm, init_defect_nrm);
+                if (print)
+                    printf(
+                        "W-cycle GMG converged in %d steps to defect nrm %.2e from init_nrm %.2e\n",
+                        i_wcycle + 1, defect_nrm, init_defect_nrm);
                 n_steps = i_wcycle + 1;
                 break;
             }
         }
 
         if (is_outer_call) {
-            printf("done with W-cycle solve, conv %.2e to %.2e ||defect|| in %d steps\n",
-                   init_defect_nrm, fin_defect_nrm, n_steps);
+            if (print)
+                printf("done with W-cycle solve, conv %.2e to %.2e ||defect|| in %d steps\n",
+                       init_defect_nrm, fin_defect_nrm, n_steps);
         }
     }  // end of wcycle_solve method
 

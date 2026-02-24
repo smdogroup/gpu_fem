@@ -74,9 +74,8 @@ class NonlinearCylinderSolver {
 
     NonlinearCylinderSolver(double rhoKS = 100.0, double safety_factor = 1.5,
                             double load_mag = 100.0, T omega = 1.0, int nxe = 100, int nx_comp = 5,
-                            int ny_comp = 5, double SR = 50.0, int ORDER = 8, 
-                            int nsmooth = 1, int ninnercyc = 1, double in_plane_frac = 0.1,
-                            bool print = false) {
+                            int ny_comp = 5, double SR = 50.0, int ORDER = 8, int nsmooth = 1,
+                            int ninnercyc = 1, double in_plane_frac = 0.1, bool print = false) {
         // 1) Build mesh & assembler
         assert(nxe % nx_comp == 0);  // evenly divisible by number of elems_per_comp
         int nye = nxe;
@@ -114,8 +113,8 @@ class NonlinearCylinderSolver {
             // double nodal_loads = uniform_force; // (don't normalize anymore, integrated out) /
             // (nxe - 1) / (nxe - 1); T *my_loads = getCylinderLoads<T,  Basis, Physics,
             // load_case>(c_nxe, c_nhe, L, R, pressure);
-            T *my_loads =
-                getCylinderLoadsRobust<T, Assembler>(assembler, c_nxe, c_nhe, L, R, load_mag, in_plane_frac);
+            T *my_loads = getCylinderLoadsRobust<T, Assembler>(assembler, c_nxe, c_nhe, L, R,
+                                                               load_mag, in_plane_frac);
             printf("making grid with nxe %d\n", c_nxe);
 
             auto &bsr_data = assembler.getBsrData();
@@ -148,7 +147,7 @@ class NonlinearCylinderSolver {
             CHECK_CUDA(cudaDeviceSynchronize());
             auto end0 = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> assembly_time = end0 - start0;
-            printf("\tassemble kmat time %.2e\n", assembly_time.count());
+            printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
             // build smoother and prolongations..
             auto smoother =
@@ -172,7 +171,7 @@ class NonlinearCylinderSolver {
         // bool print = true;
         // bool print = false;
         bool double_smooth = true;
-        // int nsmooth = 1, ninnercyc = 1, 
+        // int nsmooth = 1, ninnercyc = 1,
         int print_freq = 3;
         int n_krylov = 50;
         T atol = 1e-6, rtol = 1e-6;
@@ -202,9 +201,11 @@ class NonlinearCylinderSolver {
         // T initLinSolveRtol = 1e-1; // which makes it run faster?
         T linSolveAtol = 1e-4;
         // T restart_dlam = 1e-2; // default
-        T restart_dlam = 0.05; // tolerance for just trying to newton solve immediately to lam = 1.0
+        T restart_dlam =
+            0.05;  // tolerance for just trying to newton solve immediately to lam = 1.0
 
-        inner_solver = new INK(cublasHandle, assembler, mg->grids[0].Kmat, d_loads, mg, initLinSolveRtol, linSolveAtol, 1e-4, 0.25, restart_dlam);
+        inner_solver = new INK(cublasHandle, assembler, mg->grids[0].Kmat, d_loads, mg,
+                               initLinSolveRtol, linSolveAtol, 1e-4, 0.25, restart_dlam);
         bool use_predictor = true, debug = false;
         // bool use_predictor = false, debug = false;
         nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);

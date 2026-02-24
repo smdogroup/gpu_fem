@@ -213,7 +213,7 @@ void solve_nonlinear_multigrid(MPI_Comm &comm, int level, double SR,
         CHECK_CUDA(cudaDeviceSynchronize());
         auto enda = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> assembly_time = enda - starta;
-        printf("\tassemble kmat time %.2e\n", assembly_time.count());
+        printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
         // build smoother and prolongations
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);

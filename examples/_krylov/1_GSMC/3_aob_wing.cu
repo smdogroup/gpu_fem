@@ -139,7 +139,7 @@ void gsmc_gmres_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaM
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver

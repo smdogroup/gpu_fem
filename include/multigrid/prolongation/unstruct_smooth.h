@@ -43,17 +43,15 @@ class UnstructuredSmoothProlongation {
 
     // nothing (though smoother needs to do matrix-smoothing in some cases)
     void update_after_assembly(DeviceVec<T> &vars) {
-        assemble_matrices(); // reassemble matrices
+        assemble_matrices();  // reassemble matrices
         smoother->update_after_assembly(vars);
         smoothMatrix();
         update_after_smooth();
     }
 
     void smoothMatrix() {
-        smoother->smoothMatrix(nsmooth_iters, prolong_mat, Z_mat,
-                                   Zprev_mat, nnzb_prod,
-                                   d_K_prodBlocks, d_P_prodBlocks,
-                                   d_Z_prodBlocks);
+        smoother->smoothMatrix(nsmooth_iters, prolong_mat, Z_mat, Zprev_mat, nnzb_prod,
+                               d_K_prodBlocks, d_P_prodBlocks, d_Z_prodBlocks);
     }
 
     void init_coarse_data(Assembler &coarse_assembler_) {
@@ -61,47 +59,43 @@ class UnstructuredSmoothProlongation {
         d_coarse_iperm = coarse_assembler.getBsrData().iperm;
         // printf("\tDEBUG: construct nz pattern\n");
         construct_nz_pattern();
-        if constexpr (kmat_fillin) {
-            // matrix fillin here P0 => A*P0
-            // printf("\tDEBUG: apply kmat fillin\n");
-            apply_kmat_fillin();
-        }
+        // matrix fillin here P0 => A*P0
+        // printf("\tDEBUG: apply kmat fillin\n");
+        apply_kmat_fillin();
         // printf("\tDEBUG: assemble matrices\n");
-        printf("assemble matrices\n");
+        // printf("assemble matrices\n");
         assemble_matrices();
-
 
         d_fine_bcs = fine_assembler.getBCs();
         d_coarse_bcs = coarse_assembler.getBCs();
 
-        if constexpr (kmat_fillin) {
-            // allocate extra Z matrix storage and Z mat (for smoothing updates)
-            auto d_Z_vec = DeviceVec<T>(P_nnzb * block_dim2);
-            d_Z_vals = d_Z_vec.getPtr();
-            Z_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_Z_vec);
+        // if constexpr (kmat_fillin) {
+        // allocate extra Z matrix storage and Z mat (for smoothing updates)
+        auto d_Z_vec = DeviceVec<T>(P_nnzb * block_dim2);
+        d_Z_vals = d_Z_vec.getPtr();
+        Z_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_Z_vec);
 
-            // TODO : temporarily we use an extra Zprev_mat for matrix smoothing
-            //   for less mem storage, could later remove this extra matrix and just do -Dinv*A*P into Z
-            //   in one step
-            auto d_Zprev_vec = DeviceVec<T>(P_nnzb * block_dim2);
-            d_Zprev_vals = d_Zprev_vec.getPtr();
-            Zprev_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_Zprev_vec);
+        // TODO : temporarily we use an extra Zprev_mat for matrix smoothing
+        //   for less mem storage, could later remove this extra matrix and just do -Dinv*A*P
+        //   into Z in one step
+        auto d_Zprev_vec = DeviceVec<T>(P_nnzb * block_dim2);
+        d_Zprev_vals = d_Zprev_vec.getPtr();
+        Zprev_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_Zprev_vec);
 
-            // printf("\tDEBUG: compute matmat nz pattern\n");
-            compute_matmat_prod_nz_pattern();
-        }
-
+        // printf("\tDEBUG: compute matmat nz pattern\n");
+        compute_matmat_prod_nz_pattern();
+        // }
 
         // apply bcs to it now
-        printf("apply bcs\n");
-        const bool ones_on_diag = false; // just zero out completely for prolong matrix
+        // printf("apply bcs\n");
+        const bool ones_on_diag = false;  // just zero out completely for prolong matrix
         prolong_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
         prolong_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
-        printf("\tapply bcs done\n");
+        // printf("\tapply bcs done\n");
 
-        printf("smooth matrix\n");
+        // printf("smooth matrix\n");
         smoothMatrix();
-        printf("unstruct smooth\n");
+        // printf("unstruct smooth\n");
         update_after_smooth();
     }
 
@@ -131,7 +125,7 @@ class UnstructuredSmoothProlongation {
         N_coarse = nnodes_coarse * block_dim;
         d_coarse_weights = DeviceVec<T>(N_coarse).getPtr();
         d_fine_ones = DeviceVec<T>(N_fine).getPtr();
-        k_vec_set<T><<<(N_fine+31)/32, 32>>>(N_fine, 1.0, d_fine_ones);
+        k_vec_set<T><<<(N_fine + 31) / 32, 32>>>(N_fine, 1.0, d_fine_ones);
     }
 
     void compute_matmat_prod_nz_pattern() {
@@ -220,57 +214,88 @@ class UnstructuredSmoothProlongation {
         int *h_P_rowp0 = DeviceVec<int>(nnodes_fine + 1, d_P_rowp).createHostVec().getPtr();
         int *h_P_cols0 = DeviceVec<int>(P_bsr_data.nnzb, d_P_cols).createHostVec().getPtr();
 
-        // delete previous nofill P0 device pointers
-        cudaFree(d_P_rowp);
-        cudaFree(d_P_rows);
-        cudaFree(d_P_cols);
-        // ok cause this is only done on startup
+        int AP_nnzb, *h_AP_cols, *h_AP_rows, *h_AP_rowp;
 
         // build new sparsity
         // need permutations here?
-        int *h_AP_rowp = new int[nnodes_fine + 1];
-        memset(h_AP_rowp, 0, (nnodes_fine + 1) * sizeof(int));
-        for (int i = 0; i < nnodes_fine; i++) {
-            h_AP_rowp[i + 1] = h_AP_rowp[i];
-            std::unordered_set<int> unique_cols;
-            for (int kp = h_kmat_rowp[i]; kp < h_kmat_rowp[i + 1]; kp++) {
-                int k = h_kmat_cols[kp];
-                for (int jp = h_P_rowp0[k]; jp < h_P_rowp0[k + 1]; jp++) {
-                    int j = h_P_cols0[jp];
-                    unique_cols.insert(j);
+        if constexpr (kmat_fillin) {
+            // delete previous nofill P0 device pointers
+            cudaFree(d_P_rowp);
+            cudaFree(d_P_rows);
+            cudaFree(d_P_cols);
+            // ok cause this is only done on startup
+
+            h_AP_rowp = new int[nnodes_fine + 1];
+            memset(h_AP_rowp, 0, (nnodes_fine + 1) * sizeof(int));
+            for (int i = 0; i < nnodes_fine; i++) {
+                h_AP_rowp[i + 1] = h_AP_rowp[i];
+                std::unordered_set<int> unique_cols;
+                for (int kp = h_kmat_rowp[i]; kp < h_kmat_rowp[i + 1]; kp++) {
+                    int k = h_kmat_cols[kp];
+                    for (int jp = h_P_rowp0[k]; jp < h_P_rowp0[k + 1]; jp++) {
+                        int j = h_P_cols0[jp];
+                        unique_cols.insert(j);
+                    }
+                }
+                h_AP_rowp[i + 1] += unique_cols.size();
+            }
+            // printVec<int>(50, PF_rowp);
+            AP_nnzb = h_AP_rowp[nnodes_fine];
+            h_AP_cols = new int[AP_nnzb];
+            h_AP_rows = new int[AP_nnzb];
+            int iinz = 0;
+            for (int i = 0; i < nnodes_fine; i++) {
+                std::set<int> ordered_unique_cols;
+                for (int kp = h_kmat_rowp[i]; kp < h_kmat_rowp[i + 1]; kp++) {
+                    int k = h_kmat_cols[kp];
+                    for (int jp = h_P_rowp0[k]; jp < h_P_rowp0[k + 1]; jp++) {
+                        int j = h_P_cols0[jp];
+                        ordered_unique_cols.insert(j);
+                    }
+                }
+                for (int col : ordered_unique_cols) {
+                    h_AP_cols[iinz] = col;
+                    h_AP_rows[iinz] = i;
+                    iinz++;
                 }
             }
-            h_AP_rowp[i + 1] += unique_cols.size();
-        }
-        // printVec<int>(50, PF_rowp);
-        int AP_nnzb = h_AP_rowp[nnodes_fine];
-        int *h_AP_cols = new int[AP_nnzb];
-        int *h_AP_rows = new int[AP_nnzb];
-        int iinz = 0;
-        for (int i = 0; i < nnodes_fine; i++) {
-            std::set<int> ordered_unique_cols;
-            for (int kp = h_kmat_rowp[i]; kp < h_kmat_rowp[i + 1]; kp++) {
-                int k = h_kmat_cols[kp];
-                for (int jp = h_P_rowp0[k]; jp < h_P_rowp0[k + 1]; jp++) {
-                    int j = h_P_cols0[jp];
-                    ordered_unique_cols.insert(j);
+
+            // copy final fillin sparsity to host (for use in mat-mat prod sparsity)
+            h_P_rowp = h_AP_rowp;
+            h_P_cols = h_AP_cols;
+
+            // now store the new fillin P mat sparsity
+            d_P_rowp = HostVec<int>(nnodes_fine + 1, h_AP_rowp).createDeviceVec().getPtr();
+            d_P_rows = HostVec<int>(AP_nnzb, h_AP_rows).createDeviceVec().getPtr();
+            d_P_cols = HostVec<int>(AP_nnzb, h_AP_cols).createDeviceVec().getPtr();
+        } else {
+            cudaFree(d_P_rowp);
+            cudaFree(d_P_rows);
+            cudaFree(d_P_cols);
+
+            // no kmat fillin
+            h_AP_rowp = new int[nnodes_fine + 1];
+            for (int i = 0; i < nnodes_fine + 1; i++) {
+                h_AP_rowp[i] = h_P_rowp0[i];
+            }
+            AP_nnzb = h_P_rowp0[nnodes_fine];
+
+            // printf("AP_nnzb %d\n", AP_nnzb);
+            h_AP_cols = new int[AP_nnzb];
+            h_AP_rows = new int[AP_nnzb];
+            for (int i = 0; i < nnodes_fine; i++) {
+                for (int jp = h_P_rowp0[i]; jp < h_P_rowp0[i + 1]; jp++) {
+                    h_AP_rows[jp] = i;
+                    h_AP_cols[jp] = h_P_cols0[jp];
                 }
             }
-            for (int col : ordered_unique_cols) {
-                h_AP_cols[iinz] = col;
-                h_AP_rows[iinz] = i;
-                iinz++;
-            }
+            h_P_rowp = h_AP_rowp;
+            h_P_cols = h_AP_cols;
+
+            d_P_rowp = HostVec<int>(nnodes_fine + 1, h_AP_rowp).createDeviceVec().getPtr();
+            d_P_rows = HostVec<int>(AP_nnzb, h_AP_rows).createDeviceVec().getPtr();
+            d_P_cols = HostVec<int>(AP_nnzb, h_AP_cols).createDeviceVec().getPtr();
         }
-
-        // copy final fillin sparsity to host (for use in mat-mat prod sparsity)
-        h_P_rowp = h_AP_rowp;
-        h_P_cols = h_AP_cols;
-
-        // now store the new fillin P mat sparsity
-        d_P_rowp = HostVec<int>(nnodes_fine + 1, h_AP_rowp).createDeviceVec().getPtr();
-        d_P_rows = HostVec<int>(AP_nnzb, h_AP_rows).createDeviceVec().getPtr();
-        d_P_cols = HostVec<int>(AP_nnzb, h_AP_cols).createDeviceVec().getPtr();
 
         // and free + allocate new matrix vals
         prolong_mat->free();  // frees up device values
@@ -281,7 +306,7 @@ class UnstructuredSmoothProlongation {
 
         // and update the P_bsr_data also
         int *d_fine_perm = P_bsr_data.perm;
-        
+
         bool host = true;
         auto h_P_bsr_data =
             BsrData(nnodes_fine, block_dim, AP_nnzb, h_AP_rowp, h_AP_cols, nullptr, nullptr, host);
@@ -307,7 +332,7 @@ class UnstructuredSmoothProlongation {
         h_P_bsr_data.nb = nnodes_coarse;
 
         P_bsr_data = h_P_bsr_data.createDeviceBsrData();
-        printf("\tdone make P bsr data for FC-matrix\n");
+        // printf("\tdone make P bsr data for FC-matrix\n");
         P_bsr_data.mb = nnodes_fine, P_bsr_data.nb = nnodes_coarse;
         P_bsr_data.rows = d_P_rows;  // need rows
 
@@ -327,7 +352,8 @@ class UnstructuredSmoothProlongation {
     }
 
     void update_after_smooth() {
-        // compute coarse weights for nonlinear problems as P^T * ones => weights (row-sums of P^T coarse nodes)
+        // compute coarse weights for nonlinear problems as P^T * ones => weights (row-sums of P^T
+        // coarse nodes)
         cudaMemset(d_coarse_weights, 0.0, N_coarse * sizeof(T));
         int nprods = P_nnzb * block_dim2;
         dim3 block0(32), grid0((nprods + 31) / 32);
@@ -342,7 +368,8 @@ class UnstructuredSmoothProlongation {
         // now do cusparse Bsrmv.. for P @ coarse_soln => dx_fine (permuted nodes order)
         T a = 1.0, b = 0.0;
         int mb = P_bsr_data.mb, nb = P_bsr_data.nb;
-        // printf("prolongate with block_dim %d, mb %d, nb %d, P_nnzb %d\n", block_dim, mb, nb, P_nnzb);
+        // printf("prolongate with block_dim %d, mb %d, nb %d, P_nnzb %d\n", block_dim, mb, nb,
+        // P_nnzb);
         CHECK_CUSPARSE(cusparseDbsrmv(handle, CUSPARSE_DIRECTION_ROW,
                                       CUSPARSE_OPERATION_NON_TRANSPOSE, mb, nb, P_nnzb, &a, descr_P,
                                       d_P_vals, d_P_rowp, d_P_cols, block_dim,

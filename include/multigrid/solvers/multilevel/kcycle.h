@@ -18,16 +18,19 @@ class MultilevelKcycleSolver {
     void init_prolongations() {
         /* pass in coarse assembler data for each prolongation operator */
         // 0 is the finest grid, nlevels-1 is the coarsest grid here
-        printf("create prolongation nz pattern\n");
+        printf("prolong assembly => \n\t");
         for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
+            printf("/ level %d ", ilevel);
             grids[ilevel].prolongation->init_coarse_data(grids[ilevel + 1].assembler);
             grids[ilevel + 1].restriction =
                 grids[ilevel].prolongation;  // copy prolong to restriction on coarser grid
+            if (ilevel % 3 == 0 && ilevel > 0) printf(" /\n\t");
         }
-        // do matrix smoothing (if not possible depending upon prolong type, it will be skipped inside)
-        if (grids[0].smooth_matrix_iters > 0) {
-            printf("attempting to smooth matrices\n");
-        }
+        printf(" /\n");
+        // do matrix smoothing (if not possible depending upon prolong type, it will be skipped
+        // inside) if (grids[0].smooth_matrix_iters > 0) {
+        //     printf("attempting to smooth matrices\n");
+        // }
         // for (int ilevel = 0; ilevel < getNumLevels() - 1; ilevel++) {
         //     grids[ilevel].smoothMatrix(grids[ilevel].smooth_matrix_iters);
         // }
@@ -75,7 +78,8 @@ class MultilevelKcycleSolver {
 
         for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
             int block_dim = grids[ilevel].block_dim;
-            grids[ilevel].d_vars.permuteData(block_dim, grids[ilevel].d_perm);  // from SOLVE to VIS order
+            grids[ilevel].d_vars.permuteData(block_dim,
+                                             grids[ilevel].d_perm);  // from SOLVE to VIS order
             auto h_vars = grids[ilevel].d_vars.createHostVec();
             grids[ilevel].d_vars.permuteData(block_dim, grids[ilevel].d_iperm);  // and undo perm
             std::stringstream outputFile;

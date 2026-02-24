@@ -7,8 +7,8 @@
 #include "linalg/_linalg.h"
 #include "mesh/TACSMeshLoader.h"
 // #include "coupled/_coupled.h"
-#include "solvers/_solvers.h"
 #include "mesh/exploded_vtk_writer.h"
+#include "solvers/_solvers.h"
 
 // shell imports
 #include "assembler.h"
@@ -22,8 +22,8 @@
 #include "multigrid/utils/fea.h"
 // #include "multigrid/smoothers/mc_smooth1.h"
 // #include "multigrid/prolongation/structured.h"
-#include "multigrid/smoothers/_wingbox_coloring.h"
 #include "multigrid/prolongation/unstructured.h"
+#include "multigrid/smoothers/_wingbox_coloring.h"
 #include "multigrid/smoothers/cheb4_poly.h"
 // #include "multigrid/solvers/gmg.h"
 
@@ -52,9 +52,10 @@ class LinearCFIWingSolver {
     using Quad = QuadLinearQuadrature<T>;
     using Director = LinearizedRotation<T>;
     static constexpr bool has_ref_axis = false;
-    // static const bool has_ref_axis = true;  // only need ref axis for stiffened wing  with buckling loads
+    // static const bool has_ref_axis = true;  // only need ref axis for stiffened wing  with
+    // buckling loads
     using Data = ShellIsotropicData<T, has_ref_axis>;
-    static const bool is_nonlinear = false; // cause linear wing
+    static const bool is_nonlinear = false;  // cause linear wing
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
     // MITC4 shell
@@ -69,8 +70,9 @@ class LinearCFIWingSolver {
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using Smoother = ChebyshevPolynomialSmoother<Assembler>;
     static const bool is_bsr = true;
-    // static const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
-    using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
+    // static const bool is_bsr = false; // no difference in intra-nodal (default old working
+    // prolong)
+    using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, LINE_SEARCH>;
     // using MG = GeometricMultigridSolver<GRID>; // old V-cycle solver
 
@@ -85,9 +87,8 @@ class LinearCFIWingSolver {
     using DKSFail = KSFailure<T, DeviceVec>;
 
     LinearCFIWingSolver(double rhoKS = 100.0, double safety_factor = 1.5, double force = 30e3,
-                      T omega = 1.0, int level = 2, T rtol = 1e-6, int ORDER = 8, 
-                      int nsmooth = 1, int ninnercyc = 1, bool print = false, int n_krylov=50) {
-
+                        T omega = 1.0, int level = 2, T rtol = 1e-6, int ORDER = 8, int nsmooth = 1,
+                        int ninnercyc = 1, bool print = false, int n_krylov = 50) {
         // --- SAFE MPI INIT ---
         int already_init = 0;
         MPI_Initialized(&already_init);
@@ -104,22 +105,23 @@ class LinearCFIWingSolver {
         CHECK_CUBLAS(cublasCreate(&cublasHandle));
         CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
 
-        double SR = 20.0; // default slenderness (to modify thicknesses, change them in the DVs instead)
+        double SR =
+            20.0;  // default slenderness (to modify thicknesses, change them in the DVs instead)
 
         // start building multigrid object
         mg = new KMG();
 
         // make each grid
         for (int i = level; i >= 0; i--) {
-
             // read the ESP/CAPS => nastran mesh for TACS
             TACSMeshLoader mesh_loader{comm};
-            std::string fname = "../../examples/multigrid/3_aob_wing/meshes/aob_wing_L" + std::to_string(i) + ".bdf";
+            std::string fname = "../../examples/multigrid/3_aob_wing/meshes/aob_wing_L" +
+                                std::to_string(i) + ".bdf";
             mesh_loader.scanBDFFile(fname.c_str());
 
             // IF STIFFENED WING with REF AXIS:
             // ===============================================
-            
+
             // HostVec<Data> comp_data(mesh_loader.getNumComponents());
             // std::string design_filename = "design/AOB-design.txt";
             // build_AOB_component_data<T, Data>(mesh_loader, comp_data, design_filename);
@@ -130,7 +132,7 @@ class LinearCFIWingSolver {
 
             // IF UNSTIFFENED WING without ref axis, isotropic (no buckling)
             // =================================================
-            double E = 70e9, nu = 0.3, thick = 2.0 / SR; 
+            double E = 70e9, nu = 0.3, thick = 2.0 / SR;
             double rho = 2500, ys = 350e6;
             printf("making assembler+GMG for mesh '%s'\n", fname.c_str());
             auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick, rho, ys));
@@ -148,8 +150,8 @@ class LinearCFIWingSolver {
 
             bool coarsest_grid = i == 0;
             // if (!coarsest_grid) {
-                // WingboxMultiColoring<Assembler>::apply_coloring(assembler, bsr_data, num_colors, _color_rowp);
-                // bsr_data.compute_nofill_pattern();
+            // WingboxMultiColoring<Assembler>::apply_coloring(assembler, bsr_data, num_colors,
+            // _color_rowp); bsr_data.compute_nofill_pattern();
             // } else {
             // try no reordering
             if (coarsest_grid) {
@@ -171,19 +173,21 @@ class LinearCFIWingSolver {
             assembler.set_variables(vars);
             auto res = assembler.createVarsVec();
             auto starta = std::chrono::high_resolution_clock::now();
-            const int elems_per_blockk = 1; // 1 versus 2 elements => similar runtime (1 slightly better)
+            const int elems_per_blockk =
+                1;  // 1 versus 2 elements => similar runtime (1 slightly better)
             assembler.template add_jacobian_fast<elems_per_blockk>(kmat);
             assembler.apply_bcs(kmat);
             CHECK_CUDA(cudaDeviceSynchronize());
             auto enda = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> assembly_time = enda - starta;
-            printf("\tassemble kmat time %.2e\n", assembly_time.count());
+            printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
             // build smoother and prolongations
             // // bool smooth_debug = true;
             // bool smooth_debug = false;
-            auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
-            int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
+            auto smoother =
+                new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER);
+            int ELEM_MAX = 10;  // num nearby elements of each fine node for nz pattern construction
             // int ELEM_MAX = 4;
             auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
             // T omegaLS_min = 0.01, omegaLS_max = 4.0;
@@ -275,19 +279,22 @@ class LinearCFIWingSolver {
         d_loads.permuteData(bsr_data.block_dim, bsr_data.perm);
         solver->copy_solution_in(d_loads);
         writeSolution(filename);
-        d_loads.permuteData(bsr_data.block_dim, bsr_data.iperm); // un-permute
+        d_loads.permuteData(bsr_data.block_dim, bsr_data.iperm);  // un-permute
     }
 
-    void writeExplodedVTKs(const std::string int_struct_filename, const std::string &upper_skin_filename, 
-        const std::string lower_skin_filename) {
-
+    void writeExplodedVTKs(const std::string int_struct_filename,
+                           const std::string &upper_skin_filename,
+                           const std::string lower_skin_filename) {
         auto bsr_data = mg->grids[0].assembler.getBsrData();
         soln.permuteData(bsr_data.block_dim, bsr_data.perm);
         auto h_soln = soln.createHostVec();
-        
-        explodedPrintToVTK<Assembler, HostVec<T>, INT_STRUCT>(mg->grids[0].assembler, h_soln, int_struct_filename);
-        explodedPrintToVTK<Assembler, HostVec<T>, UPPER_SKIN>(mg->grids[0].assembler, h_soln, upper_skin_filename);
-        explodedPrintToVTK<Assembler, HostVec<T>, LOWER_SKIN>(mg->grids[0].assembler, h_soln, lower_skin_filename);
+
+        explodedPrintToVTK<Assembler, HostVec<T>, INT_STRUCT>(mg->grids[0].assembler, h_soln,
+                                                              int_struct_filename);
+        explodedPrintToVTK<Assembler, HostVec<T>, UPPER_SKIN>(mg->grids[0].assembler, h_soln,
+                                                              upper_skin_filename);
+        explodedPrintToVTK<Assembler, HostVec<T>, LOWER_SKIN>(mg->grids[0].assembler, h_soln,
+                                                              lower_skin_filename);
     }
 
     void solve() {

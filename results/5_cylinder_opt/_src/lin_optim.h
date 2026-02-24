@@ -61,7 +61,8 @@ class LinearCylinderSolver {
 
     LinearCylinderSolver(double rhoKS = 100.0, double safety_factor = 1.5, double pressure = 100.0,
                          T omega = 1.0, int nxe = 100, int nx_comp = 5, int ny_comp = 5,
-                         double SR = 50.0, int ORDER = 8, double in_plane_frac = 0.2, bool print = false) {
+                         double SR = 50.0, int ORDER = 8, double in_plane_frac = 0.2,
+                         bool print = false) {
         // 1) Build mesh & assembler
         assert(nxe % nx_comp == 0);  // evenly divisible by number of elems_per_comp
         int nye = nxe;
@@ -100,8 +101,8 @@ class LinearCylinderSolver {
             // double nodal_loads = uniform_force; // (don't normalize anymore, integrated out) /
             // (nxe - 1) / (nxe - 1); T *my_loads = getCylinderLoads<T,  Basis, Physics,
             // load_case>(c_nxe, c_nhe, L, R, pressure);
-            T *my_loads =
-                getCylinderLoadsRobust<T, Assembler>(assembler, c_nxe, c_nhe, L, R, pressure, in_plane_frac);
+            T *my_loads = getCylinderLoadsRobust<T, Assembler>(assembler, c_nxe, c_nhe, L, R,
+                                                               pressure, in_plane_frac);
             printf("making grid with nxe %d\n", c_nxe);
 
             auto &bsr_data = assembler.getBsrData();
@@ -135,7 +136,7 @@ class LinearCylinderSolver {
             CHECK_CUDA(cudaDeviceSynchronize());
             auto end0 = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> assembly_time = end0 - start0;
-            printf("\tassemble kmat time %.2e\n", assembly_time.count());
+            printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
             // build smoother and prolongations..
             auto smoother =

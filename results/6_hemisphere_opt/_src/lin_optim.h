@@ -132,7 +132,7 @@ class LinearCylinderSolver {
             CHECK_CUDA(cudaDeviceSynchronize());
             auto end0 = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> assembly_time = end0 - start0;
-            printf("\tassemble kmat time %.2e\n", assembly_time.count());
+            printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
             // build smoother and prolongations..
             auto smoother =

@@ -128,7 +128,7 @@ void chebyshev_polynomial_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
@@ -278,7 +278,7 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
@@ -437,7 +437,7 @@ void gsmc_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressure = 5
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
@@ -582,7 +582,7 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, T pressure = 5.0e7)
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
@@ -741,7 +741,7 @@ void spai_solve(int nxe, double SR, int fill_level, int optim, T pressure = 5.0e
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
@@ -905,7 +905,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver

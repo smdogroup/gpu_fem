@@ -157,7 +157,7 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
         CHECK_CUDA(cudaDeviceSynchronize());
         auto enda = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> assembly_time = enda - starta;
-        printf("\tassemble kmat time %.2e\n", assembly_time.count());
+        printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
         // CHECK_CUDA(cudaDeviceSynchronize());
         // auto startar = std::chrono::high_resolution_clock::now();

@@ -890,7 +890,5 @@ void init_unstructured_grid_maps(Assembler &fine_assembler, Assembler &coarse_as
     // printf("done with init unstructured grid maps\n");
     auto end0 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> P_PT_time = end0 - start0;
-    printf("\tunstructured grid P,PT assembly in %.2e sec\n", P_PT_time.count());
-
-    // TBD: free up temp arrays
+    printf(" in %.2e sec ", nnodes_fine, P_PT_time.count());
 }

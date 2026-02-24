@@ -72,7 +72,7 @@ void asw_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omega = 1.5, 
     using Physics = typename Assembler::Phys;
     const SCALER scaler  = LINE_SEARCH;
     // using Smoother = ChebyshevPolynomialSmoother<Assembler, false>; 
-    using Smoother = UnstructuredQuadAdditiveSchwarzSmoother<T, Assembler>;
+    using Smoother = UnstructuredQuadElementAdditiveSchwarzSmoother<T, Assembler>;
     using Prolongation = UnstructuredProlongation<Assembler, Basis, true>; 
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
     using Data = ShellIsotropicData<T, false>;
@@ -144,7 +144,7 @@ void asw_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omega = 1.5, 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
@@ -287,7 +287,7 @@ void solve_direct(int level, MPI_Comm comm, double SR, T force = 5.0e7) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat time %.2e\n", assembly_time.count());
+    printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver

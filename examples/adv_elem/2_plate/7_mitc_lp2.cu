@@ -1,3 +1,10 @@
+// """
+// plate geometric multigrid with MITC4 shells
+// * uses MITC-LP (locking-smooth prolongation)
+// * 2x2 node Element-ASW (additive schwarz subdomain smoother)
+// * default is K-cycle with V-cycle precond (PCG solver), other options V-cycle, K-cycle and F-cycle solver
+// """
+
 // general gpu_fem imports
 #include "linalg/_linalg.h"
 #include "solvers/_solvers.h"
@@ -35,8 +42,8 @@
 #include "multigrid/solvers/multilevel/twolevel.h"
 
 // local utils
-#include "../2_plate/include/lock_prolongation.h"
-#include "../2_plate/include/lock_smoother.h"
+#include "include/lock_prolongation.h"
+#include "include/lock_smoother.h"
 
 /* command line args:
     [direct/mg] [--nxe int] [--SR float] [--nvcyc int]
@@ -62,7 +69,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
     using Physics = typename Assembler::Phys;
     const SCALER scaler  = LINE_SEARCH;
     // using Smoother = ChebyshevPolynomialSmoother<Assembler>;
-    using Smoother = UnstructuredQuadAdditiveSchwarzSmoother<T, Assembler>;
+    using Smoother = UnstructuredQuadElementAdditiveSchwarzSmoother<T, Assembler>;
     // using Prolongation = StructuredProlongation<Assembler, PLATE>;
     using Prolongation = LockingAwareUnstructuredProlongation<Assembler, Basis>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
@@ -104,18 +111,13 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
     // make each grid
     for (int c_nxe = nxe; c_nxe >= nxe_min; c_nxe /= 2) {
         // make the assembler
-        int c_nhe = c_nxe;
-        double L = 1.0, R = 0.5, thick = L / SR;
-        double E = 70e9, nu = 0.3;
-        // double rho = 2500, ys = 350e6;
-        bool imperfection = false; // option for geom imperfection
-        int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-        auto assembler = createCylinderAssembler<Assembler>(c_nxe, c_nhe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
-        constexpr bool compressive = false;
-        const int load_case = 3; // petal and chirp load
+        int c_nye = c_nxe;
+        double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+        int nxe_per_comp = c_nxe, nye_per_comp = c_nye; // for now (should have 25 grids)
+        auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
         double Q = 1.0; // load magnitude
-        T *my_loads = getCylinderLoads<T, Basis, Physics, load_case>(c_nxe, c_nhe, L, R, Q);
-        printf("making grid with nxe %d\n", c_nxe);
+        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+        printf("making grid with nxe %d => ", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
         int num_colors, *_color_rowp;
@@ -145,10 +147,10 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         CHECK_CUDA(cudaDeviceSynchronize());
         auto end0 = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> assembly_time = end0 - start0;
-        printf("\tassemble kmat time %.2e\n", assembly_time.count());
+        printf("assemble kmat in %.2e sec\n", assembly_time.count());
 
         // build smoother and prolongations..
-        printf("nsmooth %d, omega = %.4e\n", nsmooth, omega);
+        // printf("nsmooth %d, omega = %.4e\n", nsmooth, omega);
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, 
             omega, nsmooth);
         auto prolongation = new Prolongation(cusparseHandle, assembler);
@@ -176,19 +178,18 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
 
         printf("Step 0 : get fine grid data on grid %d\n", i);
         // register the coarse assemblers to the prolongations..
-        // double lam = 1e-12; // see python locking script
-        double lam = 1e-6;
+        double lam = 1e-12; // see python locking script
         // if (is_kcycle) {
         // clear and re-assemble kmat to hold G_f^T G_f + lam * I
         auto &f_assembler = grids[i].assembler;
         auto &f_kmat = grids[i].Kmat;
         auto d_fine_bcs = f_assembler.getBCs();
 
-        // printf("Step 1 - compute G_f^T G_f LHS locking matrix\n");
-        // f_assembler.add_lockstrain_jacobian_fast(f_kmat);
-        // CHECK_CUDA(cudaDeviceSynchronize()); // slower but for debugging
-        // f_assembler.apply_bcs(f_kmat);
-        // f_kmat.add_diag_nugget(lam);
+        printf("Step 1 - compute G_f^T G_f LHS locking matrix\n");
+        f_assembler.add_lockstrain_jacobian_fast(f_kmat);
+        CHECK_CUDA(cudaDeviceSynchronize()); // slower but for debugging
+        f_assembler.apply_bcs(f_kmat);
+        f_kmat.add_diag_nugget(lam);
 
         // make device fine-coarse elem map (here just use structured pattern)
         printf("Step 2 - compute device fc elem map\n");
@@ -221,31 +222,29 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         P_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
         P_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
 
-        // // now assemble G_f^T * P_gam * G_c + lam * P_0  RHS prolong matrix with K*P0 sparsity
-        // printf("Step 5 - compute locking RHS fine-coarse matrix\n");
-        // f_assembler.add_lockstrain_fc_jacobian_fast(c_assembler, d_fc_elem_map, *RHS_mat);
-        // CHECK_CUDA(cudaDeviceSynchronize()); // slower but for debugging
-        // printf("\tdone with assembly FC matrix from step 5\n");
-        // // apply bcs to P_rhs matrix
-        // RHS_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
-        // RHS_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
+        // now assemble G_f^T * P_gam * G_c + lam * P_0  RHS prolong matrix with K*P0 sparsity
+        printf("Step 5 - compute locking RHS fine-coarse matrix\n");
+        f_assembler.add_lockstrain_fc_jacobian_fast(c_assembler, d_fc_elem_map, *RHS_mat);
+        CHECK_CUDA(cudaDeviceSynchronize()); // slower but for debugging
+        printf("\tdone with assembly FC matrix from step 5\n");
+        // apply bcs to P_rhs matrix
+        RHS_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
+        RHS_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
         
-        // // apply bcs to standard prolongator then add it into P_rhs
-        // // RHS_mat.add(lam, P0_mat); // make new add method here for P_rhs += lam * P_0
-        // printf("Step 6 - compute full RHS including lam*P_0 term\n");
-        // auto bsr_data = P_mat->getBsrData();
-        // int P_nnzb = bsr_data.nnzb, block_dim = bsr_data.block_dim;
-        // T *d_P_vals = P_mat->getPtr(), *d_RHS_vals = RHS_mat->getPtr();
-        // k_add_colored_submat_PFP<T>
-        //     <<<P_nnzb, 64>>>(P_nnzb, block_dim, lam, 0, d_P_vals, d_RHS_vals);
+        // apply bcs to standard prolongator then add it into P_rhs
+        // RHS_mat.add(lam, P0_mat); // make new add method here for P_rhs += lam * P_0
+        printf("Step 6 - compute full RHS including lam*P_0 term\n");
+        auto bsr_data = P_mat->getBsrData();
+        int P_nnzb = bsr_data.nnzb, block_dim = bsr_data.block_dim;
+        T *d_P_vals = P_mat->getPtr(), *d_RHS_vals = RHS_mat->getPtr();
+        k_add_colored_submat_PFP<T>
+            <<<P_nnzb, 64>>>(P_nnzb, block_dim, lam, 0, d_P_vals, d_RHS_vals);
 
         // do jacobi smoothing of P_0 => P matrix using kmat and rhs
         printf("Step 7 - perform block-Jacobi smoothing using locking energy for the prolongator\n");
-        // T omega_p = 0.5;
-        // T omega_p = 0.3; // omega for prolongation
-        // T omega_p = 0.1;
-
-        T omega_p = 0.9;
+        // T omega_p = 0.5; // omega for prolongation
+        // T omega_p = 0.3;
+        T omega_p = 0.9; // if spectral radius defined below
         auto lock_smoother = new LockingSmoother(cublasHandle, cusparseHandle, f_assembler, f_kmat, omega_p);
         // do CG-Lanczos for spectral radius
         lock_smoother->setup_cg_lanczos(grids[i].d_defect, 10);
@@ -303,6 +302,22 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start1 = std::chrono::high_resolution_clock::now();
 
+    if (is_kcycle) {
+        int nlevels = kmg->grids.size();
+        for (int i = 0; i < nlevels; i++) {
+            kmg->grids[i].smoother->factor();
+        } 
+    } else {
+        int nlevels = mg->grids.size();
+        for (int i = 0; i < nlevels; i++) {
+            mg->grids[i].smoother->factor();
+        } 
+    }
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end_factor = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> asw_factor_time = end_factor - start1;
+    printf("ASW factor time %.4e\n", asw_factor_time.count());
+
     // fastest is K-cycle usually
     if (cycle_type == "V") {
         mg->vcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); //(good option)
@@ -314,6 +329,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         kmg->solve(); // best
     }
 
+    CHECK_CUDA(cudaDeviceSynchronize());
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start1;
     int ndof = cycle_type == "K" ? kmg->grids[0].N : mg->grids[0].N;
@@ -339,13 +355,14 @@ void direct_solve(int nxe, double SR) {
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
 
-    int nhe = nxe;
-    double L = 1.0, R = 0.5, thick = L / SR;
-    double E = 70e9, nu = 0.3;
-    // double rho = 2500, ys = 350e6;
-    bool imperfection = false; // option for geom imperfection
-    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-    auto assembler = createCylinderAssembler<Assembler>(nxe, nhe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
+    int c_nxe = nxe;
+    int c_nye = c_nxe;
+    double Lx = 1.0, Ly = 1.0, E = 70e9, nu = 0.3, thick = 1.0 / SR, rho = 2500, ys = 350e6;
+    int nxe_per_comp = c_nxe / 4, nye_per_comp = c_nye/4; // for now (should have 25 grids)
+    auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+    double Q = 1.0; // load magnitude
+    T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+    printf("making grid with nxe %d\n", c_nxe);
 
     // BSR symbolic factorization
     // must pass by ref to not corrupt pointers
@@ -355,11 +372,6 @@ void direct_solve(int nxe, double SR) {
     bsr_data.AMD_reordering();
     bsr_data.compute_full_LU_pattern(fillin, print);
     assembler.moveBsrDataToDevice();
-
-    // get the loads
-    constexpr bool compressive = false;
-    double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderLoads<T, Basis, Physics, compressive>(nxe, nhe, L, R, Q);
 
     auto loads = assembler.createVarsVec(my_loads);
     assembler.apply_bcs(loads);
@@ -414,9 +426,9 @@ int main(int argc, char **argv) {
     double SR = 1e3; // default
     double omega = 0.2; // smaller omega for ASW
 
-    int nsmooth = 4; // typically faster right now
+    int nsmooth = 2; // typically faster right now
     int ninnercyc = 1;
-    int nsmooth_mat = 2; // more iterations not converging yet
+    int nsmooth_mat = 3; // more iterations not converging yet
     // int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)
     std::string cycle_type = "K"; // "V", "F", "W", "K"
     // std::string cycle_type = "V"; // "V", "F", "W", "K"
@@ -495,7 +507,7 @@ int main(int argc, char **argv) {
     using Data = ShellIsotropicData<T, has_ref_axis>;
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
-    printf("cylinder mesh with MITC4-EP elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
+    printf("plate mesh with MITC4-LP elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
     gatekeeper_method<T, Assembler>(is_multigrid, nxe, SR, nsmooth, ninnercyc, nsmooth_mat, omega, cycle_type);

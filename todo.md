@@ -15,17 +15,24 @@
 
 - [ ] see if new discretization / better smooth prolong can speedup wing + cylinder cases (more energy-smooth prolong and less V(k,k) smooth steps needed)
 
+## Put TACS GPU into main TACS
+
+* before putting into TACS
+   - [ ] fix mem leaks and/or deallocate host vecs, etc.
+   - [ ] add quad-GMG CF class (uses one BDF and constructs coarser meshes by itself)
+
+- [ ] make interface class (separate folder)
+- [ ] move data from main TACS assembler into Element assemblers
+- [ ] maybe make overall GPU assembler to help 
+- [ ] just post simple shell example first (MITC-EP with K-GMG-ASW)
 
 ## Wing + Cylinder High Scalability
-
-- [ ] add 3x3 node-support based smoother to GPU using Cublas and node support sparsity from kmat (so general for cylinder / wingbox)
-   - [ ] see if better performance on wing case (better smoother)
-   - [ ] see if better perf and more stable conv for cylinder
 
 - [ ] performance tuning of K-GMG-ASW solver
    - [ ] include all solve components + do percentage + bottleneck checks
    - [ ] better / faster than GS at thin shell / no?
-   - [ ] check operator complexity of P0 and K*P0 (maybe P0 enough fillin for wing cause of my nearest nodes and elems thing)
+   - [x] check operator complexity of P0 and K*P0 (maybe P0 enough fillin for wing cause of my nearest nodes and elems thing)
+      * no fillin didn't help..
    - [ ] check if + how to fix speedup from RTX 3060 to Milan A100 GPU
 
 - [ ] implement multi-GPU for K-GMG-ASW solver
@@ -54,3 +61,12 @@
    - [ ] different coarsening methods + CF, RN, SA
    - [ ] good in thin plate, cylinder / wing or no?
    - [ ] machine learning coarsening methods?
+
+
+## Finished Tasks
+
+- [x] add 3x3 node-support based smoother to GPU using Cublas and node support sparsity from kmat (so general for cylinder / wingbox)
+   - [x] see if better performance on wing case (better smoother) => not by much and way more memory
+   - [x] see if better perf and more stable conv for cylinder => nope
+   * there is horrible V and W-cycle convergence in the wing case at SR = 1e3 (only with K-cycle it is somewhat reasonable) => more investigation? Try 3x3 node smoother
+   - [x] see if better conv with the new smoother?

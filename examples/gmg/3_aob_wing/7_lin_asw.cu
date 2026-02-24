@@ -66,7 +66,7 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
     using Physics = typename Assembler::Phys;
     using Data = typename Physics::Data;
     // using Smoother = ChebyshevPolynomialSmoother<Assembler>;
-    using Smoother = UnstructuredQuadAdditiveSchwarzSmoother<T, Assembler>;
+    using Smoother = UnstructuredQuadElementAdditiveSchwarzSmoother<T, Assembler>;
     // const bool is_bsr = true; // need this one if want to smooth prolongation
     const bool is_bsr = false; // no difference in intra-nodal (default old working prolong)
     using Prolongation = UnstructuredProlongation<Assembler, Basis, is_bsr>; 
@@ -164,7 +164,7 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
         CHECK_CUDA(cudaDeviceSynchronize());
         auto enda = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> assembly_time = enda - starta;
-        printf("\tassemble kmat time %.2e\n", assembly_time.count());
+        printf("\tassemble kmat in %.2e sec\n", assembly_time.count());
 
         // build smoother and prolongations
         // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, omega, ORDER); // this was chebyshev
