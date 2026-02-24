@@ -168,7 +168,6 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
     auto end0 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> startup_time = end0 - start0;
 
-    auto start1 = std::chrono::high_resolution_clock::now();
     int pre_smooth = nsmooth, post_smooth = nsmooth; // need a little extra smoothing on cylinder (compare to plate).. (cause of curvature I think..)
     bool print = true;
     // bool print = false;
@@ -184,6 +183,26 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
 
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start1 = std::chrono::high_resolution_clock::now();
+
+    if (is_kcycle) {
+        int nlevels = kmg->grids.size();
+        for (int i = 0; i < nlevels; i++) {
+            kmg->grids[i].smoother->factor();
+        } 
+    } else {
+        int nlevels = mg->grids.size();
+        for (int i = 0; i < nlevels; i++) {
+            mg->grids[i].smoother->factor();
+        } 
+    }
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end_factor = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> asw_factor_time = end_factor - start1;
+    printf("ASW factor time %.4e\n", asw_factor_time.count());
+
     // fastest is K-cycle usually
     if (cycle_type == "V") {
         mg->vcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); //(good option)
@@ -195,6 +214,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
         kmg->solve(); // best
     }
 
+    CHECK_CUDA(cudaDeviceSynchronize());
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start1;
     int ndof = cycle_type == "K" ? kmg->grids[0].N : mg->grids[0].N;
@@ -262,6 +282,7 @@ void direct_solve(int nxe, double SR) {
     // solve the linear system
     CUSPARSE::direct_LU_solve(kmat, loads, soln);
 
+    CHECK_CUDA(cudaDeviceSynchronize());
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start1;
 
@@ -287,8 +308,8 @@ void gatekeeper_method(bool is_multigrid, int nxe, double SR, int nsmooth, int n
 int main(int argc, char **argv) {
     // input ----------
     bool is_multigrid = true;
-    // int nxe = 256; // default value
-    int nxe = 32; // for comparison with python GMG
+    int nxe = 256; // default value
+    // int nxe = 32; // for comparison with python GMG
     double SR = 100.0; // default
     // int n_vcycles = 50;
     double omega = 0.2; // smaller omega for ASW
@@ -375,7 +396,7 @@ int main(int argc, char **argv) {
     using Data = ShellIsotropicData<T, has_ref_axis>;
     using Physics = IsotropicShell<T, Data, is_nonlinear>;
 
-    printf("cylinder mesh with %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
+    printf("plate mesh with %s elements, nxe %d and SR %.2e\n------------\n", elem_type.c_str(), nxe, SR);
     if (elem_type == "MITC4") {
         using Basis = LagrangeQuadBasis<T, Quad, 1>;
         using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
