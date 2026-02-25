@@ -393,9 +393,9 @@ int main(int argc, char **argv) {
     bool is_multigrid = true;
     int level = 3;
     double SR = 1e3; // default
-    double omega = 0.15; // smaller omega for ASW
+    double omega = 0.2; // smaller omega for ASW
 
-    int nsmooth = 2; // typically faster right now
+    int nsmooth = 4; // typically faster right now
     int ninnercyc = 1;
     int nsmooth_mat = 1; // more iterations not converging yet
     // int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)
