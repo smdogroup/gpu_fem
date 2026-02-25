@@ -2,10 +2,13 @@
 
 ## Thickness-Ind Multigrid
 
+* NOTE : line search needs to be very small (1e-3 updates for wing to get best performance) => smoother doing heavy work, multigrid barely anything
+
 - [ ] further investigate cylinder case
    - [ ] plot locking strains coarse to fine on small mesh, see if the math makes sense or not => can a prolongation matrix exist that maps zero to zero locking? Or we need C1-cont / new element?
    - [ ] look at strain manifold and math, deeper understanding. Issue that C0-cont, do tying strains match on edges?
    * see lit review section on Kirchoff IGA, mem locking and advanced element discretization methods
+   * back to cylinder python examples.. in adv_elem folder
 
 - [ ] further lit review on curved Reissner-Mindlin shells
    - [ ] read book on shell theory
@@ -63,6 +66,8 @@
    - [ ] machine learning coarsening methods?
 
 
+=============================================
+=============================================
 ## Finished Tasks
 
 - [x] add 3x3 node-support based smoother to GPU using Cublas and node support sparsity from kmat (so general for cylinder / wingbox)

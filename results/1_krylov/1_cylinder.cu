@@ -318,6 +318,8 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
 
+    smoother->factor(); // ASW factor time
+
     // get initial residual
     T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
 
