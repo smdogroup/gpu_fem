@@ -85,6 +85,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
     MG *mg;
     KMG *kmg;
 
+    // TODO : maybe take out line search bounds here (makes wing 2x as slow)
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     T omegaLS_min = 1e-2, omegaLS_max = 4.0;
 

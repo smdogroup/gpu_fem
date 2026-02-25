@@ -28,12 +28,6 @@
 
 ## Wing + Cylinder High Scalability
 
-- [ ] why does extra energy-smoothing steps (MITC-EP) for plate, cylinder / wingbox not converge right now? need lower omega?
-   - [ ] what is happening with it? check fine and coarse BCs (check if those messed up)
-   - [ ] comparing examples/adv_elems/4_wing/2_mitc_ep2.cu and examples/gmg/3_aob_wing (unstruct smooth(0) and unstruct prolong no bsr, the result is much different.. so baseline prolongator doesn't match CSR version? isn't good enough?). Fixing this may help stabilize the convergence of energy-smoothing..
-   - [ ] fix difference in 
-   - [ ] performance tune PT matrix and/or double storage and copy P into PT.. for faster performance
-
 - [ ] performance tuning of K-GMG-ASW solver
    - [ ] include all solve components + do percentage + bottleneck checks
    - [ ] better / faster than GS at thin shell / no?
@@ -76,3 +70,11 @@
    - [x] see if better perf and more stable conv for cylinder => nope
    * there is horrible V and W-cycle convergence in the wing case at SR = 1e3 (only with K-cycle it is somewhat reasonable) => more investigation? Try 3x3 node smoother
    - [x] see if better conv with the new smoother?
+   * a bit surprised, not very helpful on wing case (guess because prolong is still very bad?), and this smoother is more expensive to apply, 4x as much storage too (near direct-LU storage)
+
+- [x] why does extra energy-smoothing steps (MITC-EP) for plate, cylinder / wingbox not converge right now? need lower omega?
+   - [x] what is happening with it? check fine and coarse BCs (check if those messed up) => it's line search bounds, see below
+   - [x] comparing examples/adv_elems/4_wing/2_mitc_ep2.cu and examples/gmg/3_aob_wing (unstruct smooth(0) and unstruct prolong no bsr, the result is much different.. so baseline prolongator doesn't match CSR version? isn't good enough?). Fixing this may help stabilize the convergence of energy-smoothing.. 
+   - [x] performance tune PT matrix and/or double storage and copy P into PT.. for faster performance (not bottleneck)
+   * soln is line search params (made big difference in wing case 2x speedup with removing line search bounds at high SR)
+   * NOTE : csr prolong and no energy smooth with ASW is faster for wing case.. cause energy smoothing doesn't help (strain subspaces in prolong not really compatible, see work on elements and MITC4). Plate matters a lot..
