@@ -12,6 +12,8 @@
 - [ ] further investigate cylinder case
    - [ ] plot locking strains coarse to fine on small mesh, see if the math makes sense or not => can a prolongation matrix exist that maps zero to zero locking? Or we need C1-cont / new element?
    - [ ] look at strain manifold and math, deeper understanding. Issue that C0-cont, do tying strains match on edges?
+   - [ ] check the rigid body modes in P and P^T are respected... tricky on cylinder case? Is that what is degrading perf that we need orthog projector (and plate case it is more benign and doesn't depart from it)?
+      * maybe we can't use orthog projector easily for GMG because we would need to orthog project fine and coarse for GMG (while AMG just needs fine projector)?
    * see lit review section on Kirchoff IGA, mem locking and advanced element discretization methods
    * back to cylinder python examples.. in adv_elem folder
 
