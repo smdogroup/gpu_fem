@@ -12,7 +12,7 @@
 
 - [ ] further lit review on curved Reissner-Mindlin shells
    - [ ] read book on shell theory
-   - [ ] read book on manifolds
+   - [ ] read book on manifolds and differential forms
    - [ ] read book on IGA
    - [ ] compile various shell theory solution methods (for curved surf)
    - [ ] read up on and implement Nedelec H1, H-div, H-curl and L2 elements (Seiyon), see if they can do them on curved surfaces. May learn valuable info
