@@ -13,8 +13,9 @@ MITC-LP vs MITC-EP
     * REVIEW THIS, auto locking-free elements for shells, may solved mem locking too? 
 - [ ] paper on conforming shells 2025 - [THE HELLAN–HERRMANN–JOHNSON AND TDNNS METHOD FOR LINEAR AND NONLINEAR SHELLS](https://arxiv.org/pdf/2304.13806)
     * may have solved mem locking?
+- [ ] [Avoiding membrane locking with Regge interpolation](https://www.sciencedirect.com/science/article/pii/S004578252030709X)
 - [ ] NGsolve mixed finite element library - https://jschoeberl.github.io/iFEM/plates_shells/4_rollup.html
-
+- [ ] [Finite element discretizations of curvature tensors](https://meetings.ams.org/math/jmm2024/meetingapp.cgi/Paper/29833)
 
 ## Standard Shells
 - [ ] [On a stress resultant geometrically exact shell model. Part I: Formulation and optimal parametrization](https://www.sciencedirect.com/science/article/pii/0045782589900029)
