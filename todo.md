@@ -19,6 +19,8 @@
    - [ ] read up on Kirchoff-IGA shells and other manifold methods
 
 - [ ] see if new discretization / better smooth prolong can speedup wing + cylinder cases (more energy-smooth prolong and less V(k,k) smooth steps needed)
+- [ ] how to discretize cylinder with 2nd order IGA (see IGA book)
+- [ ] maybe do T-splines
 
 ## Put TACS GPU into main TACS
 
