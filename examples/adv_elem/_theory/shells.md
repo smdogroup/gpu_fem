@@ -8,6 +8,14 @@ MITC element (mixed interpolation of tensorial components)
 MITC-LP vs MITC-EP
 - [x] new method of smoothing locking energy only vs global energy in prolongator, see [Energy Optimization of Algebraic Multigrid Bases](https://link.springer.com/article/10.1007/s006070050022) 
 
+## New Nedelec style Shells (already published)
+- [ ] 2024 Phd thesis - [Mixed Finite Element Methods For Nonlinear Continuum Mechanics And Shells](https://repositum.tuwien.at/handle/20.500.12708/17043)
+    * REVIEW THIS, auto locking-free elements for shells, may solved mem locking too? 
+- [ ] paper on conforming shells 2025 - [THE HELLAN–HERRMANN–JOHNSON AND TDNNS METHOD FOR LINEAR AND NONLINEAR SHELLS](https://arxiv.org/pdf/2304.13806)
+    * may have solved mem locking?
+- [ ] NGsolve mixed finite element library - https://jschoeberl.github.io/iFEM/plates_shells/4_rollup.html
+
+
 ## Standard Shells
 - [ ] [On a stress resultant geometrically exact shell model. Part I: Formulation and optimal parametrization](https://www.sciencedirect.com/science/article/pii/0045782589900029)
 - [ ] [On a stress resultant geometrically exact shell model. Part II: The linear theory; Computational aspects](https://www.sciencedirect.com/science/article/pii/0045782589900984)
@@ -54,3 +62,6 @@ Mechanics and Engineering, vol. 424, p. 116 869, 2024.
 - [ ] J. Kiendl, K.-U. Bletzinger, J. Linhard, and R. W¨uchner, “Isogeometric shell analysis
 with kirchhoff–love elements,” Computer Methods in Applied Mechanics and Engineering,
 vol. 198, no. 49, pp. 3902–3914, 2009.
+
+## Other
+- [ ] [A four-field mixed formulation for incompressible finite elasticity](https://www.researchgate.net/publication/389547895_A_four-field_mixed_formulation_for_incompressible_finite_elasticity)
