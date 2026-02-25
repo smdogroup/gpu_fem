@@ -3,7 +3,6 @@
 ## Thickness-Ind Multigrid
 
 * NOTE : line search needs to be very small (1e-3 updates for wing to get best performance) => smoother doing heavy work, multigrid barely anything
-- [ ] add axial fraction and try line search again of baseline standard prolongator for beam, cylinder (see if still get good speedup to that, fair comparison)
 
 - [ ] further investigate cylinder case
    - [ ] plot locking strains coarse to fine on small mesh, see if the math makes sense or not => can a prolongation matrix exist that maps zero to zero locking? Or we need C1-cont / new element?
@@ -15,6 +14,7 @@
    - [ ] read book on shell theory
    - [ ] read book on manifolds and differential forms
    - [ ] read book on IGA
+   - [ ] find papers on C1-continuous Reissner-Mindlin vs Kirchoff shells
    - [ ] compile various shell theory solution methods (for curved surf)
    - [ ] read up on and implement Nedelec H1, H-div, H-curl and L2 elements (Seiyon), see if they can do them on curved surfaces. May learn valuable info
    - [ ] read up on Kirchoff-IGA shells and other manifold methods
@@ -22,6 +22,7 @@
 - [ ] see if new discretization / better smooth prolong can speedup wing + cylinder cases (more energy-smooth prolong and less V(k,k) smooth steps needed)
 - [ ] how to discretize cylinder with 2nd order IGA (see IGA book)
 - [ ] maybe do T-splines
+- [ ] add axial fraction and try line search again of baseline standard prolongator for beam, cylinder (see if still get good speedup to that, fair comparison)
 
 ## Put TACS GPU into main TACS
 
