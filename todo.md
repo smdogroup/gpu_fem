@@ -4,6 +4,11 @@
 
 * NOTE : line search needs to be very small (1e-3 updates for wing to get best performance) => smoother doing heavy work, multigrid barely anything
 
+- [ ] add axial fraction and try line search again of baseline standard prolongator for beam, cylinder (see if still get good speedup to that, fair comparison)
+   - [ ] also try NL beam, plate see if my EP and LP methods still help
+- [ ] try subgrid method for beams + plates see 3_cylinder/theory
+- [ ] try AMGe again get refs for that (comparison to AMG methods)
+
 - [ ] further investigate cylinder case
    - [ ] plot locking strains coarse to fine on small mesh, see if the math makes sense or not => can a prolongation matrix exist that maps zero to zero locking? Or we need C1-cont / new element?
    - [ ] look at strain manifold and math, deeper understanding. Issue that C0-cont, do tying strains match on edges?
@@ -22,7 +27,13 @@
 - [ ] see if new discretization / better smooth prolong can speedup wing + cylinder cases (more energy-smooth prolong and less V(k,k) smooth steps needed)
 - [ ] how to discretize cylinder with 2nd order IGA (see IGA book)
 - [ ] maybe do T-splines
-- [ ] add axial fraction and try line search again of baseline standard prolongator for beam, cylinder (see if still get good speedup to that, fair comparison)
+
+## AMG methods
+- [ ] try energy min GMG/AMG like these papers:
+   - [ ] [PARALLEL ENERGY-MINIMIZATION PROLONGATION FOR ALGEBRAIC MULTIGRID](https://lukeo.cs.illinois.edu/files/2023_JaFrScOl_paramg.pdf)
+   - [ ] [AN ENERGY-MINIMIZING INTERPOLATION FOR ROBUST MULTIGRID METHODS](https://cs.uwaterloo.ca/~jwlwan/papers/WanChanSmith00.pdf)
+   - [ ] [A GENERAL INTERPOLATION STRATEGY FOR ALGEBRAIC MULTIGRID USING ENERGY-MINIMIZATION](https://www.unm.edu/~jbschroder/docs/OlSc2011.pdf)
+- [ ] look at AMGe again?
 
 ## Put TACS GPU into main TACS
 
@@ -62,6 +73,9 @@
       4. stiffened AOB wing
       5. maybe HSCT wing
 
+## Writing 
+- [ ] add all my new lit review in the examples/adv_elems/_theory/*.md markdown to the thesis and/or journal paper
+- [ ] also add all lit review and results from my Scitech paper to my thesis
 
 ## Other (optional/maybe)
 

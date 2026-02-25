@@ -1,30 +1,21 @@
 # Advanced Shell Elements
 
-
-## Plates
-* don't spend too much time going over plates again (great performance), but do go over this
-- [ ] subgrid formulation is interesting [A variational multiscale stabilized finite element formulation for Reissner–Mindlin plates and Timoshenko beams](https://upcommons.upc.edu/server/api/core/bitstreams/73fce476-07ab-4ea8-84b0-3552f852f9e7/content)
-- [ ] [Developments of Mindlin-Reissner Plate Elements](https://onlinelibrary.wiley.com/doi/10.1155/2015/456740)
-- [ ] D. Boffi, F. Brezzi, and M. Fortin, Mixed Finite Element Methods and Applications (Springer
-Series in Computational Mathematics), 1st ed. Berlin, Heidelberg: Springer Berlin Heidel-
-berg, 2013, vol. 44, isbn: 978-3-642-36518-8.
-- [ ] [Numerical Approximation of Mindlin-Reissner Plates](https://www.jstor.org/stable/2008086?seq=1)
-- [ ] [Least-squares Finite Element Approximations for the Reissner–Mindlin Plate](https://www.math.purdue.edu/~caiz/pdf-paper/99CaYeZh.pdf)
-- [ ] [Preconditioning discrete approximations of the Reissner-Mindlin plate model]()
-- [ ] [An edge-based smoothed finite element method (ES-FEM) with stabilized discrete shear gap technique for analysis of Reissner–Mindlin plates](https://www.sciencedirect.com/science/article/pii/S0045782509002990)
-- [ ] ["An isogeometric method for the Reissner-Mindlin plate bending problem"](https://www.sciencedirect.com/science/article/abs/pii/S0045782511003215)
-
+## Elements library
+DeRham IGA element (DRIG)
+- [x] Benzaken plate - [Multigrid Methods for Isogeometric Thin Plate Discretizations](https://grandmaster.colorado.edu/copper/2016/StudentCompetition/Benzaken_Isogeometric_Multigrid.pdf)
+MITC element (mixed interpolation of tensorial components)
+- [x] MITC4 element [A new MITC4+ shell element](https://www.sciencedirect.com/science/article/pii/S0045794916309464)
+MITC-LP vs MITC-EP
+- [x] new method of smoothing locking energy only vs global energy in prolongator, see [Energy Optimization of Algebraic Multigrid Bases](https://link.springer.com/article/10.1007/s006070050022) 
 
 ## Standard Shells
-
-- [ ] TODO : get simo and other shell theory papers (see which include Christoffels and which don't, Dr. K's does not?)
+- [ ] [On a stress resultant geometrically exact shell model. Part I: Formulation and optimal parametrization](https://www.sciencedirect.com/science/article/pii/0045782589900029)
+- [ ] [On a stress resultant geometrically exact shell model. Part II: The linear theory; Computational aspects](https://www.sciencedirect.com/science/article/pii/0045782589900984)
+- [ ] [On a stress resultant geometrically exact shell model. Part III: Computational aspects of the nonlinear theory](https://www.sciencedirect.com/science/article/pii/0045782590900943)
 - [ ] D. Chapelle and K.-J. Bathe, The Finite Element Analysis of Shells: Fundamentals (Compu-
 tational Fluid and Solid Mechanics), 2nd ed. Berlin, Heidelberg: Springer Berlin Heidelberg,
 2011, isbn: 978-3-642-16408-8
 
-## Multigrid with Shells?
-- [ ] Benzaken plate - [Multigrid Methods for Isogeometric Thin Plate Discretizations](https://grandmaster.colorado.edu/copper/2016/StudentCompetition/Benzaken_Isogeometric_Multigrid.pdf)
-    - [ ] write down shell theories in folder / markdown below
 
 ## C1-continuous Mindlin Shells
 
@@ -38,7 +29,8 @@ tational Fluid and Solid Mechanics), 2nd ed. Berlin, Heidelberg: Springer Berlin
 
 - [ ] [An isogeometric Reissner-Mindlin shell element based on Bézier dual basis functions: overcoming locking and improved coarse mesh accuracy](https://coreform.com/papers/isogeometric_reissner-mindlin_element_20200602.pdf)
     - [ ] this is great paper to look at has continuous vs. discrete I want to implement all these shell types.. IGA
-    
+
+- [ ] [Two-field formulations for isogeometric Reissner–Mindlin plates and shells with global and local condensation](https://link.springer.com/article/10.1007/s00466-021-02080-8)
 - [ ] [Isogeometric shell analysis: The Reissner–Mindlin shell](https://www.sciencedirect.com/science/article/pii/S0045782509001820)
 - [ ] [Adaptive isogeometric analysis by local h-refinement with T-splines](https://www.sciencedirect.com/science/article/pii/S0045782508002569)
 - [ ] [Isogeometric analysis using T-splines](https://www.sciencedirect.com/science/article/pii/S0045782509000875)
@@ -51,6 +43,9 @@ pp. 1–21, 2022.
 of transverse shear locking in isogeometric reissner–mindlin shell analysis,” Computer
 Methods in Applied Mechanics and Engineering, vol. 354, pp. 850–870, 2019.
 - [ ] [Isogeometric Reissner–Mindlin shell analysis with exactly calculated director vectors](https://kluedo.ub.rptu.de/frontdoor/deliver/index/docId/4447/file/Dornisch+et+al.+-+Isogeometric+Reissner-Mindlin+shell+analysis+with+exactly+calculated+director+vectors.pdf)
+
+## T-spline isogeometric
+- [ ] T-spline for uCRM wingbox [Geometrically consistent static aeroelastic simulation using isogeometric analysis](https://www.sciencedirect.com/science/article/pii/S0045782518302779)
 
 ## Isogeometric Kirchoff Shells
 - [ ] R. A. Sauer, Z. Zou, and T. J. Hughes, “A simple and efficient hybrid discretization approach
