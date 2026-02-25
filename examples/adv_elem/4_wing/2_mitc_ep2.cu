@@ -395,7 +395,7 @@ int main(int argc, char **argv) {
     double SR = 1e3; // default
     double omega = 0.15; // smaller omega for ASW
 
-    int nsmooth = 4; // typically faster right now
+    int nsmooth = 2; // typically faster right now
     int ninnercyc = 1;
     int nsmooth_mat = 1; // more iterations not converging yet
     // int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)
