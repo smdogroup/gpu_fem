@@ -199,8 +199,6 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
 
     T init_resid_nrm = is_kcycle ? kmg->grids[0].getResidNorm() : mg->grids[0].getResidNorm();
 
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto start1 = std::chrono::high_resolution_clock::now();
     printf("starting %s cycle solve\n", cycle_type.c_str());
     int pre_smooth = nsmooth, post_smooth = nsmooth;
     // best was V(4,4) before
@@ -220,6 +218,25 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, 
             n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
     }
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start1 = std::chrono::high_resolution_clock::now();
+
+    if (is_kcycle) {
+        int nlevels = kmg->grids.size();
+        for (int i = 0; i < nlevels; i++) {
+            kmg->grids[i].smoother->factor();
+        } 
+    } else {
+        int nlevels = mg->grids.size();
+        for (int i = 0; i < nlevels; i++) {
+            mg->grids[i].smoother->factor();
+        } 
+    }
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end_factor = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> asw_factor_time = end_factor - start1;
+    printf("ASW factor time %.4e\n", asw_factor_time.count());
 
     // fastest is K-cycle usually
     if (cycle_type == "V") {

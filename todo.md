@@ -20,16 +20,19 @@
 * before putting into TACS
    - [ ] fix mem leaks and/or deallocate host vecs, etc.
    - [ ] add quad-GMG CF class (uses one BDF and constructs coarser meshes by itself)
-
-- [ ] make interface class (separate folder)
-- [ ] move data from main TACS assembler into Element assemblers
-- [ ] maybe make overall GPU assembler to help 
-- [ ] just post simple shell example first (MITC-EP with K-GMG-ASW)
+- [ ] simple shell example with GPU into main TACS
+   - [ ] make interface class (separate folder)
+   - [ ] move data from main TACS assembler into Element assemblers
+   - [ ] maybe make overall GPU assembler to help 
+   - [ ] just post simple shell example first (MITC-EP with K-GMG-ASW)
 
 ## Wing + Cylinder High Scalability
 
 - [ ] why does extra energy-smoothing steps (MITC-EP) for plate, cylinder / wingbox not converge right now? need lower omega?
    - [ ] what is happening with it? check fine and coarse BCs (check if those messed up)
+   - [ ] comparing examples/adv_elems/4_wing/2_mitc_ep2.cu and examples/gmg/3_aob_wing (unstruct smooth(0) and unstruct prolong no bsr, the result is much different.. so baseline prolongator doesn't match CSR version? isn't good enough?). Fixing this may help stabilize the convergence of energy-smoothing..
+   - [ ] fix difference in 
+   - [ ] performance tune PT matrix and/or double storage and copy P into PT.. for faster performance
 
 - [ ] performance tuning of K-GMG-ASW solver
    - [ ] include all solve components + do percentage + bottleneck checks

@@ -142,32 +142,32 @@ __global__ static void k_restrict_mat_assembly(const int *d_coarse_iperm, const 
 
 template <typename T>
 __global__ static void k_bsrmv_transpose(const int nnzb, const int block_dim, const int *rows, const int *cols, 
-        const T *vals, const T *fine_vec_in, T *coarse_vec_out) {
-        /* transpose product like u_c = P^T * u_f (since cusparse doesn't have bsrmv_transpose option) */
-        // this way we don't have to store a transposed copy R = P^T
-        // assumes vectors are in solve order (so no permutations during product)
-        // also the fact we use rows instead of rowp (may be more efficient than cusparse (less reads))
+    const T *vals, const T *fine_vec_in, T *coarse_vec_out) {
+    /* transpose product like u_c = P^T * u_f (since cusparse doesn't have bsrmv_transpose option) */
+    // this way we don't have to store a transposed copy R = P^T
+    // assumes vectors are in solve order (so no permutations during product)
+    // also the fact we use rows instead of rowp (may be more efficient than cusparse (less reads))
 
-        // parallelizes over each product individually
-        // can explore different methods later
-        int block_dim2 = block_dim * block_dim;
-        int tid = threadIdx.x + blockIdx.x * blockDim.x;
-        int nprods = nnzb * block_dim2;
-        if (tid >= nprods) return;
+    // parallelizes over each product individually
+    // can explore different methods later
+    int block_dim2 = block_dim * block_dim;
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int nprods = nnzb * block_dim2;
+    if (tid >= nprods) return;
 
-        // loops through Pmat in BSR order (during product)
-        int block_id = tid / block_dim2;
-        int block_row = rows[block_id], block_col = cols[block_id];
-        int ii_prod = tid % block_dim2; // which of the block_dim^2 products we do for this thread
-        int ii_fine = ii_prod / block_dim, ii_coarse = ii_prod % block_dim; // not sure which order best here yet
+    // loops through Pmat in BSR order (during product)
+    int block_id = tid / block_dim2;
+    int block_row = rows[block_id], block_col = cols[block_id];
+    int ii_prod = tid % block_dim2; // which of the block_dim^2 products we do for this thread
+    int ii_fine = ii_prod / block_dim, ii_coarse = ii_prod % block_dim; // not sure which order best here yet
 
-        // get the fine vec and mat value for this thread
-        T f_val = fine_vec_in[block_dim * block_row + ii_fine];
-        T mat_val = vals[block_dim2 * block_id + ii_prod];
+    // get the fine vec and mat value for this thread
+    T f_val = fine_vec_in[block_dim * block_row + ii_fine];
+    T mat_val = vals[block_dim2 * block_id + ii_prod];
 
-        // now add into the output
-        atomicAdd(&coarse_vec_out[block_dim * block_col + ii_coarse], mat_val * f_val);
-    }
+    // now add into the output
+    atomicAdd(&coarse_vec_out[block_dim * block_col + ii_coarse], mat_val * f_val);
+}
 
 template <typename T>
 __global__ static void k_csr_mat_vec(const int nnzb, const int block_dim, const int *d_rows, const int *d_cols, const T *d_vals, const T *vec_in, T *vec_out) {
@@ -205,4 +205,18 @@ __global__ static void k_vec_set(int N, T val, T *vec) {
     if (tid < N) {
         vec[tid] = val;
     }
+}
+
+template <typename T>
+__global__ static void k_copy_P_to_PT(const int P_nnzb, const int block_dim, 
+    const int *d_block_P_to_PT_map, const T *d_P_vals, T *d_PT_vals) {
+    int block_dim2 = block_dim * block_dim;
+    int tid = threadIdx.x + blockDim.x * blockIdx.x;
+    int nvals = P_nnzb * block_dim2;
+    if (tid >= nvals) return;
+
+    int PT_block_ind = tid / block_dim2;
+    int inner_ind = tid % block_dim2;
+    int P_block_ind = d_block_P_to_PT_map[PT_block_ind]; // see bsr_data.h this is convention
+    d_PT_vals[block_dim2 * PT_block_ind + inner_ind] = d_P_vals[block_dim2 * P_block_ind + inner_ind];
 }

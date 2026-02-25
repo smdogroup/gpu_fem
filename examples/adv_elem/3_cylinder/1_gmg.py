@@ -48,6 +48,7 @@ parser.add_argument("--width", type=float, default=np.pi / 2.0, help="cylinder w
 parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
 # parser.add_argument("--solve", type=str, default='direct', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
+parser.add_argument("--nprolong", type=int, default=10, help="number of smoothing steps for prolongator")
 parser.add_argument("--omega", type=float, default=1.0, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='supp_asw', help="--smooth : [gs, asw]")
 parser.add_argument("--plot", type=str, default=None, help="--plot is str : [w, u, v, thx, thy, thz] or None")
@@ -91,7 +92,7 @@ def _wrap_prolong_with_cache(obj, cache_dir=".mg_cache"):
             "elem": args.elem, "nxe": int(obj.nxe),
             "E": 70e9, "nu": 0.3, "thick": float(args.thick),
             "L": float(L), "W": float(args.width), "R": float(R),
-            "clamped": bool(clamped),
+            "clamped": bool(clamped), "nprolong" : int(args.nprolong),
         }, sort_keys=True).encode()).hexdigest()[:16]
 
         os.makedirs(cache_dir, exist_ok=True)
@@ -152,6 +153,7 @@ elif 'mitc' in args.elem:
         # lam=1e-6, omega=0.5,
         # lam=1e-2, omega=0.4,
         lam=1e0, omega=0.4,
+        n_lock_sweeps=args.nprolong,
     )
     ASSEMBLER = StandardCylinderAssembler
     

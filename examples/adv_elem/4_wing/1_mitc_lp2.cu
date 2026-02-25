@@ -84,8 +84,9 @@ void multigrid_solve(MPI_Comm &comm, int level, double SR, int nsmooth, int ninn
     MG *mg;
     KMG *kmg;
 
+    // for some reason better not with LS constraints on wing.. ?
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
-    T omegaLS_min = 1e-2, omegaLS_max = 4.0;
+    // T omegaLS_min = 1e-2, omegaLS_max = 4.0;
 
     cublasHandle_t cublasHandle = NULL;
     CHECK_CUBLAS(cublasCreate(&cublasHandle));

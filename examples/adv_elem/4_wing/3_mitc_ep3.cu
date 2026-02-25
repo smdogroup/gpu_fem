@@ -70,7 +70,8 @@ void multigrid_solve(MPI_Comm &comm, int level, double SR, int nsmooth, int ninn
     using Smoother = UnstructuredQuadSupportAdditiveSchwarzSmoother<T, Assembler>;
     const bool KMAT_FILLIN = true; // do need this
     // const bool KMAT_FILLIN = false;
-    using Prolongation = UnstructuredSmoothProlongation<Assembler, Basis, ProlongSmoother, KMAT_FILLIN>;
+    const bool SEPARATE_PT_STORAGE = false;
+    using Prolongation = UnstructuredSmoothProlongation<Assembler, Basis, ProlongSmoother, KMAT_FILLIN, SEPARATE_PT_STORAGE>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
     using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
@@ -85,6 +86,7 @@ void multigrid_solve(MPI_Comm &comm, int level, double SR, int nsmooth, int ninn
     MG *mg;
     KMG *kmg;
 
+    // better without LS?
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     T omegaLS_min = 1e-2, omegaLS_max = 4.0;
 
@@ -400,9 +402,9 @@ int main(int argc, char **argv) {
     int level = 2;
     double SR = 1e3; // default
     // double omega = 0.2; // smaller omega for ASW
-    double omega = 0.1;
+    double omega = 0.08;
 
-    int nsmooth = 4; // typically faster right now
+    int nsmooth = 2; // typically faster right now
     int ninnercyc = 1;
     int nsmooth_mat = 1; // more iterations not converging yet
     // int ninnercyc = 2; // inner V-cycles to precond K-cycle (ends up being a bit faster here..)

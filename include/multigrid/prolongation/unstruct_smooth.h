@@ -6,7 +6,8 @@
 #include "_unstruct_utils.h"
 #include "_unstructured.cuh"
 
-template <class Assembler_, class Basis_, class Smoother, bool kmat_fillin = true>
+template <class Assembler_, class Basis_, class Smoother, bool KMAT_FILLIN = true,
+          bool SEPARATE_PT_STORAGE = true>
 class UnstructuredSmoothProlongation {
    public:
     using T = double;
@@ -39,6 +40,10 @@ class UnstructuredSmoothProlongation {
         CHECK_CUSPARSE(cusparseCreateMatDescr(&descr_P));
         CHECK_CUSPARSE(cusparseSetMatType(descr_P, CUSPARSE_MATRIX_TYPE_GENERAL));
         CHECK_CUSPARSE(cusparseSetMatIndexBase(descr_P, CUSPARSE_INDEX_BASE_ZERO));
+        descr_PT = 0;
+        CHECK_CUSPARSE(cusparseCreateMatDescr(&descr_PT));
+        CHECK_CUSPARSE(cusparseSetMatType(descr_PT, CUSPARSE_MATRIX_TYPE_GENERAL));
+        CHECK_CUSPARSE(cusparseSetMatIndexBase(descr_PT, CUSPARSE_INDEX_BASE_ZERO));
     }
 
     // nothing (though smoother needs to do matrix-smoothing in some cases)
@@ -69,7 +74,7 @@ class UnstructuredSmoothProlongation {
         d_fine_bcs = fine_assembler.getBCs();
         d_coarse_bcs = coarse_assembler.getBCs();
 
-        // if constexpr (kmat_fillin) {
+        // if constexpr (KMAT_FILLIN) {
         // allocate extra Z matrix storage and Z mat (for smoothing updates)
         auto d_Z_vec = DeviceVec<T>(P_nnzb * block_dim2);
         d_Z_vals = d_Z_vec.getPtr();
@@ -88,6 +93,7 @@ class UnstructuredSmoothProlongation {
 
         // apply bcs to it now
         // printf("apply bcs\n");
+        // const bool ones_on_diag = true;
         const bool ones_on_diag = false;  // just zero out completely for prolong matrix
         prolong_mat->template apply_bc_rows<ones_on_diag>(d_fine_bcs);
         prolong_mat->template apply_bc_cols<ones_on_diag>(d_coarse_bcs);
@@ -104,7 +110,7 @@ class UnstructuredSmoothProlongation {
         prolong_mat = nullptr;
         BsrMat<DeviceVec<T>> *restrict_mat = nullptr;
         d_coarse_conn = nullptr, d_n2e_ptr = nullptr, d_n2e_elems = nullptr, d_n2e_xis = nullptr;
-        const bool include_restrict = false;  // don't get PT matrix also
+        const bool include_restrict = SEPARATE_PT_STORAGE;  // don't get PT matrix also if false
         init_unstructured_grid_maps<T, Assembler, Basis, is_bsr, include_restrict>(
             fine_assembler, coarse_assembler, prolong_mat, restrict_mat, d_coarse_conn, d_n2e_ptr,
             d_n2e_elems, d_n2e_xis, ELEM_MAX);
@@ -118,6 +124,15 @@ class UnstructuredSmoothProlongation {
         P_nnzb = P_bsr_data.nnzb;
         nnodes_fine = P_bsr_data.nnodes;
         d_fine_iperm = P_bsr_data.iperm;
+
+        if constexpr (SEPARATE_PT_STORAGE) {
+            PT_bsr_data = restrict_mat->getBsrData();
+            d_PT_vals = restrict_mat->getPtr();
+            d_PT_rowp = PT_bsr_data.rowp, d_PT_rows = PT_bsr_data.rows,
+            d_PT_cols = PT_bsr_data.cols;
+            PT_nnzb = PT_bsr_data.nnzb;
+            d_coarse_iperm = PT_bsr_data.iperm;
+        }
 
         // optional d_weights
         N_fine = nnodes_fine * block_dim;
@@ -218,7 +233,7 @@ class UnstructuredSmoothProlongation {
 
         // build new sparsity
         // need permutations here?
-        if constexpr (kmat_fillin) {
+        if constexpr (KMAT_FILLIN) {
             // delete previous nofill P0 device pointers
             cudaFree(d_P_rowp);
             cudaFree(d_P_rows);
@@ -337,6 +352,16 @@ class UnstructuredSmoothProlongation {
         P_bsr_data.rows = d_P_rows;  // need rows
 
         prolong_mat = new BsrMat<DeviceVec<T>>(P_bsr_data, d_P_vals_vec);
+
+        if constexpr (SEPARATE_PT_STORAGE) {
+            // get transpose maps here..
+            cudaFree(d_PT_vals);
+            PT_nnzb = P_nnzb;
+            d_PT_vals = DeviceVec<T>(AP_nnzb * block_dim2).getPtr();
+            d_PT_rowp = P_bsr_data.tr_rowp;
+            d_PT_cols = P_bsr_data.tr_cols;
+            // d_PT_rows = P_bsr_data.tr_rows;
+        }
     }
 
     void assemble_matrices() {
@@ -349,6 +374,13 @@ class UnstructuredSmoothProlongation {
         k_prolong_mat_assembly<T, Basis, is_bsr>
             <<<grid, block>>>(d_coarse_iperm, d_coarse_conn, d_n2e_ptr, d_n2e_elems, d_n2e_xis,
                               nnodes_fine, d_fine_iperm, d_P_rowp, d_P_cols, block_dim, d_P_vals);
+
+        // assemble PT mat
+        // if constexpr (SEPARATE_PT_STORAGE) {
+        //     k_restrict_mat_assembly<T, Basis, is_bsr><<<grid, block>>>(
+        //         d_coarse_iperm, d_coarse_conn, d_n2e_ptr, d_n2e_elems, d_n2e_xis, nnodes_fine,
+        //         d_fine_iperm, d_PT_rowp, d_PT_cols, red_block_dim, d_PT_vals, d_coarse_weights);
+        // }
     }
 
     void update_after_smooth() {
@@ -360,10 +392,23 @@ class UnstructuredSmoothProlongation {
         // computes row-sums
         k_bsrmv_transpose<T><<<grid0, block0>>>(P_nnzb, block_dim, d_P_rows, d_P_cols, d_P_vals,
                                                 d_fine_ones, d_coarse_weights);
+
+        if constexpr (SEPARATE_PT_STORAGE) {
+            // copy values from P to PT
+            int *d_block_P_to_PT_map = P_bsr_data.tr_block_map;
+            k_copy_P_to_PT<T>
+                <<<grid0, block0>>>(P_nnzb, block_dim, d_block_P_to_PT_map, d_P_vals, d_PT_vals);
+
+            int *h_block_P_to_PT_map =
+                DeviceVec<int>(P_nnzb, d_block_P_to_PT_map).createHostVec().getPtr();
+            printf("h_block_P_to_PT_map: ");
+            printVec<int>(100, h_block_P_to_PT_map);
+        }
     }
 
     void prolongate(DeviceVec<T> perm_coarse_soln_in, DeviceVec<T> perm_dx_fine) {
         // get important data & vecs out
+        // printf("DEBUG: run prolong\n");
 
         // now do cusparse Bsrmv.. for P @ coarse_soln => dx_fine (permuted nodes order)
         T a = 1.0, b = 0.0;
@@ -374,16 +419,34 @@ class UnstructuredSmoothProlongation {
                                       CUSPARSE_OPERATION_NON_TRANSPOSE, mb, nb, P_nnzb, &a, descr_P,
                                       d_P_vals, d_P_rowp, d_P_cols, block_dim,
                                       perm_coarse_soln_in.getPtr(), &b, perm_dx_fine.getPtr()));
+
+        // CHECK_CUDA(cudaDeviceSynchronize());
+        // printf("\tDEBUG: done prolong\n");
     }
 
     template <bool normalize = false>
     void restrict_vec(DeviceVec<T> fine_vec_in, DeviceVec<T> coarse_vec_out) {
         /* either restricts defect or solution from fine to coarse */
-        coarse_vec_out.zeroValues();  // zero before add new result
-        int nprods = P_nnzb * block_dim2;
-        dim3 block0(32), grid0((nprods + 31) / 32);
-        k_bsrmv_transpose<T><<<grid0, block0>>>(P_nnzb, block_dim, d_P_rows, d_P_cols, d_P_vals,
-                                                fine_vec_in.getPtr(), coarse_vec_out.getPtr());
+        // printf("\tDEBUG: begin restrict with P_nnzb %d, PT_nnzb %d\n", P_nnzb, PT_nnzb);
+        if constexpr (SEPARATE_PT_STORAGE) {
+            T a = 1.0, b = 0.0;
+            int mb = PT_bsr_data.mb, nb = PT_bsr_data.nb;
+            // printf("mb %d, nb %d\n", mb, nb);
+            CHECK_CUSPARSE(cusparseDbsrmv(handle, CUSPARSE_DIRECTION_ROW,
+                                          CUSPARSE_OPERATION_NON_TRANSPOSE, mb, nb, PT_nnzb, &a,
+                                          descr_PT, d_PT_vals, d_PT_rowp, d_PT_cols, block_dim,
+                                          fine_vec_in.getPtr(), &b, coarse_vec_out.getPtr()));
+        } else {
+            coarse_vec_out.zeroValues();  // zero before add new result
+            int nprods = P_nnzb * block_dim2;
+            dim3 block0(32), grid0((nprods + 31) / 32);
+            // my own custom kernel here
+            k_bsrmv_transpose<T><<<grid0, block0>>>(P_nnzb, block_dim, d_P_rows, d_P_cols, d_P_vals,
+                                                    fine_vec_in.getPtr(), coarse_vec_out.getPtr());
+        }
+
+        // CHECK_CUDA(cudaDeviceSynchronize());
+        // printf("\tDEBUG: done restrict\n");
 
         // NORMALIZE section, only for restricting the solution (not defects)
         if constexpr (normalize) {
@@ -413,11 +476,12 @@ class UnstructuredSmoothProlongation {
     Smoother *smoother;
 
     cusparseHandle_t &handle;
-    BsrData P_bsr_data;
-    T *d_P_vals, *d_Z_vals;
-    cusparseMatDescr_t descr_P;
+    BsrData P_bsr_data, PT_bsr_data;
+    T *d_P_vals, *d_Z_vals, *d_PT_vals;
+    cusparseMatDescr_t descr_P, descr_PT;
     int *d_P_rowp, *d_P_rows, *d_P_cols;
-    int P_nnzb;
+    int *d_PT_rowp, *d_PT_rows, *d_PT_cols;
+    int P_nnzb, PT_nnzb;
     T *d_coarse_weights;
     T *d_fine_ones;
 
