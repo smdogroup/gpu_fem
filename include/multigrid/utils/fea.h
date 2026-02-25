@@ -554,7 +554,7 @@ T *getPlatePointLoad(int nxe, int nye, double Lx, double Ly, double load_mag) {
 // }
 
 template <typename T, class Basis, class Phys>
-T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
+T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag, double axial_frac = 0.0) {
     /*
     make a rectangular plate mesh of shell elements
     simply supported with transverse constrant distributed load
@@ -654,6 +654,8 @@ T *getPlateLoads(int nxe, int nye, double Lx, double Ly, double load_mag) {
                 nodal_load *= weight * J;
 
                 my_loads[vpn * inode + offset + 2] += nodal_load;
+
+                my_loads[vpn * inode + offset + 0] += axial_frac * nodal_load; // add axial component to load
             }
         }
     }

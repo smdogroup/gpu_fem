@@ -3,6 +3,7 @@
 ## Thickness-Ind Multigrid
 
 * NOTE : line search needs to be very small (1e-3 updates for wing to get best performance) => smoother doing heavy work, multigrid barely anything
+- [ ] add axial fraction and try line search again of baseline standard prolongator for beam, cylinder (see if still get good speedup to that, fair comparison)
 
 - [ ] further investigate cylinder case
    - [ ] plot locking strains coarse to fine on small mesh, see if the math makes sense or not => can a prolongation matrix exist that maps zero to zero locking? Or we need C1-cont / new element?

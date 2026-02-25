@@ -110,7 +110,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
         int nxe_per_comp = c_nxe, nye_per_comp = c_nye; // for now (should have 25 grids)
         auto assembler = createPlateAssembler<Assembler>(c_nxe, c_nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
         double Q = 1.0; // load magnitude
-        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q);
+        double axial_frac = 0.1;
+        // double axial_frac = 0.0;
+        T *my_loads = getPlateLoads<T, Basis, Physics>(c_nxe, c_nye, Lx, Ly, Q, axial_frac);
         printf("making grid with nxe %d => ", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
