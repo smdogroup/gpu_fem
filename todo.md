@@ -11,10 +11,14 @@
 NEW SHELL ELEMENTS
 
 * the DeRham-shear and DeRham for some mem with MITC for exy shear method actually worked (only one membrane constraint is ignored! big perf improvement)
+- [ ] check other load cases see if exy being red integrated is issue for multigrid conv.. prob only slightly would reduce it
+- [ ] fix load scaling issue + measure mesh convergence rate.. may need to change MITC to 2x2 instead of 1x1 for exy? Not sure yet..
+- [ ] try this on GPU + closed cylinder?
 - [ ] try it on a doubly-curved shell like a spherical panel now!
-
+- [ ] then figure out how to do it on a general curved surface (with varying curvature?) => harder.. continuous vs discrete director?
 
 - [ ] implement DeRham-shear and MITC-membrane with energy-smoothing for remaining prolongation issues
+- [ ] try also DRIG-shear and membrane fully MITC for comparison
 - [x] implement DeRham-shear and DeRham for some mem constraints, MITC- for remaining, then energy-smoothing for remaining prolongation issues
 - [ ] then maybe try u ~ 1x4 IGA, v ~ 2x3 IGA, thx ~ 1x2, thy ~ 2x1, w ~ 2x2 IGA so fully consistent interpolation spaces for cylinder.. (just to try it) 
    - [ ] need 4th order IGA

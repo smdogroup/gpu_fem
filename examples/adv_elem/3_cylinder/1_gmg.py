@@ -47,7 +47,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--elem", type=str, default='drig', help="--elem, options: tbd")
 parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--plot", type=str, default='w', help="--plot is str : [w, u, v, thx, thy, thz] or None")
-parser.add_argument("--cache", action=argparse.BooleanOptionalAction, default=False,
+parser.add_argument("--cache", action=argparse.BooleanOptionalAction, default=True,
                     help="Cache assembled kmat/force per MG level to disk") # --no-cache to turn off and reset
 parser.add_argument("--nxe", type=int, default=32, help="number of elements") # 32
 
@@ -338,8 +338,8 @@ elif args.solve == 'vmg':
 elif args.solve == 'kmg':
 
 
-    # line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc']
-    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
+    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc']
+    # line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
 
     vmg2 = VMG(
         grids, nsmooth=args.nsmooth, 
@@ -379,7 +379,7 @@ elif args.solve == 'kmg':
 def norm(x):
     return np.max(np.abs(x))
 
-if args.elem == 'mitc':
+if 'mitc' in args.elem:
     # get max deflection
     disp = assembler.u.copy()
     u = disp[0::6]
@@ -411,6 +411,7 @@ if args.elem == 'mitc':
     v_nrm = norm(v)
     w_nrm = norm(w)
     disp_nrm = np.max([v_nrm, w_nrm])
+    norm_nrm = norm(normal_defln)
 
 elif args.elem == 'drig':
     u = assembler.u.copy()
@@ -418,7 +419,6 @@ elif args.elem == 'drig':
     normal_defln = u[off_w:off_w + nw]
     disp_nrm = norm(normal_defln)
 
-norm_nrm = norm(normal_defln)
 nxe = args.nxe
 print(f"{nxe=} {disp_nrm=:.4e} {norm_nrm=:.4e}")
 # print(f"\n\t{u_nrm=:.4e}\n\t{v_nrm=:.4e}\n\t{w_nrm=:.4e}")
