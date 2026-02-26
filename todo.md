@@ -17,6 +17,8 @@ NEW SHELL ELEMENTS
 - [ ] try it on a doubly-curved shell like a spherical panel now!
 - [ ] then figure out how to do it on a general curved surface (with varying curvature?) => harder.. continuous vs discrete director?
 
+- [ ] do a doubly curved sphere case (separate folder from general shell, with varying directors)
+
 - [ ] implement DeRham-shear and MITC-membrane with energy-smoothing for remaining prolongation issues
 - [ ] try also DRIG-shear and membrane fully MITC for comparison
 - [x] implement DeRham-shear and DeRham for some mem constraints, MITC- for remaining, then energy-smoothing for remaining prolongation issues
