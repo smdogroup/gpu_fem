@@ -59,7 +59,7 @@ parser.add_argument("--thick", type=float, default=1e-3, help="shell thickness")
 # parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
 parser.add_argument("--curvature", type=float, default=1.0, help="shell curvature (lower gets flatter)")
 parser.add_argument("--length", type=float, default=1.0, help="cylinder length")
-parser.add_argument("--width", type=float, default=np.pi / 2.0, help="cylinder width (hoop length)")
+parser.add_argument("--width", type=float, default=1.0, help="cylinder width (hoop length)")
 # parser.add_argument("--solve", type=str, default='direct', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--nprolong", type=int, default=10, help="number of smoothing steps for prolongator")
@@ -169,20 +169,25 @@ elif 'mitc' in args.elem:
 
 
 import math
+# def load_fcn(_x, _y):
+#     _xhat = _x / args.length
+#     _yhat = _y / args.width
+#     diag = (args.length**2 + args.width**2)**0.5
+#     # theta = math.atan2(_yhat, _xhat)
+#     theta = math.atan2(_y, _x)
+#     diag_th = math.atan2(args.width, args.length)
+#     # diag_th = np.pi / 4.0 * 3
+#     r = np.sqrt(_xhat**2 + _yhat**2)
+#     r2 = r/diag
+#     # game of life polar load..
+#     # return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(4*theta) * r2 * (1 - r2)
+#     fcn1 = -100.0 * np.sin(4.0  * np.pi * r2) * np.cos(1.2*(theta-diag_th)) * r2 * (1 - r2)
+#     return fcn1 * (_xhat - _xhat**2) * (_yhat - _yhat**2) # makes it zero on edges
+
 def load_fcn(_x, _y):
-    _xhat = _x / args.length
-    _yhat = _y / args.width
-    diag = (args.length**2 + args.width**2)**0.5
-    # theta = math.atan2(_yhat, _xhat)
-    theta = math.atan2(_y, _x)
-    diag_th = math.atan2(args.width, args.length)
-    # diag_th = np.pi / 4.0 * 3
-    r = np.sqrt(_xhat**2 + _yhat**2)
-    r2 = r/diag
-    # game of life polar load..
-    # return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(4*theta) * r2 * (1 - r2)
-    fcn1 = -100.0 * np.sin(4.0  * np.pi * r2) * np.cos(2.4*(theta-diag_th)) * r2 * (1 - r2)
-    return fcn1 * (_xhat - _xhat**2) * (_yhat - _yhat**2) # makes it zero on edges
+    xh = _x / args.length
+    yh = _y / args.width
+    return np.sin(np.pi * (xh + yh)**2) * np.sin(np.pi * yh**2)
 
 # NOTE : old load was this, great drig performance with this load case (low exy shear strain which is red int?)
 # load_fcn = lambda x, y, z : 1.0 * np.sin(np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * -y),

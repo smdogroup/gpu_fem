@@ -170,19 +170,25 @@ elif 'mitc' in args.elem:
     
 
 import math
+# def load_fcn(_x, _y):
+#     _xhat = _x / args.length
+#     _yhat = _y / args.width
+#     diag = (args.length**2 + args.width**2)**0.5
+#     # theta = math.atan2(_yhat, _xhat)
+#     theta = math.atan2(_y, _x)
+#     diag_th = math.atan2(args.width, args.length)
+#     # diag_th = np.pi / 4.0 * 3
+#     r = np.sqrt(_xhat**2 + _yhat**2)
+#     r2 = r/diag
+#     # game of life polar load..
+#     # return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(4*theta) * r2 * (1 - r2)
+#     return -100.0 * np.sin(4.0  * np.pi * r2) * np.cos(2.4*(theta-diag_th)) * r2 * (1 - r2)
+
+
 def load_fcn(_x, _y):
-    _xhat = _x / args.length
-    _yhat = _y / args.width
-    diag = (args.length**2 + args.width**2)**0.5
-    # theta = math.atan2(_yhat, _xhat)
-    theta = math.atan2(_y, _x)
-    diag_th = math.atan2(args.width, args.length)
-    # diag_th = np.pi / 4.0 * 3
-    r = np.sqrt(_xhat**2 + _yhat**2)
-    r2 = r/diag
-    # game of life polar load..
-    # return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(4*theta) * r2 * (1 - r2)
-    return -100.0 * np.sin(4.0  * np.pi * r2) * np.cos(2.4*(theta-diag_th)) * r2 * (1 - r2)
+    xh = _x / args.length
+    yh = _y / args.width
+    return np.sin(np.pi * (xh + yh)**2) * np.sin(np.pi * yh**2)
 
 # def load_fcn(x, y, A=-100.0, m=2.4):
 #     xhat = x / args.length
