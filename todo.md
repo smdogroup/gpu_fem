@@ -9,6 +9,11 @@
 
 
 NEW SHELL ELEMENTS
+
+* the DeRham-shear and DeRham for some mem with MITC for exy shear method actually worked (only one membrane constraint is ignored! big perf improvement)
+- [ ] try it on a doubly-curved shell like a spherical panel now!
+
+
 - [ ] implement DeRham-shear and MITC-membrane with energy-smoothing for remaining prolongation issues
 - [x] implement DeRham-shear and DeRham for some mem constraints, MITC- for remaining, then energy-smoothing for remaining prolongation issues
 - [ ] then maybe try u ~ 1x4 IGA, v ~ 2x3 IGA, thx ~ 1x2, thy ~ 2x1, w ~ 2x2 IGA so fully consistent interpolation spaces for cylinder.. (just to try it) 
