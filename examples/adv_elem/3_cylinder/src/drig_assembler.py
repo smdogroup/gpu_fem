@@ -53,6 +53,7 @@ class DeRhamIGACylinderAssembler:
         hoop_length: float = np.pi,
         load_fcn=lambda x, s: 0.0,
         clamped: bool = False,
+        geometry="" # unused temp arg for std assembler
     ):
         self.element = ELEMENT if not callable(ELEMENT) else ELEMENT(r=radius, clamped=clamped)
 

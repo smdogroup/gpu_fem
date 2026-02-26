@@ -9,7 +9,7 @@ plate_src = os.path.abspath(os.path.join(here, "../", "../", "2_plate", "src"))
 sys.path.append(plate_src)
 from _sparse_utils import build_csr_from_conn
 
-class StandardCylinderAssembler:
+class StandardShellAssembler:
     """
     Structured-grid assembler for standard C0 shell elements on a unit square mesh.
     Intended for Q1 Reissner–Mindlin (4-node quad), dof per node = 6: [u, v, w, thx, thy, thz].
@@ -30,6 +30,7 @@ class StandardCylinderAssembler:
         load_fcn=lambda x, y, z: 1.0,
         clamped: bool = False,
         split_disp_bc: bool = False,
+        geometry:str='cylinder',
     ):
         self.element = ELEMENT
         self.nxe = int(nxe)
@@ -41,6 +42,7 @@ class StandardCylinderAssembler:
         self.Ly = float(hoop_length)
         self.load_fcn = load_fcn
         self.split_disp_bc = split_disp_bc
+        self.geometry = geometry
 
         self.element.clamped = clamped
         self.dof_per_node = 6
@@ -149,13 +151,28 @@ class StandardCylinderAssembler:
     def _elem_xpts_from_loc(self, loc_conn: np.ndarray):
         """Return elem_xpts of length 12: [x,y,0] per local node, consistent with element node order."""
         elem_xpts = np.zeros(12, dtype=np.double)
-        for lnode, gnode in enumerate(loc_conn):
-            ix = gnode % self.nnx
-            iy = gnode // self.nnx
-            phi = iy * self.dth
-            elem_xpts[3*lnode + 0] = ix * self.dx
-            elem_xpts[3*lnode + 1] = -self.radius * np.cos(phi)
-            elem_xpts[3*lnode + 2] = self.radius * np.sin(phi)
+
+        if self.geometry == 'cylinder':
+            for lnode, gnode in enumerate(loc_conn):
+                ix = gnode % self.nnx
+                iy = gnode // self.nnx
+                phi = iy * self.dth
+                elem_xpts[3*lnode + 0] = ix * self.dx
+                elem_xpts[3*lnode + 1] = -self.radius * np.cos(phi)
+                elem_xpts[3*lnode + 2] = self.radius * np.sin(phi)
+
+        elif self.geometry == 'sphere':
+            for lnode, gnode in enumerate(loc_conn):
+                ix = gnode % self.nnx
+                iy = gnode // self.nnx
+                dphi = self.dx / self.radius
+                dth = self.dy / self.radius
+                phi = ix * dphi
+                th = np.pi/2 - iy * dth
+                elem_xpts[3*lnode + 0] = self.radius * np.sin(th) * np.cos(phi)
+                elem_xpts[3*lnode + 1] = self.radius * np.sin(th) * np.sin(phi)
+                elem_xpts[3*lnode + 2] = self.radius * np.cos(th)
+        
         return elem_xpts
     
     @property

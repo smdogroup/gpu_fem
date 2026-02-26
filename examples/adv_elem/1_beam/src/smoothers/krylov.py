@@ -4,7 +4,7 @@ import numpy as np
 # from __linalg import right_pgmres, right_pcg 
 
 
-def right_pcg2(A, b, x0=None, rtol=1e-8, atol=1e-7, max_iter=1000, M=None, print_freq:int=10):
+def right_pcg2(A, b, x0=None, rtol=1e-8, atol=1e-7, max_iter=1000, M=None, print_freq:int=10, norm_hist:list=[]):
     """
     Right-preconditioned Conjugate Gradient method (version from my scitech paper)
 
@@ -54,6 +54,8 @@ def right_pcg2(A, b, x0=None, rtol=1e-8, atol=1e-7, max_iter=1000, M=None, print
     rz_old = None
     rz = None
 
+    norm_hist += [1.0]
+
     print(f"PCG iter 0: ||r|| = {norm_r0:.3e}")
 
     for k in range(1, max_iter + 1):
@@ -75,6 +77,9 @@ def right_pcg2(A, b, x0=None, rtol=1e-8, atol=1e-7, max_iter=1000, M=None, print
         x += alpha * p
         r -= alpha * w
         norm_r = np.linalg.norm(r)
+
+        rel_nrm = norm_r / norm_r0
+        norm_hist += [float(rel_nrm)]
 
         if (k % print_freq == 0) or norm_r < (atol + rtol * norm_r0):
             print(f"PCG iter {k}: ||r|| = {norm_r:.3e}")

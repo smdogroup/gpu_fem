@@ -8,7 +8,7 @@ from drig_assembler import DeRhamIGACylinderAssembler
 
 # MITC
 from elem import MITCShellElement
-from std_assembler import StandardCylinderAssembler
+from std_assembler import StandardShellAssembler
 
 # sys.path.append("../2_plate/src/")
 # from asw_derham import TwoDimAddSchwarzDeRhamVertexEdges
@@ -51,6 +51,9 @@ parser.add_argument("--cache", action=argparse.BooleanOptionalAction, default=Tr
                     help="Cache assembled kmat/force per MG level to disk") # --no-cache to turn off and reset
 parser.add_argument("--nxe", type=int, default=32, help="number of elements") # 32
 
+# which load case
+parser.add_argument("--load", type=str, default='axial', help="--load, axial or shear bending modes")
+
 
 # usual inputs
 parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
@@ -59,7 +62,7 @@ parser.add_argument("--thick", type=float, default=1e-3, help="shell thickness")
 # parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
 parser.add_argument("--curvature", type=float, default=1.0, help="shell curvature (lower gets flatter)")
 parser.add_argument("--length", type=float, default=1.0, help="cylinder length")
-parser.add_argument("--width", type=float, default=1.0, help="cylinder width (hoop length)")
+parser.add_argument("--width", type=float, default=np.pi / 2, help="cylinder width (hoop length)")
 # parser.add_argument("--solve", type=str, default='direct', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--nprolong", type=int, default=10, help="number of smoothing steps for prolongator")
@@ -81,7 +84,7 @@ def _wrap_assemble_with_cache(obj, cache_dir=".mg_cache"):
             "elem": elem_key, "nxe": int(obj.nxe),
             "E": 70e9, "nu": 0.3, "thick": float(args.thick),
             "L": float(L), "W": float(args.width), "R": float(R),
-            "clamped": bool(clamped),
+            "clamped": bool(clamped), "load" : args.load
         }, sort_keys=True).encode()).hexdigest()[:16]
 
         os.makedirs(cache_dir, exist_ok=True)
@@ -163,35 +166,55 @@ elif 'mitc' in args.elem:
         lam=1e0, omega=0.4,
         n_lock_sweeps=args.nprolong,
     )
-    ASSEMBLER = StandardCylinderAssembler
+    ASSEMBLER = StandardShellAssembler
     
 
 
+if args.load == 'shear':
+    # def xs_load_fcn(_x, _y):
+    #     xh = _x / args.length
+    #     yh = _y / args.width
+    #     return np.sin(np.pi * (xh + yh)**2) * np.sin(np.pi * yh**2)
 
-import math
-# def load_fcn(_x, _y):
-#     _xhat = _x / args.length
-#     _yhat = _y / args.width
-#     diag = (args.length**2 + args.width**2)**0.5
-#     # theta = math.atan2(_yhat, _xhat)
-#     theta = math.atan2(_y, _x)
-#     diag_th = math.atan2(args.width, args.length)
-#     # diag_th = np.pi / 4.0 * 3
-#     r = np.sqrt(_xhat**2 + _yhat**2)
-#     r2 = r/diag
-#     # game of life polar load..
-#     # return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(4*theta) * r2 * (1 - r2)
-#     fcn1 = -100.0 * np.sin(4.0  * np.pi * r2) * np.cos(1.2*(theta-diag_th)) * r2 * (1 - r2)
-#     return fcn1 * (_xhat - _xhat**2) * (_yhat - _yhat**2) # makes it zero on edges
+    # def xs_load_fcn(_x, _y):
+    #     xh = _x / args.length
+    #     yh = _y / args.width
 
-def load_fcn(_x, _y):
-    xh = _x / args.length
-    yh = _y / args.width
-    return np.sin(np.pi * (xh + yh)**2) * np.sin(np.pi * yh**2)
+    #     # oblique coordinate (tilted direction in x–y plane)
+    #     ob = xh + 0.7*yh
+
+    #     # smooth, coarse frequency content
+    #     return np.sin(np.pi * ob) * (0.6 + 0.4*np.cos(np.pi * yh))
+
+    def xs_load_fcn(_x, _y):
+        xh = _x / args.length
+        yh = _y / args.width
+
+        # single oblique sine mode
+        return np.sin(np.pi * (xh + 0.5*yh))
+    
+    def xyz_load_fcn(x,y,z):
+        th = np.atan2(y, z)
+        dth = th - np.atan2(-args.width,0)
+        s = R * dth
+        return xs_load_fcn(x, s)
+
+elif args.load == 'axial':
+    xyz_load_fcn = lambda x, y, z : 1.0 * np.sin(np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * -y)
+    def xs_load_fcn(x,s):
+        y = -R * np.cos(s / R)
+        z = R * np.sin(s / R)
+        return xyz_load_fcn(x,y,z)
+    
+if 'mitc' in args.elem:
+    load_fcn = xyz_load_fcn
+elif args.elem == 'drig':
+    load_fcn = xs_load_fcn
+    
 
 # NOTE : old load was this, great drig performance with this load case (low exy shear strain which is red int?)
 # load_fcn = lambda x, y, z : 1.0 * np.sin(np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * -y),
-
+# load_fcn = lambda x,s : 1.0,
 # load_fcn = lambda x, y, z : 1.0 * np.sin(3 * np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * -y),
 # load_fcn = lambda x, y, z : 1.0 * np.sin(3 * np.pi * x) * np.sin(2 * np.pi * z) * np.sin(2 * np.pi * -y),
 # new load case
@@ -218,12 +241,6 @@ assembler = ASSEMBLER(
     radius=R,
     clamped=clamped,
     load_fcn=load_fcn,
-    # load_fcn = lambda x,s : 1.0,
-    # load_fcn = lambda x, y, z : 1.0, # so outwards deflection
-    
-    # this load function below has great and simple smooth deflection shape
-    
-    # )
 )
 
 _wrap_assemble_with_cache(assembler)
@@ -249,9 +266,6 @@ if 'mg' in args.solve:
             length=L,
             hoop_length=args.width,
             radius=R,
-            # load_fcn = lambda x,s : 1.0,
-            # load_fcn = lambda x, y, z : 1.0, # so outwards deflection
-            # load_fcn = lambda x, y, z : 1.0 * np.sin(np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * -y),
             load_fcn=load_fcn,
             clamped=clamped,
         )
@@ -335,6 +349,56 @@ if 'mg' in args.solve:
 # linear solve
 # ============================
 
+# prelim part to help save convergence histories
+
+def _normhist_key(extra: dict) -> str:
+    """
+    Stable key for norm_hist cache files. Keep it aligned with what affects convergence.
+    """
+    payload = {
+        "elem": args.elem,
+        "solve": args.solve,
+        "smoother": args.smoother,
+        "coupled": int(args.coupled),
+        "nsmooth": int(args.nsmooth),
+        "nprolong": int(args.nprolong),
+        "omega": float(args.omega),
+        "nxe": int(args.nxe),
+        "nxemin": int(args.nxemin),
+        "thick": float(args.thick),
+        "curvature": float(args.curvature),
+        "L": float(args.length),
+        "W": float(args.width),
+        "clamped": bool(clamped),
+        "load": str(args.load),
+        **extra,
+    }
+    return hashlib.md5(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16], payload
+
+
+def save_norm_hist(norm_hist, cache_dir=".mg_cache/norm_hist", extra: dict | None = None):
+    extra = {} if extra is None else dict(extra)
+    key, meta = _normhist_key(extra)
+    os.makedirs(cache_dir, exist_ok=True)
+    fp = f"{cache_dir}/{key}.npz"
+    np.savez(
+        fp,
+        norm_hist=np.asarray(norm_hist, dtype=float),
+        meta_json=json.dumps(meta, sort_keys=True),
+    )
+    print(f"SAVED norm_hist -> {fp}")
+
+
+def load_norm_hist_by_key(key: str, cache_dir=".mg_cache/norm_hist"):
+    fp = f"{cache_dir}/{key}.npz"
+    d = np.load(fp, allow_pickle=False)
+    norm_hist = d["norm_hist"]
+    meta = json.loads(str(d["meta_json"]))
+    return norm_hist, meta
+
+# =================
+# START OF SOLVE
+
 if args.solve == 'direct':
     assembler.direct_solve()
 elif args.solve == 'vmg':
@@ -385,17 +449,42 @@ elif args.solve == 'kmg':
     #     rtol=1e-6,
     # )
 
+    norm_hist = []
+
     assembler.u, nsteps = right_pcg2(
         A=assembler.kmat, b=assembler.force,
         M=pc, rtol=1e-6, atol=1e-20,
         max_iter=200,
-        print_freq=3
+        print_freq=3,
+        norm_hist=norm_hist,
     )
+
+    print(f"{norm_hist=}")
 
     total_vcyc = vmg2.total_vcycles
     print(f"{total_vcyc=}")
 
+    save_norm_hist(
+        norm_hist,
+        extra={
+            "total_vcycles": int(total_vcyc),
+            "pcg_max_iter": 200,
+            "pcg_rtol": 1e-6,
+            "pcg_atol": 1e-20,
+            "pcg_print_freq": 3,
+            # line_search affects convergence a lot:
+            "line_search": bool(line_search),
+            # include this if you sometimes toggle it:
+            # "double_smooth": bool(double_smooth),
+        },
+    )
 
+    # nhist = len(norm_hist)
+    # iters = np.arange(0, nhist)
+    # import matplotlib.pyplot as plt
+    # plt.plot(iters, norm_hist, "k-")
+    # plt.yscale('log')
+    # plt.show()
 
 # ===============================
 # PLOT

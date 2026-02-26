@@ -53,6 +53,7 @@ class DeRhamIGASphereAssembler:
         hoop_length: float = np.pi / 2.0,
         load_fcn=lambda th, phi: 0.0,
         clamped: bool = False,
+        geometry="", # TEMP ARG for other assemgblers
     ):
         self.element = ELEMENT if not callable(ELEMENT) else ELEMENT(r=radius, clamped=clamped)
 
