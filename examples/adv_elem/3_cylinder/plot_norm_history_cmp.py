@@ -125,16 +125,17 @@ if __name__ == "__main__":
 
     # change limiting plot settings
     # -------------------
-    nsmooth = 1
-    # nsmooth = 2
 
+    # load, nsmooth = 'axial', 1
+    # load, nsmooth = 'axial', 2
+    load, nsmooth = 'shear', 2
 
     # ---- Example filters you can tweak ----
     # Only compare a fixed nxe/thick/load/solve:
 
     runs = filter_runs(runs, must_match={
         # "solve": "kmg",
-        # "load": "axial",
+        "load": load,
         # "nxe": 32,
         # "thick": 1e-3,
         # "clamped": True,
@@ -157,6 +158,6 @@ if __name__ == "__main__":
         # title="Convergence comparison (cached norm_hist)",
         # label_fields=("elem", "smoother", "coupled", "omega", "nsmooth", "nprolong", "line_search"),
         label_fields=("elem", "nsmooth"),
-        save_png=f"cyl_hist_compare{nsmooth}.png",
+        save_png=f"cyl_hist_{load}{nsmooth}.png",
         # save_png="cyl_hist_compare2.png",
     )

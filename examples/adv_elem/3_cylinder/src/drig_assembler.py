@@ -569,7 +569,7 @@ class DeRhamIGACylinderAssembler:
     # Multigrid transfer wrappers (delegate to element)
     # -------------------------------------------------------------------------
     def _assemble_prolongation(self):
-        pass # TBD devel this
+        self.element._assemble_prolongation(self.nxe)
 
     def prolongate(self, coarse_soln: np.ndarray):
         nxe_c = self.nxe // 2

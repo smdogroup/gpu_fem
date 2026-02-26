@@ -63,7 +63,7 @@ parser.add_argument("--thick", type=float, default=1e-3, help="shell thickness")
 # parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
 parser.add_argument("--curvature", type=float, default=1.0, help="shell curvature (lower gets flatter)")
 parser.add_argument("--length", type=float, default=1.0, help="cylinder length")
-parser.add_argument("--width", type=float, default=1.0, help="cylinder width (hoop length)")
+parser.add_argument("--width", type=float, default=np.pi/2, help="cylinder width (hoop length)")
 # parser.add_argument("--solve", type=str, default='direct', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--nprolong", type=int, default=10, help="number of smoothing steps for prolongator")
@@ -195,11 +195,11 @@ if args.load == 'shear':
         return np.sin(np.pi * (xh + 0.5*yh))
     
     # fix this..
-    # def xyz_load_fcn(x,y,z):
-    #     th = np.atan2(y, z)
-    #     dth = th - np.atan2(-args.width,0)
-    #     s = R * dth
-    #     return xs_load_fcn(x, s)
+    def xyz_load_fcn(x,y,z):
+        th = np.atan2(y, z)
+        dth = th - np.atan2(-args.width,0)
+        s = R * dth
+        return xs_load_fcn(x, s)
 
 elif args.load == 'axial':
     xyz_load_fcn = lambda x, y, z : 1.0 * np.sin(np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * -y)

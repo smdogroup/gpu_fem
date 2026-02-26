@@ -1593,7 +1593,10 @@ class MITCShellElement:
             P = self._build_P2_uncoupled3(nxe_coarse)
             P = self._apply_bcs_to_P(P, nxe_coarse)
         elif self.prolong_mode == "energy-jacobi":
-            P = self._energy_smooth_jacobi_v1(nxe_coarse, n_sweeps=self.n_lock_sweeps, omega=self.omega)
+            P = self._energy_smooth_jacobi_v1(nxe_coarse, n_sweeps=self.n_lock_sweeps, omega=self.omega, 
+                                              with_fillin=True,
+                                            #   with_fillin=False,
+                                              )
         else:
             raise NotImplementedError("locking-local not implemented in this prototype")
         

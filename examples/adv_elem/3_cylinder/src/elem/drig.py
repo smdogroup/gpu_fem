@@ -33,6 +33,7 @@ from .basis import (
     get_iga3_basis,
     get_lagrange_basis_01,
 )
+import scipy.sparse as sp
 
 class DeRhamMITC_IGACylinderElement:
     """
@@ -48,15 +49,29 @@ class DeRhamMITC_IGACylinderElement:
       thy : (p2,p1)
     """
 
-    def __init__(self, r: float, clamped: bool = False, curvature_on: bool = True,
-                 reduced_integrate_exy: bool = True, rax:float=None):
+    def __init__(
+        self, 
+        r: float, 
+        clamped: bool = False, 
+        curvature_on: bool = True,
+        reduced_integrate_exy: bool = True,
+        rax:float=None,
+        prolong_mode:str='standard',
+        omega:float=0.7,
+        n_Psweeps:int=2,
+    ):
         self.r = float(r)
         self.rax = float(rax) if rax is not None else None
         self.clamped = bool(clamped)
         self.curvature_on = bool(curvature_on)
         self.reduced_integrate_exy = bool(reduced_integrate_exy)
         self._P_cache = {}
+        self._kmat_cache = {}
         self.dof_per_node = 5
+
+        self.prolong_mode = prolong_mode
+        self.omega = omega
+        self.n_Psweeps = n_Psweeps
 
     # ---- tensor helpers ------------------------------------------------------
     @staticmethod
@@ -635,19 +650,13 @@ class DeRhamMITC_IGACylinderElement:
             R[i, 2*i]     = 0.50
             R[i, 2*i + 1] = 0.25
         return R
-
-    def prolongate(self, u_c: np.ndarray, nxe_c: int, nye_c: int) -> np.ndarray:
+    
+    def build_prolongation_operator(self, nxe_c: int, nye_c: int) -> sp.csr_matrix:
         """
-        Dyadic prolongation for layout [w, u, v, thx, thy].
+        Build full prolongation operator P : u_f = P * u_c for layout [w, u, v, thx, thy].
 
-        Coarse grids:
-          w   : (nxe+2) x (nye+2)   (p2,p2)
-          u   : (nxe+3) x (nye+2)   (p3,p2)
-          v   : (nxe+2) x (nye+3)   (p2,p3)
-          thx : (nxe+1) x (nye+2)   (p1,p2)
-          thy : (nxe+2) x (nye+1)   (p2,p1)
+        Returns: CSR sparse matrix with shape (N_f, N_c)
         """
-        u_c = np.asarray(u_c)
 
         # coarse sizes
         nxw_c,  nyw_c  = nxe_c + 2, nye_c + 2
@@ -661,66 +670,10 @@ class DeRhamMITC_IGACylinderElement:
         nv_c  = nxv_c  * nyv_c
         ntx_c = nxtx_c * nytx_c
         nty_c = nxty_c * nyty_c
-
-        assert u_c.size == (nw_c + nu_c + nv_c + ntx_c + nty_c)
-
-        off = 0
-        w_c  = u_c[off:off+nw_c];   off += nw_c
-        U_c  = u_c[off:off+nu_c];   off += nu_c
-        V_c  = u_c[off:off+nv_c];   off += nv_c
-        tx_c = u_c[off:off+ntx_c];  off += ntx_c
-        ty_c = u_c[off:off+nty_c];  off += nty_c
-
-        # 1D prolongations
-        Rx3 = self._build_R_p3(nxe_c); Px3 = Rx3.T
-        Ry3 = self._build_R_p3(nye_c); Py3 = Ry3.T
-
-        Rx2 = self._build_R_p2(nxe_c); Px2 = Rx2.T
-        Ry2 = self._build_R_p2(nye_c); Py2 = Ry2.T
-
-        Px1 = self._build_P_p1(nxe_c)
-        Py1 = self._build_P_p1(nye_c)
-
-        # 2D prolongations (kron)
-        Pw   = self._kron2(Py2, Px2)   # w  : (p2,p2)
-        Pu   = self._kron2(Py2, Px3)   # u  : (p3,p2)
-        Pv   = self._kron2(Py3, Px2)   # v  : (p2,p3)
-        Ptx  = self._kron2(Py2, Px1)   # thx: (p1,p2)
-        Pty  = self._kron2(Py1, Px2)   # thy: (p2,p1)
-
-        w_f  = Pw  @ w_c
-        U_f  = Pu  @ U_c
-        V_f  = Pv  @ V_c
-        tx_f = Ptx @ tx_c
-        ty_f = Pty @ ty_c
+        N_c = nw_c + nu_c + nv_c + ntx_c + nty_c
 
         # fine sizes
-        nxe_f, nye_f = 2*nxe_c, 2*nye_c
-        nxw_f,  nyw_f  = nxe_f + 2, nye_f + 2
-        nxu_f,  nyu_f  = nxe_f + 3, nye_f + 2
-        nxv_f,  nyv_f  = nxe_f + 2, nye_f + 3
-        nxtx_f, nytx_f = nxe_f + 1, nye_f + 2
-        nxty_f, nyty_f = nxe_f + 2, nye_f + 1
-
-        u_f = np.concatenate([w_f, U_f, V_f, tx_f, ty_f])
-        u_f = self.apply_bcs_2d(
-            u_f,
-            nxw_f, nyw_f,
-            nxu_f, nyu_f,
-            nxv_f, nyv_f,
-            nxtx_f, nytx_f,
-            nxty_f, nyty_f,
-        )
-        return u_f
-
-    def restrict_defect(self, r_f: np.ndarray, nxe_c: int, nye_c: int) -> np.ndarray:
-        """
-        Restrict fine defect -> coarse defect for layout [w, u, v, thx, thy].
-        """
-        r_f = np.asarray(r_f)
-        nxe_f, nye_f = 2*nxe_c, 2*nye_c
-
-        # fine sizes
+        nxe_f, nye_f = 2 * nxe_c, 2 * nye_c
         nxw_f,  nyw_f  = nxe_f + 2, nye_f + 2
         nxu_f,  nyu_f  = nxe_f + 3, nye_f + 2
         nxv_f,  nyv_f  = nxe_f + 2, nye_f + 3
@@ -732,51 +685,471 @@ class DeRhamMITC_IGACylinderElement:
         nv_f  = nxv_f  * nyv_f
         ntx_f = nxtx_f * nytx_f
         nty_f = nxty_f * nyty_f
+        N_f = nw_f + nu_f + nv_f + ntx_f + nty_f
 
-        assert r_f.size == (nw_f + nu_f + nv_f + ntx_f + nty_f)
+        # --- 1D prolongations (dense -> convert to sparse) ---
+        Rx3 = self._build_R_p3(nxe_c); Px3 = Rx3.T
+        Ry3 = self._build_R_p3(nye_c); Py3 = Ry3.T
 
-        off = 0
-        w_f  = r_f[off:off+nw_f];   off += nw_f
-        U_f  = r_f[off:off+nu_f];   off += nu_f
-        V_f  = r_f[off:off+nv_f];   off += nv_f
-        tx_f = r_f[off:off+ntx_f];  off += ntx_f
-        ty_f = r_f[off:off+nty_f];  off += nty_f
+        Rx2 = self._build_R_p2(nxe_c); Px2 = Rx2.T
+        Ry2 = self._build_R_p2(nye_c); Py2 = Ry2.T
 
-        # 1D restrictions
-        Rx3 = self._build_R_p3(nxe_c)
-        Ry3 = self._build_R_p3(nye_c)
-        Rx2 = self._build_R_p2(nxe_c)
-        Ry2 = self._build_R_p2(nye_c)
-        Rx1 = self._build_R_p1(nxe_c)
-        Ry1 = self._build_R_p1(nye_c)
+        Px1 = self._build_P_p1(nxe_c)
+        Py1 = self._build_P_p1(nye_c)
 
-        # 2D restrictions
-        Rw   = self._kron2(Ry2, Rx2)   # w
-        Ru   = self._kron2(Ry2, Rx3)   # u
-        Rv   = self._kron2(Ry3, Rx2)   # v
-        Rtx  = self._kron2(Ry2, Rx1)   # thx
-        Rty  = self._kron2(Ry1, Rx2)   # thy
+        Px3 = sp.csr_matrix(Px3); Py3 = sp.csr_matrix(Py3)
+        Px2 = sp.csr_matrix(Px2); Py2 = sp.csr_matrix(Py2)
+        Px1 = sp.csr_matrix(Px1); Py1 = sp.csr_matrix(Py1)
 
-        w_c  = Rw  @ w_f
-        U_c  = Ru  @ U_f
-        V_c  = Rv  @ V_f
-        tx_c = Rtx @ tx_f
-        ty_c = Rty @ ty_f
+        # --- 2D prolongations (sparse kron) ---
+        Pw  = sp.kron(Py2, Px2, format="csr")  # w  : (p2,p2)
+        Pu  = sp.kron(Py2, Px3, format="csr")  # u  : (p3,p2)
+        Pv  = sp.kron(Py3, Px2, format="csr")  # v  : (p2,p3)
+        Ptx = sp.kron(Py2, Px1, format="csr")  # thx: (p1,p2)
+        Pty = sp.kron(Py1, Px2, format="csr")  # thy: (p2,p1)
 
-        # coarse sizes
+        # --- block diagonal ---
+        P = sp.block_diag((Pw, Pu, Pv, Ptx, Pty), format="csr")
+        assert P.shape == (N_f, N_c)
+        return P
+    
+    def apply_bcs_to_prolongation(
+        self,
+        P: sp.csr_matrix,
+        fine_bc_dofs: np.ndarray,
+        coarse_bc_dofs: np.ndarray | None = None,
+        inject_identity_on_fine: bool = False,
+    ) -> sp.csr_matrix:
+        """
+        Modify P in-place style (returns a new CSR) so BC dofs are enforced.
+
+        fine_bc_dofs: indices in [0, N_f) that are constrained on the fine grid
+        coarse_bc_dofs: indices in [0, N_c) constrained on coarse grid (optional)
+        inject_identity_on_fine: if True, sets P[i,i]=1 for constrained dofs when dimensions match.
+                                Usually False for transfers; enable only if you know you want injection.
+        """
+        P = P.tolil()
+
+        fine_bc_dofs = np.asarray(fine_bc_dofs, dtype=int)
+        fine_bc_dofs = fine_bc_dofs[(fine_bc_dofs >= 0) & (fine_bc_dofs < P.shape[0])]
+
+        # 1) zero constrained fine rows
+        for i in fine_bc_dofs:
+            P.rows[i] = []
+            P.data[i] = []
+
+        # 2) optionally zero constrained coarse columns
+        if coarse_bc_dofs is not None:
+            coarse_bc_dofs = np.asarray(coarse_bc_dofs, dtype=int)
+            coarse_bc_dofs = coarse_bc_dofs[(coarse_bc_dofs >= 0) & (coarse_bc_dofs < P.shape[1])]
+            # Zeroing columns is easier in CSC
+            Pc = P.tocsc(copy=True)
+            Pc[:, coarse_bc_dofs] = 0.0
+            P = Pc.tolil()
+
+        # 3) optional identity injection on constrained fine dofs (rarely needed)
+        if inject_identity_on_fine and P.shape[0] == P.shape[1]:
+            for i in fine_bc_dofs:
+                P[i, i] = 1.0
+
+        return P.tocsr()
+    
+    def get_bc_dofs_for_layout(
+        self,
+        nxw: int, nyw: int,
+        nxu: int, nyu: int,
+        nxv: int, nyv: int,
+        nxtx: int, nytx: int,
+        nxty: int, nyty: int,
+    ) -> np.ndarray:
+        """
+        Return global DOF indices (in concatenated layout [w, u, v, thx, thy])
+        that are constrained by apply_bcs_2d.
+
+        Matches apply_bcs_2d exactly:
+        - w: always 0 on boundary of w-grid
+        - clamped:
+            U,V,tx,ty: 0 on their respective boundaries
+        - else (SS-ish):
+            U: 0 on i==0 edge of u-grid
+            V: 0 on j==0 edge of v-grid
+        """
+        nw   = nxw  * nyw
+        nu   = nxu  * nyu
+        nv   = nxv  * nyv
+        ntx  = nxtx * nytx
+        nty  = nxty * nyty
+
+        off_w  = 0
+        off_u  = off_w  + nw
+        off_v  = off_u  + nu
+        off_tx = off_v  + nv
+        off_ty = off_tx + ntx
+
+        def on_bndry(i, j, nx, ny):
+            return (i == 0) or (i == nx - 1) or (j == 0) or (j == ny - 1)
+
+        bc = []
+
+        # --- w boundary always ---
+        for j in range(nyw):
+            for i in range(nxw):
+                if on_bndry(i, j, nxw, nyw):
+                    bc.append(off_w + (i + nxw * j))
+
+        if self.clamped:
+            # --- U boundary ---
+            for j in range(nyu):
+                for i in range(nxu):
+                    if on_bndry(i, j, nxu, nyu):
+                        bc.append(off_u + (i + nxu * j))
+
+            # --- V boundary ---
+            for j in range(nyv):
+                for i in range(nxv):
+                    if on_bndry(i, j, nxv, nyv):
+                        bc.append(off_v + (i + nxv * j))
+
+            # --- tx boundary ---
+            for j in range(nytx):
+                for i in range(nxtx):
+                    if on_bndry(i, j, nxtx, nytx):
+                        bc.append(off_tx + (i + nxtx * j))
+
+            # --- ty boundary ---
+            for j in range(nyty):
+                for i in range(nxty):
+                    if on_bndry(i, j, nxty, nyty):
+                        bc.append(off_ty + (i + nxty * j))
+
+        else:
+            # SS-ish: u=0 on x=0 edge (i==0) of u-grid
+            for j in range(nyu):
+                i = 0
+                bc.append(off_u + (i + nxu * j))
+
+            # SS-ish: v=0 on min-theta edge (j==0) of v-grid
+            j = 0
+            for i in range(nxv):
+                bc.append(off_v + (i + nxv * j))
+
+        # unique + sorted for stability
+        bc = np.array(bc, dtype=int)
+        if bc.size:
+            bc = np.unique(bc)
+        return bc
+    
+    def build_bc_prolongation_operator(self, nxe_c: int, nye_c: int):
+        """
+        Builds P (fine <- coarse), applies BCs, returns P_bc.
+        You can then do your energy smoothing using self._kmat_cache[nxe_f] (or [nxe]) outside.
+        """
+
+        P = self.build_prolongation_operator(nxe_c, nye_c)
+
+        # fine grid sizes for BC indexing
+        nxe_f, nye_f = 2 * nxe_c, 2 * nye_c
+        nxw_f,  nyw_f  = nxe_f + 2, nye_f + 2
+        nxu_f,  nyu_f  = nxe_f + 3, nye_f + 2
+        nxv_f,  nyv_f  = nxe_f + 2, nye_f + 3
+        nxtx_f, nytx_f = nxe_f + 1, nye_f + 2
+        nxty_f, nyty_f = nxe_f + 2, nye_f + 1
+
+        # coarse grid sizes for BC indexing
         nxw_c,  nyw_c  = nxe_c + 2, nye_c + 2
         nxu_c,  nyu_c  = nxe_c + 3, nye_c + 2
         nxv_c,  nyv_c  = nxe_c + 2, nye_c + 3
         nxtx_c, nytx_c = nxe_c + 1, nye_c + 2
         nxty_c, nyty_c = nxe_c + 2, nye_c + 1
 
-        r_c = np.concatenate([w_c, U_c, V_c, tx_c, ty_c])
-        r_c = self.apply_bcs_2d(
-            r_c,
-            nxw_c, nyw_c,
-            nxu_c, nyu_c,
-            nxv_c, nyv_c,
-            nxtx_c, nytx_c,
-            nxty_c, nyty_c,
+        # ---- YOU fill these in with your BC logic ----
+        # They should return global dof indices in the concatenated layout [w, u, v, thx, thy].
+        fine_bc_dofs = self.get_bc_dofs_for_layout(nxw_f, nyw_f, nxu_f, nyu_f, nxv_f, nyv_f, nxtx_f, nytx_f, nxty_f, nyty_f)
+        coarse_bc_dofs = self.get_bc_dofs_for_layout(nxw_c, nyw_c, nxu_c, nyu_c, nxv_c, nyv_c, nxtx_c, nytx_c, nxty_c, nyty_c)
+
+        P_bc = self.apply_bcs_to_prolongation(
+            P,
+            fine_bc_dofs=fine_bc_dofs,
+            coarse_bc_dofs=coarse_bc_dofs,
+            inject_identity_on_fine=False,
         )
+        return P_bc
+    
+    def _energy_smooth_jacobi_v1(
+        self,
+        nxe_c: int,
+        n_sweeps: int = 10,
+        omega: float = 0.7,
+        with_fillin: bool = False,
+        use_mask: bool = True,
+    ):
+        """
+        Energy smoothing with point-Jacobi in CSR space (DRIG-friendly):
+
+            P <- P - omega * D^{-1} (K P)
+
+        - K is CSR from self._kmat_cache[nxe_c]
+        - D^{-1} is a diagonal *vector* from diag(K) (no BSR / blocks)
+        - Optional fixed sparsity mask based on pattern(K@P) (computed once)
+        """
+
+        import numpy as np
+        import scipy.sparse as sp
+
+        # baseline P0 (already BC'ed if your builder does that)
+        P0 = self.build_bc_prolongation_operator(nxe_c, nxe_c)
+        P = P0.tocsr(copy=True)
+
+        # kmat from cache
+        if not hasattr(self, "_kmat_cache") or (int(nxe_c) not in self._kmat_cache):
+            raise RuntimeError("Expected self._kmat_cache[nxe_c] to exist for energy smoothing.")
+        K = self._kmat_cache[int(nxe_c)]
+        K = K.tocsr() if sp.isspmatrix(K) else sp.csr_matrix(K)
+
+        N, M = K.shape
+        if N != M:
+            raise ValueError(f"kmat must be square, got {K.shape}")
+        if P.shape[0] != N:
+            raise ValueError(f"Shape mismatch: K is {K.shape} but P is {P.shape}")
+
+        # --- point Jacobi diagonal inverse (vector) ---
+        D = K.diagonal().astype(float)
+        # avoid divide-by-zero; if exact zeros on diagonal, treat as "do not update that row"
+        eps = 1e-30
+        Dinv = np.zeros_like(D)
+        good = np.abs(D) > eps
+        Dinv[good] = 1.0 / D[good]
+        # (rows with bad diag get Dinv=0 -> no smoothing update there)
+
+        # Optional fixed sparsity mask from initial K@P
+        mask = None
+        if (not with_fillin) and use_mask:
+            mask = (K @ P)
+            # same sparsity pattern as KP; keep only pattern (values don't matter)
+            mask.data[:] = 1.0
+            mask.eliminate_zeros()
+            # convert to 0/1 multiplier CSR
+            # NOTE: mask is float; multiply() works fine
+            # (keep it CSR for fast elementwise multiply)
+            mask = mask.tocsr()
+
+        def control(Z: sp.csr_matrix) -> sp.csr_matrix:
+            if mask is None:
+                return Z
+            return Z.multiply(mask)
+
+        def left_scale_rows_csr(A: sp.csr_matrix, scale: np.ndarray) -> sp.csr_matrix:
+            """
+            Return diag(scale) @ A without forming the diagonal matrix.
+            CSR-safe: scales each row's data in-place via repeated scale per nnz.
+            """
+            A = A.tocsr(copy=True)
+            # build per-nnz row scaling: scale[i] repeated for nnz in row i
+            row_nnz = np.diff(A.indptr)
+            A.data *= np.repeat(scale, row_nnz)
+            return A
+
+        P = control(P)
+
+        w = float(omega)
+        for _ in range(int(n_sweeps)):
+            KP = K @ P
+            if (not with_fillin) and (mask is not None):
+                KP = control(KP)
+
+            DinvKP = left_scale_rows_csr(KP, Dinv)
+            P = P - w * DinvKP
+
+            if (not with_fillin) and (mask is not None):
+                P = control(P)
+
+        return P.toarray()
+    
+    def _assemble_prolongation(self, nxe_f):
+        nxe_coarse = nxe_f // 2
+        if nxe_f in self._P_cache:
+            return self._P_cache[nxe_f]
+
+        if self.prolong_mode == 'standard':
+            P = self.build_bc_prolongation_operator(nxe_coarse, nxe_coarse)
+        elif self.prolong_mode == 'energy-jacobi':
+            P = self._energy_smooth_jacobi_v1(nxe_coarse, self.n_Psweeps, self.omega, 
+                                              with_fillin=True, 
+                                            #   with_fillin=False,
+                                              )
+
+        self._P_cache[nxe_f] = sp.csr_matrix(P)
+        return P
+    
+    def prolongate(self, u_c: np.ndarray, nxe_c: int, nye_c: int) -> np.ndarray:
+        """
+        Dyadic prolongation for layout [w, u, v, thx, thy].
+
+        Coarse grids:
+          w   : (nxe+2) x (nye+2)   (p2,p2)
+          u   : (nxe+3) x (nye+2)   (p3,p2)
+          v   : (nxe+2) x (nye+3)   (p2,p3)
+          thx : (nxe+1) x (nye+2)   (p1,p2)
+          thy : (nxe+2) x (nye+1)   (p2,p1)
+        """
+        u_c = np.asarray(u_c)        
+        nxe_f = nxe_c * 2
+        P = self._assemble_prolongation(nxe_f)
+        u_f = P.dot(u_c)
+        return u_f
+
+    def restrict_defect(self, r_f: np.ndarray, nxe_c: int, nye_c: int) -> np.ndarray:
+        """
+        Restrict fine defect -> coarse defect for layout [w, u, v, thx, thy].
+        """
+        r_f = np.asarray(r_f)    
+        nxe_f = 2 * nxe_c
+        P = self._assemble_prolongation(nxe_f)
+        PT = P.T
+        r_c = PT.dot(r_f)
         return r_c
+
+    # def prolongate(self, u_c: np.ndarray, nxe_c: int, nye_c: int) -> np.ndarray:
+    #     """
+    #     Dyadic prolongation for layout [w, u, v, thx, thy].
+
+    #     Coarse grids:
+    #       w   : (nxe+2) x (nye+2)   (p2,p2)
+    #       u   : (nxe+3) x (nye+2)   (p3,p2)
+    #       v   : (nxe+2) x (nye+3)   (p2,p3)
+    #       thx : (nxe+1) x (nye+2)   (p1,p2)
+    #       thy : (nxe+2) x (nye+1)   (p2,p1)
+    #     """
+    #     u_c = np.asarray(u_c)
+
+    #     # coarse sizes
+    #     nxw_c,  nyw_c  = nxe_c + 2, nye_c + 2
+    #     nxu_c,  nyu_c  = nxe_c + 3, nye_c + 2
+    #     nxv_c,  nyv_c  = nxe_c + 2, nye_c + 3
+    #     nxtx_c, nytx_c = nxe_c + 1, nye_c + 2
+    #     nxty_c, nyty_c = nxe_c + 2, nye_c + 1
+
+    #     nw_c  = nxw_c  * nyw_c
+    #     nu_c  = nxu_c  * nyu_c
+    #     nv_c  = nxv_c  * nyv_c
+    #     ntx_c = nxtx_c * nytx_c
+    #     nty_c = nxty_c * nyty_c
+
+    #     assert u_c.size == (nw_c + nu_c + nv_c + ntx_c + nty_c)
+
+    #     off = 0
+    #     w_c  = u_c[off:off+nw_c];   off += nw_c
+    #     U_c  = u_c[off:off+nu_c];   off += nu_c
+    #     V_c  = u_c[off:off+nv_c];   off += nv_c
+    #     tx_c = u_c[off:off+ntx_c];  off += ntx_c
+    #     ty_c = u_c[off:off+nty_c];  off += nty_c
+
+    #     # 1D prolongations
+    #     Rx3 = self._build_R_p3(nxe_c); Px3 = Rx3.T
+    #     Ry3 = self._build_R_p3(nye_c); Py3 = Ry3.T
+
+    #     Rx2 = self._build_R_p2(nxe_c); Px2 = Rx2.T
+    #     Ry2 = self._build_R_p2(nye_c); Py2 = Ry2.T
+
+    #     Px1 = self._build_P_p1(nxe_c)
+    #     Py1 = self._build_P_p1(nye_c)
+
+    #     # 2D prolongations (kron)
+    #     Pw   = self._kron2(Py2, Px2)   # w  : (p2,p2)
+    #     Pu   = self._kron2(Py2, Px3)   # u  : (p3,p2)
+    #     Pv   = self._kron2(Py3, Px2)   # v  : (p2,p3)
+    #     Ptx  = self._kron2(Py2, Px1)   # thx: (p1,p2)
+    #     Pty  = self._kron2(Py1, Px2)   # thy: (p2,p1)
+
+    #     w_f  = Pw  @ w_c
+    #     U_f  = Pu  @ U_c
+    #     V_f  = Pv  @ V_c
+    #     tx_f = Ptx @ tx_c
+    #     ty_f = Pty @ ty_c
+
+    #     # fine sizes
+    #     nxe_f, nye_f = 2*nxe_c, 2*nye_c
+    #     nxw_f,  nyw_f  = nxe_f + 2, nye_f + 2
+    #     nxu_f,  nyu_f  = nxe_f + 3, nye_f + 2
+    #     nxv_f,  nyv_f  = nxe_f + 2, nye_f + 3
+    #     nxtx_f, nytx_f = nxe_f + 1, nye_f + 2
+    #     nxty_f, nyty_f = nxe_f + 2, nye_f + 1
+
+    #     u_f = np.concatenate([w_f, U_f, V_f, tx_f, ty_f])
+    #     u_f = self.apply_bcs_2d(
+    #         u_f,
+    #         nxw_f, nyw_f,
+    #         nxu_f, nyu_f,
+    #         nxv_f, nyv_f,
+    #         nxtx_f, nytx_f,
+    #         nxty_f, nyty_f,
+    #     )
+    #     return u_f
+
+    # def restrict_defect(self, r_f: np.ndarray, nxe_c: int, nye_c: int) -> np.ndarray:
+    #     """
+    #     Restrict fine defect -> coarse defect for layout [w, u, v, thx, thy].
+    #     """
+    #     r_f = np.asarray(r_f)
+    #     nxe_f, nye_f = 2*nxe_c, 2*nye_c
+
+    #     # fine sizes
+    #     nxw_f,  nyw_f  = nxe_f + 2, nye_f + 2
+    #     nxu_f,  nyu_f  = nxe_f + 3, nye_f + 2
+    #     nxv_f,  nyv_f  = nxe_f + 2, nye_f + 3
+    #     nxtx_f, nytx_f = nxe_f + 1, nye_f + 2
+    #     nxty_f, nyty_f = nxe_f + 2, nye_f + 1
+
+    #     nw_f  = nxw_f  * nyw_f
+    #     nu_f  = nxu_f  * nyu_f
+    #     nv_f  = nxv_f  * nyv_f
+    #     ntx_f = nxtx_f * nytx_f
+    #     nty_f = nxty_f * nyty_f
+
+    #     assert r_f.size == (nw_f + nu_f + nv_f + ntx_f + nty_f)
+
+    #     off = 0
+    #     w_f  = r_f[off:off+nw_f];   off += nw_f
+    #     U_f  = r_f[off:off+nu_f];   off += nu_f
+    #     V_f  = r_f[off:off+nv_f];   off += nv_f
+    #     tx_f = r_f[off:off+ntx_f];  off += ntx_f
+    #     ty_f = r_f[off:off+nty_f];  off += nty_f
+
+    #     # 1D restrictions
+    #     Rx3 = self._build_R_p3(nxe_c)
+    #     Ry3 = self._build_R_p3(nye_c)
+    #     Rx2 = self._build_R_p2(nxe_c)
+    #     Ry2 = self._build_R_p2(nye_c)
+    #     Rx1 = self._build_R_p1(nxe_c)
+    #     Ry1 = self._build_R_p1(nye_c)
+
+    #     # 2D restrictions
+    #     Rw   = self._kron2(Ry2, Rx2)   # w
+    #     Ru   = self._kron2(Ry2, Rx3)   # u
+    #     Rv   = self._kron2(Ry3, Rx2)   # v
+    #     Rtx  = self._kron2(Ry2, Rx1)   # thx
+    #     Rty  = self._kron2(Ry1, Rx2)   # thy
+
+    #     w_c  = Rw  @ w_f
+    #     U_c  = Ru  @ U_f
+    #     V_c  = Rv  @ V_f
+    #     tx_c = Rtx @ tx_f
+    #     ty_c = Rty @ ty_f
+
+    #     # coarse sizes
+    #     nxw_c,  nyw_c  = nxe_c + 2, nye_c + 2
+    #     nxu_c,  nyu_c  = nxe_c + 3, nye_c + 2
+    #     nxv_c,  nyv_c  = nxe_c + 2, nye_c + 3
+    #     nxtx_c, nytx_c = nxe_c + 1, nye_c + 2
+    #     nxty_c, nyty_c = nxe_c + 2, nye_c + 1
+
+    #     r_c = np.concatenate([w_c, U_c, V_c, tx_c, ty_c])
+    #     r_c = self.apply_bcs_2d(
+    #         r_c,
+    #         nxw_c, nyw_c,
+    #         nxu_c, nyu_c,
+    #         nxv_c, nyv_c,
+    #         nxtx_c, nytx_c,
+    #         nxty_c, nyty_c,
+    #     )
+    #     return r_c

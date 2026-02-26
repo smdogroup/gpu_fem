@@ -78,7 +78,12 @@ def _wrap_assemble_with_cache(obj, cache_dir=".mg_cache"):
     raw = obj._assemble_system
 
     def cached():
-        elem_key = "mitc" if args.elem.startswith("mitc") else args.elem  # mitc, mitc_lp, mitc_gp, mitc_ep -> mitc
+        if args.elem.startswith("mitc"):
+            elem_key = "mitc" # mitc, mitc_lp, mitc_gp, mitc_ep -> mitc
+        elif args.elem.startswith("drig"):
+            elem_key = "drig"
+        else:
+            elem_key = args.elem        
 
         key = hashlib.md5(json.dumps({
             "elem": elem_key, "nxe": int(obj.nxe),
@@ -108,19 +113,18 @@ def _wrap_prolong_with_cache(obj, cache_dir=".mg_cache"):
             "elem": args.elem, "nxe": int(obj.nxe),
             "E": 70e9, "nu": 0.3, "thick": float(args.thick),
             "L": float(L), "W": float(args.width), "R": float(R),
-            "clamped": bool(clamped), "nprolong" : int(args.nprolong),
+            "clamped": bool(clamped), "nprolong" : int(args.nprolong)
         }, sort_keys=True).encode()).hexdigest()[:16]
 
         os.makedirs(cache_dir, exist_ok=True)
         Pp = f"{cache_dir}/{key}.P.npz"
 
-        if 'mitc' in args.elem:
-            if os.path.exists(Pp) and args.cache:
-                print("LOADED P from cache!")
-                obj.element._P_cache[obj.nxe] = sp.load_npz(Pp)
-            else:
-                raw()
-                sp.save_npz(Pp, obj.element._P_cache[obj.nxe])
+        if os.path.exists(Pp) and args.cache:
+            print("LOADED P from cache!")
+            obj.element._P_cache[obj.nxe] = sp.load_npz(Pp)
+        else:
+            raw()
+            sp.save_npz(Pp, obj.element._P_cache[obj.nxe])
     obj._assemble_prolongation = cached
 
 # t/R leads to potential membrane locking
@@ -144,13 +148,22 @@ axial_factor = 0.0
 # larger radius can lead to weird locking behavior
 
 
-if args.elem == 'drig':
+if 'drig' in args.elem:
+    assert args.elem in ['drig', 'drig_ep']
     ELEMENT = DeRhamMITC_IGACylinderElement(
         r=R, 
         curvature_on=True, 
         reduced_integrate_exy=True,
+        prolong_mode='standard' if args.elem == 'drig' else 'energy-jacobi',
+        # omega=0.4,
+        # omega=0.3,
+        # omega=0.3,
+        omega=0.1,
+        # omega=0.5, 
+        n_Psweeps=args.nprolong
     )
     ASSEMBLER = DeRhamIGACylinderAssembler
+
 elif 'mitc' in args.elem:
     elems = ['mitc', 'mitc_gp', 'mitc_lp', 'mitc_ep']
     modes = ['standard', 'locking-global', 'locking-local', 'energy-jacobi']
@@ -171,10 +184,10 @@ elif 'mitc' in args.elem:
 
 
 if args.load == 'shear':
-    # def xs_load_fcn(_x, _y):
-    #     xh = _x / args.length
-    #     yh = _y / args.width
-    #     return np.sin(np.pi * (xh + yh)**2) * np.sin(np.pi * yh**2)
+    def xs_load_fcn(_x, _y):
+        xh = _x / args.length
+        yh = _y / args.width
+        return np.sin(np.pi * (xh + yh)**2) * np.sin(np.pi * yh**2)
 
     # def xs_load_fcn(_x, _y):
     #     xh = _x / args.length
@@ -186,12 +199,12 @@ if args.load == 'shear':
     #     # smooth, coarse frequency content
     #     return np.sin(np.pi * ob) * (0.6 + 0.4*np.cos(np.pi * yh))
 
-    def xs_load_fcn(_x, _y):
-        xh = _x / args.length
-        yh = _y / args.width
+    # def xs_load_fcn(_x, _y):
+    #     xh = _x / args.length
+    #     yh = _y / args.width
 
-        # single oblique sine mode
-        return np.sin(np.pi * (xh + 0.5*yh))
+    #     # single oblique sine mode
+    #     return np.sin(np.pi * (xh + 0.5*yh))
     
     def xyz_load_fcn(x,y,z):
         th = np.atan2(y, z)
@@ -208,7 +221,7 @@ elif args.load == 'axial':
     
 if 'mitc' in args.elem:
     load_fcn = xyz_load_fcn
-elif args.elem == 'drig':
+elif 'drig' in args.elem:
     load_fcn = xs_load_fcn
     
 
@@ -275,7 +288,7 @@ if 'mg' in args.solve:
         grid._assemble_system()
 
 
-        if args.elem == 'mitc_ep':
+        if '_ep' in args.elem:
             # add kmat into kmat cache for the element
             ELEMENT._kmat_cache[nxe // 2] = grid.kmat.copy()
 
@@ -292,7 +305,7 @@ if 'mg' in args.solve:
         elif 'asw' in args.smoother:
             smoother = None
 
-            if args.elem in ['drig', 'drigr']:
+            if 'drig' in args.elem:
                 omega = args.omega * 0.5 # need extra mult for them (default best values)
                 coupled = args.coupled
                 if coupled > 2:
@@ -313,7 +326,7 @@ if 'mg' in args.solve:
 
             if 'drig' in args.elem:
                 print("using Additive schwarz DeRham smoother")
-                if args.elem == 'drig':
+                if 'drig' in args.elem:
                     ASW_CLASS = TwoDimAddSchwarzDeRhamCylinderVertexEdges
                 # elif args.elem == 'mdrig':
                 #     ASW_CLASS = MixedTwoDimAddSchwarzDeRhamCylinderVertexEdges 
@@ -404,7 +417,7 @@ if args.solve == 'direct':
 elif args.solve == 'vmg':
 
     DEVEL_DEBUG = args.debug
-    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc']
+    line_search = args.elem in ['drig', 'drigr', 'drig_ep', 'mitc_lp', 'mitc_gp', 'mitc']
 
     if DEVEL_DEBUG:
         assembler.u, ncyc = vcycle_solve(grids, pre_smooth=args.nsmooth, post_smooth=args.nsmooth,
@@ -429,7 +442,7 @@ elif args.solve == 'vmg':
 elif args.solve == 'kmg':
 
 
-    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc']
+    line_search = args.elem in ['drig', 'drigr', 'drig_ep', 'mitc_lp', 'mitc_gp', 'mitc']
     # line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
 
     vmg2 = VMG(
@@ -529,7 +542,7 @@ if 'mitc' in args.elem:
     disp_nrm = np.max([v_nrm, w_nrm])
     norm_nrm = norm(normal_defln)
 
-elif args.elem == 'drig':
+elif 'drig' in args.elem:
     u = assembler.u.copy()
     off_w = assembler.off_w; nw = assembler.nw
     normal_defln = u[off_w:off_w + nw]
