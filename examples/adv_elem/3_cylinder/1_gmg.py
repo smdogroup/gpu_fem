@@ -1,9 +1,10 @@
 import numpy as np
 import sys
 sys.path.append("src/")
-from elem import DeRhamIsogeometricCylinderElement, MixedDeRhamIGACylinderElement
+# from elem import DeRhamIsogeometricCylinderElement #, MixedDeRhamIGACylinderElement
+from elem import DeRhamMITC_IGACylinderElement
 from drig_assembler import DeRhamIGACylinderAssembler
-from drig_assembler2 import MixedDeRhamIGACylinderAssembler
+# from drig_assembler2 import MixedDeRhamIGACylinderAssembler
 
 # MITC
 from elem import MITCShellElement
@@ -11,7 +12,8 @@ from std_assembler import StandardCylinderAssembler
 
 # sys.path.append("../2_plate/src/")
 # from asw_derham import TwoDimAddSchwarzDeRhamVertexEdges
-from dasw_cyl import TwoDimAddSchwarzDeRhamCylinderVertexEdges, MixedTwoDimAddSchwarzDeRhamCylinderVertexEdges
+# from dasw_cyl import TwoDimAddSchwarzDeRhamCylinderVertexEdges, MixedTwoDimAddSchwarzDeRhamCylinderVertexEdges
+from dasw_cyl import TwoDimAddSchwarzDeRhamCylinderVertexEdges
 
 sys.path.append("../1_beam/src/")
 from multigrid2 import vcycle_solve, VMG
@@ -34,24 +36,35 @@ Also caches some prolong matrices in multigrid
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--elem", type=str, default='mitc_gp', help="--elem, options: tbd")
-parser.add_argument("--nxe", type=int, default=32, help="number of elements") # 32
-parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
-parser.add_argument("--coupled", type=int, default=3, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
-parser.add_argument("--thick", type=float, default=1e-3, help="shell thickness")
-parser.add_argument("--cache", action=argparse.BooleanOptionalAction, default=True,
+# parser.add_argument("--elem", type=str, default='mitc_gp', help="--elem, options: tbd")
+# parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
+# parser.add_argument("--plot", type=str, default=None, help="--plot is str : [w, u, v, thx, thy, thz] or None")
+# parser.add_argument("--cache", action=argparse.BooleanOptionalAction, default=True,
+#                     help="Cache assembled kmat/force per MG level to disk") # --no-cache to turn off and reset
+# parser.add_argument("--nxe", type=int, default=32, help="number of elements") # 32
+
+# TEMP DEBUG drig element
+parser.add_argument("--elem", type=str, default='drig', help="--elem, options: tbd")
+parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
+parser.add_argument("--plot", type=str, default='w', help="--plot is str : [w, u, v, thx, thy, thz] or None")
+parser.add_argument("--cache", action=argparse.BooleanOptionalAction, default=False,
                     help="Cache assembled kmat/force per MG level to disk") # --no-cache to turn off and reset
+parser.add_argument("--nxe", type=int, default=32, help="number of elements") # 32
+
+
+# usual inputs
+parser.add_argument("--nxemin", type=int, default=8, help="min # elems multigrid")
+parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW blocks (options are 1 and 2), 1 is still an interesting vertex-edge coupling for DRIG")
+parser.add_argument("--thick", type=float, default=1e-3, help="shell thickness")
 # parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
 parser.add_argument("--curvature", type=float, default=1.0, help="shell curvature (lower gets flatter)")
 parser.add_argument("--length", type=float, default=1.0, help="cylinder length")
 parser.add_argument("--width", type=float, default=np.pi / 2.0, help="cylinder width (hoop length)")
-parser.add_argument("--solve", type=str, default='kmg', help="--solve : [direct, vmg, kmg]")
 # parser.add_argument("--solve", type=str, default='direct', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--nprolong", type=int, default=10, help="number of smoothing steps for prolongator")
 parser.add_argument("--omega", type=float, default=1.0, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='supp_asw', help="--smooth : [gs, asw]")
-parser.add_argument("--plot", type=str, default=None, help="--plot is str : [w, u, v, thx, thy, thz] or None")
 # parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="run debug codes")
 parser.add_argument("--verify", action=argparse.BooleanOptionalAction, default=False, help="verify defln with simple load")
@@ -97,12 +110,14 @@ def _wrap_prolong_with_cache(obj, cache_dir=".mg_cache"):
 
         os.makedirs(cache_dir, exist_ok=True)
         Pp = f"{cache_dir}/{key}.P.npz"
-        if os.path.exists(Pp) and args.cache:
-            print("LOADED P from cache!")
-            obj.element._P_cache[obj.nxe] = sp.load_npz(Pp)
-        else:
-            raw()
-            sp.save_npz(Pp, obj.element._P_cache[obj.nxe])
+
+        if 'mitc' in args.elem:
+            if os.path.exists(Pp) and args.cache:
+                print("LOADED P from cache!")
+                obj.element._P_cache[obj.nxe] = sp.load_npz(Pp)
+            else:
+                raw()
+                sp.save_npz(Pp, obj.element._P_cache[obj.nxe])
     obj._assemble_prolongation = cached
 
 # t/R leads to potential membrane locking
@@ -127,19 +142,12 @@ axial_factor = 0.0
 
 
 if args.elem == 'drig':
-    ELEMENT = DeRhamIsogeometricCylinderElement(
-        r=R, axial_factor=axial_factor,
-        curvature_on=True, # curvature terms lead to mem locking
-        # curvature_on=False,
+    ELEMENT = DeRhamMITC_IGACylinderElement(
+        r=R, 
+        curvature_on=True, 
+        reduced_integrate_exy=True,
     )
     ASSEMBLER = DeRhamIGACylinderAssembler
-elif args.elem == 'mdrig':
-    ELEMENT = MixedDeRhamIGACylinderElement(
-        r=R, axial_factor=axial_factor,
-        curvature_on=True, # curvature terms lead to mem locking
-        # curvature_on=False,
-    )
-    ASSEMBLER = MixedDeRhamIGACylinderAssembler
 elif 'mitc' in args.elem:
     elems = ['mitc', 'mitc_gp', 'mitc_lp', 'mitc_ep']
     modes = ['standard', 'locking-global', 'locking-local', 'energy-jacobi']
@@ -158,6 +166,9 @@ elif 'mitc' in args.elem:
     ASSEMBLER = StandardCylinderAssembler
     
 
+theta0 = 0.35*np.pi  # pick where on the quarter arc
+sigma = 0.20         # angular width (radians)
+
 # standard assembler construction
 assembler = ASSEMBLER(
     ELEMENT,
@@ -168,10 +179,25 @@ assembler = ASSEMBLER(
     # hoop_length=np.pi*0.5*R, # quarter-cylinder
     hoop_length=args.width,
     radius=R,
+    clamped=clamped,
     # load_fcn = lambda x,s : 1.0,
     # load_fcn = lambda x, y, z : 1.0, # so outwards deflection
+    
+    # this load function below has great and simple smooth deflection shape
     load_fcn = lambda x, y, z : 1.0 * np.sin(np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * -y),
-    clamped=clamped,
+    # load_fcn = lambda x, y, z : 1.0 * np.sin(3 * np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * -y),
+    # load_fcn = lambda x, y, z : 1.0 * np.sin(3 * np.pi * x) * np.sin(2 * np.pi * z) * np.sin(2 * np.pi * -y),
+    # new load case
+    # load_fcn = lambda x, y, z : (
+    #     np.sin(3 * np.pi * x) *
+    #     (np.sin(np.pi * (z - y))**2) *
+    #     (np.sin(np.pi * (z + y))**2)
+    # )
+    # load_fcn = lambda x, y, z : (
+    #     np.sin(np.pi * (x + 1.2*(z - y))) *
+    #     np.sin(np.pi * (x - 1.2*(z - y))) * 
+    #     np.sin(np.pi * z) * np.sin(-np.pi * y)
+    # )
 )
 
 _wrap_assemble_with_cache(assembler)
@@ -226,7 +252,7 @@ if 'mg' in args.solve:
             smoother = None
 
             if args.elem in ['drig', 'drigr']:
-                omega = args.omega * 0.7 # need extra mult for them (default best values)
+                omega = args.omega * 0.5 # need extra mult for them (default best values)
                 coupled = args.coupled
                 if coupled > 2:
                     print(f"{args.elem=} and {args.coupled=} dropped to 2")
@@ -248,14 +274,14 @@ if 'mg' in args.solve:
                 print("using Additive schwarz DeRham smoother")
                 if args.elem == 'drig':
                     ASW_CLASS = TwoDimAddSchwarzDeRhamCylinderVertexEdges
-                elif args.elem == 'mdrig':
-                    ASW_CLASS = MixedTwoDimAddSchwarzDeRhamCylinderVertexEdges 
+                # elif args.elem == 'mdrig':
+                #     ASW_CLASS = MixedTwoDimAddSchwarzDeRhamCylinderVertexEdges 
 
                 smoother = ASW_CLASS.from_assembler(
                     grid, omega=omega, iters=nsmooth,
-                    patch_type = patch_type,
+                    # patch_type = patch_type,
                     # patch_type="vertex_edges", # one w vertex and nearby 4 edges (2 of thx and 2 of thy)
-                    # patch_type="wblock_vertex_edges",
+                    patch_type="wblock_vertex_edges",
                 )
 
             elif args.coupled == 3 and args.smoother == 'supp_asw':
@@ -350,40 +376,48 @@ elif args.solve == 'kmg':
 
 # plot is w, u, v, thx, thy
 
-# get max deflection
-disp = assembler.u.copy()
-u = disp[0::6]
-v = disp[1::6]
-w = disp[2::6]
-
-x = np.arange(assembler.nnx) * assembler.dx
-s = np.arange(assembler.nnx) * assembler.dy
-# s = np.linspace(-self.Ly, 0.0, self.nnx)
-phi = s / assembler.radius
-
-ix_vec = np.array([inode % assembler.nnx for inode in range(assembler.nnodes)])
-iy_vec = np.array([inode // assembler.nnx for inode in range(assembler.nnodes)])
-x_flat = ix_vec * assembler.dx
-s_flat = iy_vec * assembler.dy
-phi_flat = s_flat / assembler.radius
-
-# plot normal deflection v * yhat + w * zhat
-# y_flat = -assembler.radius * np.cos(phi_flat)
-# z_flat = assembler.radius * np.sin(phi_flat)
-# yhat = y_flat / assembler.radius; zhat = z_flat / assembler.radius
-xpts = assembler.xpts
-yhat = xpts[1::3]
-zhat = xpts[2::3]
-
-normal_defln = v * yhat + w * zhat # true normal deflection
-
 def norm(x):
     return np.max(np.abs(x))
 
-u_nrm = norm(u)
-v_nrm = norm(v)
-w_nrm = norm(w)
-disp_nrm = np.max([v_nrm, w_nrm])
+if args.elem == 'mitc':
+    # get max deflection
+    disp = assembler.u.copy()
+    u = disp[0::6]
+    v = disp[1::6]
+    w = disp[2::6]
+
+    x = np.arange(assembler.nnx) * assembler.dx
+    s = np.arange(assembler.nnx) * assembler.dy
+    # s = np.linspace(-self.Ly, 0.0, self.nnx)
+    phi = s / assembler.radius
+
+    ix_vec = np.array([inode % assembler.nnx for inode in range(assembler.nnodes)])
+    iy_vec = np.array([inode // assembler.nnx for inode in range(assembler.nnodes)])
+    x_flat = ix_vec * assembler.dx
+    s_flat = iy_vec * assembler.dy
+    phi_flat = s_flat / assembler.radius
+
+    # plot normal deflection v * yhat + w * zhat
+    # y_flat = -assembler.radius * np.cos(phi_flat)
+    # z_flat = assembler.radius * np.sin(phi_flat)
+    # yhat = y_flat / assembler.radius; zhat = z_flat / assembler.radius
+    xpts = assembler.xpts
+    yhat = xpts[1::3]
+    zhat = xpts[2::3]
+
+    normal_defln = v * yhat + w * zhat # true normal deflection
+
+    u_nrm = norm(u)
+    v_nrm = norm(v)
+    w_nrm = norm(w)
+    disp_nrm = np.max([v_nrm, w_nrm])
+
+elif args.elem == 'drig':
+    u = assembler.u.copy()
+    off_w = assembler.off_w; nw = assembler.nw
+    normal_defln = u[off_w:off_w + nw]
+    disp_nrm = norm(normal_defln)
+
 norm_nrm = norm(normal_defln)
 nxe = args.nxe
 print(f"{nxe=} {disp_nrm=:.4e} {norm_nrm=:.4e}")

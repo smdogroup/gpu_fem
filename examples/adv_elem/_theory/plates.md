@@ -29,10 +29,30 @@ HIGD elements (hierarchic oesterle) - bad multigrid performance
 DeRham IGA element (DRIG) - great multigrid performance
 - [x] Benzaken plate - [Multigrid Methods for Isogeometric Thin Plate Discretizations](https://grandmaster.colorado.edu/copper/2016/StudentCompetition/Benzaken_Isogeometric_Multigrid.pdf)
 
-Do this one too:
+
+## Elements still to implement
 Hu-Zhang mixed element
 - [ ] [Alleviating shear-locking in the Reissner-Mindlin plate via symmetric Hu-Zhang elements](https://www.researchgate.net/profile/Adam-Sky/publication/372647437_Alleviating_shear-locking_in_the_Reissner-Mindlin_plate_via_symmetric_Hu-Zhang_elements/links/64c130efc41fb852dd9d6889/Alleviating-shear-locking-in-the-Reissner-Mindlin-plate-via-symmetric-Hu-Zhang-elements.pdf)
+    * full paper link [A Reissner–Mindlin plate formulation using symmetric Hu-Zhang elements via polytopal transformations](https://www.sciencedirect.com/science/article/pii/S0045782523004152)
+    * other paper : [Polytopal templates for the formulation of semi-continuous vectorial finite elements of arbitrary order](https://arxiv.org/pdf/2210.03525)
+    * uses Nedelec elements, ref 1 [A new family of mixed finite elements in ℝ3](https://www.scopus.com/pages/publications/34250103285)
+    * Nedelec elements, ref 2 [Mixed finite elements in ℝ3](https://www.scopus.com/pages/publications/34250256485)
+    * the way he explained it here, MITC actually interpolates the discrete (H^1)^2 rotation conforming space into the larger discrete H(curl)-conforming space, compatible with Kirchoff-Love condition. Subspace interpolating to H(curl) elements (Nedelec).
+    * one interesting thing is that grad w is in H(curl) space while theta is in (H^1)^2 space as derivatives of it show up in bending energy. The Hellinger-Reissner mixed variational principle eliminates theta derivatives from weak form using moment definition, so that theta now in (L^2)^2 space and locking is avoided despite using nodal interpolants for w, theta.
+    * not sure this is going to give good multigrid convergence though.. and may be thickness-dependent, not sure..
 
+TDNNS (T)
+- [ ] exact conforming method [The TDNNS method for Reissner–Mindlin plates](https://link.springer.com/article/10.1007/s00211-017-0883-9)
+
+Node strain-smoothed
+- [ ] [A node-based smoothed finite element method with stabilized discrete shear gap technique for analysis of Reissner–Mindlin plates](https://link.springer.com/article/10.1007/s00466-010-0509-x)
+    - [ ] earlier paper [A node-based smoothed finite element method with stabilized discrete shear gap technique for analysis of Reissner–Mindlin plates](https://link.springer.com/article/10.1007/s00466-010-0509-x)
+
+Falk-Tu element
+- [ ] [Locking-free finite elements for the Reissner-Mindlin plate](https://www.scopus.com/pages/publications/0034383262)
+
+Full set of Reissner-Mindlin plate elements (review paper)
+- [ ] just read and cite this: [Finite Elements for the Reissner–Mindlin Plate](https://link.springer.com/chapter/10.1007/978-3-540-78319-0_5)
 
 
 ## New Reading

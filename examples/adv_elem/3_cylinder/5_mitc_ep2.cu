@@ -103,6 +103,8 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, int nsmooth
 
     int pre_nxe_min = nxe > 32 ? 32 : 8;
     int nxe_min = pre_nxe_min;
+    // int scaleup = 2;
+    // int scaleup = 4;
     for (int c_nxe = nxe; c_nxe >= pre_nxe_min; c_nxe /= 2) {
         nxe_min = c_nxe;
     }

@@ -41,8 +41,6 @@ tational Fluid and Solid Mechanics), 2nd ed. Berlin, Heidelberg: Springer Berlin
 
 - [ ] [Two-field formulations for isogeometric Reissner–Mindlin plates and shells with global and local condensation](https://link.springer.com/article/10.1007/s00466-021-02080-8)
 - [ ] [Isogeometric shell analysis: The Reissner–Mindlin shell](https://www.sciencedirect.com/science/article/pii/S0045782509001820)
-- [ ] [Adaptive isogeometric analysis by local h-refinement with T-splines](https://www.sciencedirect.com/science/article/pii/S0045782508002569)
-- [ ] [Isogeometric analysis using T-splines](https://www.sciencedirect.com/science/article/pii/S0045782509000875)
 - [ ] J. Pitk¨aranta, “The problem of membrane locking in finite element analysis of cylindrical
 shells,” Numerische Mathematik, vol. 61, no. 1, pp. 523–542, 1992.
 - [ ] G. Kikis and S. Klinkel, “Two-field formulations for isogeometric reissner–mindlin plates
@@ -55,6 +53,8 @@ Methods in Applied Mechanics and Engineering, vol. 354, pp. 850–870, 2019.
 
 ## T-spline isogeometric
 - [ ] T-spline for uCRM wingbox [Geometrically consistent static aeroelastic simulation using isogeometric analysis](https://www.sciencedirect.com/science/article/pii/S0045782518302779)
+- [ ] [Adaptive isogeometric analysis by local h-refinement with T-splines](https://www.sciencedirect.com/science/article/pii/S0045782508002569)
+- [ ] [Isogeometric analysis using T-splines](https://www.sciencedirect.com/science/article/pii/S0045782509000875)
 
 ## Isogeometric Kirchoff Shells
 - [ ] R. A. Sauer, Z. Zou, and T. J. Hughes, “A simple and efficient hybrid discretization approach

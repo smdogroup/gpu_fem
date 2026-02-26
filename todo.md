@@ -7,7 +7,15 @@
 
 * NOTE : line search needs to be very small (1e-3 updates for wing to get best performance) => smoother doing heavy work, multigrid barely anything
 
-- [ ] look at new Nedelec shell elements (see thesis on that, etc. implement them)
+
+NEW SHELL ELEMENTS
+- [ ] implement DeRham-shear and MITC-membrane with energy-smoothing for remaining prolongation issues
+- [x] implement DeRham-shear and DeRham for some mem constraints, MITC- for remaining, then energy-smoothing for remaining prolongation issues
+- [ ] then maybe try u ~ 1x4 IGA, v ~ 2x3 IGA, thx ~ 1x2, thy ~ 2x1, w ~ 2x2 IGA so fully consistent interpolation spaces for cylinder.. (just to try it) 
+   - [ ] need 4th order IGA
+- [ ] implement DeRham-shear and Regge-membrane (see Regge mem locking paper) with energy-smoothing, fewer mem-lock constraints?
+- [ ] implement new Nedelec shell elements (see thesis in theory)
+
 
 - [ ] add axial fraction and try line search again of baseline standard prolongator for beam, cylinder (see if still get good speedup to that, fair comparison)
    - [ ] also try NL beam, plate see if my EP and LP methods still help
