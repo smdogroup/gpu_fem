@@ -63,10 +63,10 @@ parser.add_argument("--thick", type=float, default=1e-3, help="shell thickness")
 # parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
 parser.add_argument("--curvature", type=float, default=1.0, help="shell curvature (lower gets flatter)")
 parser.add_argument("--length", type=float, default=1.0, help="cylinder length")
-parser.add_argument("--width", type=float, default=np.pi/2, help="cylinder width (hoop length)")
+parser.add_argument("--width", type=float, default=1.0, help="cylinder width (hoop length)")
 # parser.add_argument("--solve", type=str, default='direct', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
-parser.add_argument("--nprolong", type=int, default=10, help="number of smoothing steps for prolongator")
+parser.add_argument("--nprolong", type=int, default=1, help="number of smoothing steps for prolongator")
 parser.add_argument("--omega", type=float, default=1.0, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='supp_asw', help="--smooth : [gs, asw]")
 # parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
@@ -115,13 +115,12 @@ def _wrap_prolong_with_cache(obj, cache_dir=".mg_cache"):
         os.makedirs(cache_dir, exist_ok=True)
         Pp = f"{cache_dir}/{key}.P.npz"
 
-        if 'mitc' in args.elem:
-            if os.path.exists(Pp) and args.cache:
-                print("LOADED P from cache!")
-                obj.element._P_cache[obj.nxe] = sp.load_npz(Pp)
-            else:
-                raw()
-                sp.save_npz(Pp, obj.element._P_cache[obj.nxe])
+        if os.path.exists(Pp) and args.cache:
+            print("LOADED P from cache!")
+            obj.element._P_cache[obj.nxe] = sp.load_npz(Pp)
+        else:
+            raw()
+            sp.save_npz(Pp, obj.element._P_cache[obj.nxe])
     obj._assemble_prolongation = cached
 
 # t/R leads to potential membrane locking
@@ -145,11 +144,19 @@ axial_factor = 0.0
 # larger radius can lead to weird locking behavior
 
 
-if args.elem == 'drig':
+if 'drig' in args.elem:
+    assert args.elem in ['drig', 'drig_ep']
     ELEMENT = DeRhamMITC_IGACylinderElement(
         r=R, 
         curvature_on=True, 
         reduced_integrate_exy=True,
+        prolong_mode='standard' if args.elem == 'drig' else 'energy-jacobi',
+        # omega=0.4,
+        # omega=0.3,
+        # omega=0.3,
+        omega=0.1,
+        # omega=0.5, 
+        n_Psweeps=args.nprolong
     )
     ASSEMBLER = DeRhamIGASphereAssembler
 elif 'mitc' in args.elem:
@@ -218,7 +225,7 @@ elif args.load == 'axial':
     
 if 'mitc' in args.elem:
     load_fcn = xyz_load_fcn
-elif args.elem == 'drig':
+elif 'drig' in args.elem:
     load_fcn = xs_load_fcn
 
 
@@ -273,7 +280,7 @@ if 'mg' in args.solve:
         grid._assemble_system()
 
 
-        if args.elem == 'mitc_ep':
+        if '_ep' in args.elem:
             # add kmat into kmat cache for the element
             ELEMENT._kmat_cache[nxe // 2] = grid.kmat.copy()
 
@@ -311,7 +318,7 @@ if 'mg' in args.solve:
 
             if 'drig' in args.elem:
                 print("using Additive schwarz DeRham smoother")
-                if args.elem == 'drig':
+                if 'drig' in args.elem:
                     ASW_CLASS = TwoDimAddSchwarzDeRhamCylinderVertexEdges
                 # elif args.elem == 'mdrig':
                 #     ASW_CLASS = MixedTwoDimAddSchwarzDeRhamCylinderVertexEdges 
@@ -522,7 +529,7 @@ if 'mitc' in args.elem:
     disp_nrm = np.max([v_nrm, w_nrm])
     norm_nrm = norm(normal_defln)
 
-elif args.elem == 'drig':
+elif 'drig' in args.elem:
     u = assembler.u.copy()
     off_w = assembler.off_w; nw = assembler.nw
     normal_defln = u[off_w:off_w + nw]
@@ -541,8 +548,8 @@ if args.plot is not None:
 
     assembler.plot_disp(
         # disp_mag=0.0,
-        disp_mag = 0.05 * R,
-        # disp_mag=0.2 * R,
+        # disp_mag = 0.05 * R,
+        disp_mag=0.2 * R,
         # disp_mag=0.3 * R,
         # disp_mag=0.4 * R,
         # disp_mag=1.0, # same as radius (as multiple of inf-norm or max value)
