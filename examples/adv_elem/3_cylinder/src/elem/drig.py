@@ -49,8 +49,9 @@ class DeRhamMITC_IGACylinderElement:
     """
 
     def __init__(self, r: float, clamped: bool = False, curvature_on: bool = True,
-                 reduced_integrate_exy: bool = True):
+                 reduced_integrate_exy: bool = True, rax:float=None):
         self.r = float(r)
+        self.rax = float(rax) if rax is not None else None
         self.clamped = bool(clamped)
         self.curvature_on = bool(curvature_on)
         self.reduced_integrate_exy = bool(reduced_integrate_exy)
@@ -165,6 +166,7 @@ class DeRhamMITC_IGACylinderElement:
         Ds = (ks * G * thick) * np.eye(2)
 
         curv_on = self.curvature_on
+        invRx = (1.0 / self.rax) if (curv_on and self.rax is not None) else 0.0
         invRy = (1.0 / r) if (curv_on and r != 0.0) else 0.0
 
         # ==========================================================
@@ -313,12 +315,16 @@ class DeRhamMITC_IGACylinderElement:
 
                 exx_u = Nu_x                       # + 0*w
                 eyy_v = Nv_y
+                exx_w = invRx * Nw
                 eyy_w = invRy * Nw                  # curvature term (w/Ry)
 
                 D11, D12, D22 = Dm[0, 0], Dm[0, 1], Dm[1, 1]
 
                 # exx-exx
                 Kuu += wt * (D11 * np.outer(exx_u, exx_u))
+                Kuw += wt * (D11 * np.outer(exx_u, exx_w))
+                Kwu += wt * (D11 * np.outer(exx_w, exx_u))
+                Kww += wt * (D11 * np.outer(exx_w, exx_w))
 
                 # eyy-eyy pieces
                 Kvv += wt * (D22 * np.outer(eyy_v, eyy_v))
@@ -332,6 +338,9 @@ class DeRhamMITC_IGACylinderElement:
 
                 Kwu += wt * (D12 * np.outer(eyy_w, exx_u))
                 Kuw += wt * (D12 * np.outer(exx_u, eyy_w))
+
+                Kwv += wt * (D12 * np.outer(exx_w, eyy_v))
+                Kvw += wt * (D12 * np.outer(eyy_v, exx_w))
 
         # ---- reduced integration for exy only ----
         if self.reduced_integrate_exy:
@@ -512,14 +521,6 @@ class DeRhamMITC_IGACylinderElement:
     def _kron2(Ry: np.ndarray, Rx: np.ndarray) -> np.ndarray:
         return np.kron(Ry, Rx)
 
-    # NOTE: reuse your existing builders from the old class (copy them over or import them)
-    # - _build_R_p3(nxe_c)
-    # - _build_R_p2(nxe_c)
-    # - _build_P_p1(nxe_c)  (or P1 prolong)
-    # - _build_R_p1(nxe_c)
-
-    # If you want, you can literally paste your old implementations of these
-    # 1D operators below (unchanged).
     def _build_R_p3(self, nxe_c: int) -> np.ndarray:
         # ---- paste your existing p3 restriction here (unchanged) ----
         n_w_c = nxe_c + 3
@@ -567,7 +568,6 @@ class DeRhamMITC_IGACylinderElement:
         return R
 
     def _build_R_p2(self, nxe_c: int) -> np.ndarray:
-        # ---- paste your existing p2 restriction here (unchanged) ----
         n_w_c = nxe_c + 2
         nxe_f = 2 * nxe_c
         n_w_f = nxe_f + 2

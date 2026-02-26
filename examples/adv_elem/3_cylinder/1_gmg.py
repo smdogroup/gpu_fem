@@ -418,6 +418,7 @@ elif args.elem == 'drig':
     off_w = assembler.off_w; nw = assembler.nw
     normal_defln = u[off_w:off_w + nw]
     disp_nrm = norm(normal_defln)
+    norm_nrm = norm(normal_defln)
 
 nxe = args.nxe
 print(f"{nxe=} {disp_nrm=:.4e} {norm_nrm=:.4e}")
