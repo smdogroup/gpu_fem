@@ -48,10 +48,10 @@ class DeRhamIGASphereAssembler:
         E=70e9,
         nu=0.3,
         thick=1e-2,
-        length: float = 1.0,
+        length: float =  np.pi / 2.0,
         radius: float = 1.0,
-        hoop_length: float = np.pi,
-        load_fcn=lambda x, s: 0.0,
+        hoop_length: float = np.pi / 2.0,
+        load_fcn=lambda th, phi: 0.0,
         clamped: bool = False,
     ):
         self.element = ELEMENT if not callable(ELEMENT) else ELEMENT(r=radius, clamped=clamped)
@@ -66,13 +66,7 @@ class DeRhamIGASphereAssembler:
         self.radius = float(radius)
         self.Ly = float(hoop_length)
         self.clamped = bool(clamped)
-
-        # change load function from standard x,y,z to x,s coordinates
-        def xs_load_fcn(x,s):
-            y = -radius * np.cos(s / radius)
-            z = radius * np.sin(s / radius)
-            return load_fcn(x,y,z)
-        self.load_fcn = xs_load_fcn
+        self.load_fcn = load_fcn
 
         # keep element flag in sync
         if hasattr(self.element, "clamped"):
@@ -624,23 +618,25 @@ class DeRhamIGASphereAssembler:
 
         V = vec.reshape((ny, nx))
 
-        x = np.linspace(0.0, self.Lx, nx)
-        # s = np.linspace(-self.Ly, 0.0, ny)
-        s = np.arange(nx) * self.dy
-        X, S = np.meshgrid(x, s, indexing="xy")
-        Phi = S / self.radius
+        xs = np.linspace(0.0, self.Lx, nx)
+        # xs = np.arange(nx) * self.dx
+        ys = np.linspace(self.radius * np.pi/2.0, self.radius * (np.pi/2 - self.Ly), nx)
+        Xs, Ys = np.meshgrid(xs, ys, indexing="xy")
+        Th = Ys / self.radius
+        Phi = Xs / self.radius
 
-        X = 1.0 - X
+        max_th = np.max(Th)
+        max_Phi = np.max(Phi)
+        print(f"{max_th=:.4e} {max_Phi=:.4e}")
 
         R = V
         orig_mag = float(np.max(np.abs(R)))
         scale_factor = (disp_mag / orig_mag) if orig_mag > 0 else 1.0
         Rdef = R * scale_factor
 
-        # Y = (self.radius + Rdef) * np.sin(Phi)
-        # Z = (self.radius + Rdef) * np.cos(Phi)
-        Y = (self.radius + Rdef) * -np.cos(Phi)
-        Z = (self.radius + Rdef) * np.sin(Phi)
+        X = (self.radius + Rdef) * np.sin(Th) * np.cos(Phi)
+        Y = (self.radius + Rdef) * np.sin(Th) * np.sin(Phi)
+        Z = (self.radius + Rdef) * np.cos(Th)
 
         C = np.abs(V)
         C_face = 0.25 * (C[:-1, :-1] + C[1:, :-1] + C[:-1, 1:] + C[1:, 1:])

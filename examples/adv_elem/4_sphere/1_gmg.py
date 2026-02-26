@@ -1,9 +1,12 @@
 import numpy as np
 import sys
-sys.path.append("src/")
+sys.path.append("../3_cylinder/src/")
 # from elem import DeRhamIsogeometricCylinderElement #, MixedDeRhamIGACylinderElement
 from elem import DeRhamMITC_IGACylinderElement
-from drig_assembler import DeRhamIGACylinderAssembler
+
+
+sys.path.append("src/")
+from sdrig_assembler import DeRhamIGASphereAssembler
 # from drig_assembler2 import MixedDeRhamIGACylinderAssembler
 
 # MITC
@@ -58,8 +61,8 @@ parser.add_argument("--coupled", type=int, default=2, help="size of coupling ASW
 parser.add_argument("--thick", type=float, default=1e-3, help="shell thickness")
 # parser.add_argument("--radius", type=float, default=1.0, help="cylinder radius")
 parser.add_argument("--curvature", type=float, default=1.0, help="shell curvature (lower gets flatter)")
-parser.add_argument("--length", type=float, default=1.0, help="cylinder length")
-parser.add_argument("--width", type=float, default=np.pi / 2.0, help="cylinder width (hoop length)")
+parser.add_argument("--length", type=float, default=np.pi/2, help="cylinder length")
+parser.add_argument("--width", type=float, default=1.0, help="cylinder width (hoop length)")
 # parser.add_argument("--solve", type=str, default='direct', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
 parser.add_argument("--nprolong", type=int, default=10, help="number of smoothing steps for prolongator")
@@ -80,7 +83,7 @@ def _wrap_assemble_with_cache(obj, cache_dir=".mg_cache"):
         key = hashlib.md5(json.dumps({
             "elem": elem_key, "nxe": int(obj.nxe),
             "E": 70e9, "nu": 0.3, "thick": float(args.thick),
-            "L": float(L), "W": float(args.width), "R": float(R),
+            "L": float(args.length), "W": float(args.width), "R": float(R),
             "clamped": bool(clamped),
         }, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -104,7 +107,7 @@ def _wrap_prolong_with_cache(obj, cache_dir=".mg_cache"):
         key = hashlib.md5(json.dumps({
             "elem": args.elem, "nxe": int(obj.nxe),
             "E": 70e9, "nu": 0.3, "thick": float(args.thick),
-            "L": float(L), "W": float(args.width), "R": float(R),
+            "L": float(args.length), "W": float(args.width), "R": float(R),
             "clamped": bool(clamped), "nprolong" : int(args.nprolong),
         }, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -132,7 +135,7 @@ R = 1.0 / args.curvature
 
 print(f"{R=}")
 
-L = args.length
+# L = args.length
 clamped = True
 # clamped = False
 
@@ -147,7 +150,7 @@ if args.elem == 'drig':
         curvature_on=True, 
         reduced_integrate_exy=True,
     )
-    ASSEMBLER = DeRhamIGACylinderAssembler
+    ASSEMBLER = DeRhamIGASphereAssembler
 elif 'mitc' in args.elem:
     elems = ['mitc', 'mitc_gp', 'mitc_lp', 'mitc_ep']
     modes = ['standard', 'locking-global', 'locking-local', 'energy-jacobi']
@@ -166,8 +169,6 @@ elif 'mitc' in args.elem:
     ASSEMBLER = StandardCylinderAssembler
     
 
-
-
 import math
 def load_fcn(_x, _y):
     _xhat = _x / args.length
@@ -181,44 +182,31 @@ def load_fcn(_x, _y):
     r2 = r/diag
     # game of life polar load..
     # return 100.0 * np.sin(5.0  * np.pi * r) * np.cos(4*theta) * r2 * (1 - r2)
-    fcn1 = -100.0 * np.sin(4.0  * np.pi * r2) * np.cos(2.4*(theta-diag_th)) * r2 * (1 - r2)
-    return fcn1 * (_xhat - _xhat**2) * (_yhat - _yhat**2) # makes it zero on edges
+    return -100.0 * np.sin(4.0  * np.pi * r2) * np.cos(2.4*(theta-diag_th)) * r2 * (1 - r2)
 
-# NOTE : old load was this, great drig performance with this load case (low exy shear strain which is red int?)
-# load_fcn = lambda x, y, z : 1.0 * np.sin(np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * -y),
+# def load_fcn(x, y, A=-100.0, m=2.4):
+#     xhat = x / args.length
+#     yhat = y / args.width
 
-# load_fcn = lambda x, y, z : 1.0 * np.sin(3 * np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * -y),
-# load_fcn = lambda x, y, z : 1.0 * np.sin(3 * np.pi * x) * np.sin(2 * np.pi * z) * np.sin(2 * np.pi * -y),
-# new load case
-# load_fcn = lambda x, y, z : (
-#     np.sin(3 * np.pi * x) *
-#     (np.sin(np.pi * (z - y))**2) *
-#     (np.sin(np.pi * (z + y))**2)
-# )
-# load_fcn = lambda x, y, z : (
-#     np.sin(np.pi * (x + 1.2*(z - y))) *
-#     np.sin(np.pi * (x - 1.2*(z - y))) * 
-#     np.sin(np.pi * z) * np.sin(-np.pi * y)
+#     # Coordinates along / across the diagonal in hat-space
+#     s = 0.5 * (xhat + yhat)      # 0 at (0,0), 1 at (1,1)
+#     t = 0.5 * (xhat - yhat)      # flips sign under swap -> use even function for symmetry
 
+#     envelope = np.sin(np.pi * s)            # zero at s=0 and s=1 => (0,0) and (L,W)
+#     pattern  = np.cos(m * np.pi * t)        # symmetric about diagonal since cos is even
+
+#     return A * envelope * pattern
 
 # standard assembler construction
 assembler = ASSEMBLER(
     ELEMENT,
     nxe=args.nxe,
     E=70e9, nu=0.3, thick=args.thick,
-    length=L,
-    # hoop_length=np.pi, # half-cylinder
-    # hoop_length=np.pi*0.5*R, # quarter-cylinder
+    length=args.length,
     hoop_length=args.width,
     radius=R,
     clamped=clamped,
     load_fcn=load_fcn,
-    # load_fcn = lambda x,s : 1.0,
-    # load_fcn = lambda x, y, z : 1.0, # so outwards deflection
-    
-    # this load function below has great and simple smooth deflection shape
-    
-    # )
 )
 
 _wrap_assemble_with_cache(assembler)
@@ -241,14 +229,11 @@ if 'mg' in args.solve:
             ELEMENT,
             nxe=nxe,
             E=70e9, nu=0.3, thick=args.thick,
-            length=L,
+            length=args.length,
             hoop_length=args.width,
             radius=R,
-            # load_fcn = lambda x,s : 1.0,
-            # load_fcn = lambda x, y, z : 1.0, # so outwards deflection
-            # load_fcn = lambda x, y, z : 1.0 * np.sin(np.pi * x) * np.sin(np.pi * z) * np.sin(np.pi * -y),
-            load_fcn=load_fcn,
             clamped=clamped,
+            load_fcn=load_fcn,
         )
         # grid._assemble_system()
         _wrap_assemble_with_cache(grid)
@@ -453,9 +438,11 @@ print(f"{nxe=} {disp_nrm=:.4e} {norm_nrm=:.4e}")
 if args.plot is not None:
 
     assembler.plot_disp(
-        # disp_mag=0.2,
+        # disp_mag=0.0,
+        disp_mag = 0.05 * R,
+        # disp_mag=0.2 * R,
         # disp_mag=0.3 * R,
-        disp_mag=0.4 * R,
+        # disp_mag=0.4 * R,
         # disp_mag=1.0, # same as radius (as multiple of inf-norm or max value)
         # disp_mag=2.0,
         # disp_mag=5.0,

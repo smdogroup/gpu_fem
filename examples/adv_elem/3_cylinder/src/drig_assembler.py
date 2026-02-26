@@ -68,11 +68,12 @@ class DeRhamIGACylinderAssembler:
         self.clamped = bool(clamped)
 
         # change load function from standard x,y,z to x,s coordinates
-        def xs_load_fcn(x,s):
-            y = -radius * np.cos(s / radius)
-            z = radius * np.sin(s / radius)
-            return load_fcn(x,y,z)
-        self.load_fcn = xs_load_fcn
+        # def xs_load_fcn(x,s):
+        #     y = -radius * np.cos(s / radius)
+        #     z = radius * np.sin(s / radius)
+        #     return load_fcn(x,y,z)
+        # self.load_fcn = xs_load_fcn
+        self.load_fcn = load_fcn
 
         # keep element flag in sync
         if hasattr(self.element, "clamped"):
