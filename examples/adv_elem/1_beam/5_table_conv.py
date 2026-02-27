@@ -12,6 +12,7 @@ from elem import (
     AsymptoticIsogeometricTimoshenkoElement,
     HierarchicIsogeometricDispElement,
     DeRhamIsogeometricElement,
+    AlgebraicSubGridScaleElement,
 )
 
 from smoothers import BlockGaussSeidel, OnedimAddSchwarz, OneDimAddSchwarzVertex2Edges
@@ -133,7 +134,8 @@ args = parser.parse_args()
 # problem setup
 # ----------------------------
 nxe_vec = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
-beam_types = ["eb", "ts", "tsr", "aig", "hhr", "hhd", "higd", "drig"]
+beam_types = ["eb", "ts", "tsr", "aig", "hhr", "hhd", "higd", "drig", "asgs"]
+# beam_types = ['asgs']
 deflections = {key: [] for key in beam_types}
 
 load_fcn = lambda x: np.sin(4 * np.pi * x)
@@ -160,6 +162,8 @@ def build_element(elem):
     elif elem == "drig":
         ELEMENT = DeRhamIsogeometricElement()
         is_iga = True
+    elif elem == 'asgs':
+        ELEMENT = AlgebraicSubGridScaleElement()
     else:
         raise ValueError(f"Unknown elem type: {elem}")
     return ELEMENT, is_iga

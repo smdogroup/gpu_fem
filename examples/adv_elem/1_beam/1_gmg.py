@@ -4,6 +4,7 @@ import sys
 sys.path.append("src/")
 from std_assembler import StandardBeamAssembler
 from elem import EulerBernoulliElement, TimoshenkoElement, HierarchicRotHermiteElement, HierarchicDispHermiteElement
+from elem import AlgebraicSubGridScaleElement, OrthogonalSubGridScaleElement
 # sys.path.append("src/elem")
 # from eb_elem import EulerBernoulliElement
 from multigrid import VcycleSolver
@@ -33,7 +34,7 @@ parser.add_argument("--nxemin", type=int, default=16, help="min # elems multigri
 parser.add_argument("--thick", type=float, default=1e-3, help="number of elements")
 parser.add_argument("--solve", type=str, default='vmg', help="--solve : [direct, vmg, kmg]")
 parser.add_argument("--nsmooth", type=int, default=2, help="number of smoothing steps")
-parser.add_argument("--omega", type=float, default=0.8, help="omega smoother coeff (sometimes needs to be lower)")
+parser.add_argument("--omega", type=float, default=0.7, help="omega smoother coeff (sometimes needs to be lower)")
 parser.add_argument("--smoother", type=str, default='asw', help="--smooth : [gs, asw]")
 parser.add_argument("--plot", action=argparse.BooleanOptionalAction, default=False, help="Plot matrices and residual")
 parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help="run debug codes")
@@ -80,6 +81,17 @@ elif args.elem == 'tsrp':
         # prolong_mode="none",
         lam=args.lam
     )
+elif 'asgs' in args.elem:
+    if args.elem == 'asgs':
+        prolong_mode = 'standard'
+    elif args.elem == 'asgsp': # wasn't helpful at all (already good performance)
+        prolong_mode = 'global-kmat'
+
+    ELEMENT = AlgebraicSubGridScaleElement(
+        prolong_mode=prolong_mode, omega=0.3
+    )
+elif 'osgs' in args.elem:
+    ELEMENT = OrthogonalSubGridScaleElement()
 
 # ================================
 # make beam assembler
@@ -142,7 +154,7 @@ if 'mg' in args.solve:
         )
         grid._assemble_system()
 
-        if args.elem == 'tsrp':
+        if args.elem in ['tsrp', 'asgsp']:
             ELEMENT._kmat_cache[nxe // 2] = grid.kmat.tocsr()
             
         grids += [grid]
@@ -206,7 +218,9 @@ elif args.solve == 'kmg':
     vmg.n_cycles = 2
     vmg.print = False
 
-    vmg2 = VMG(grids, args.nsmooth, 2, smoothers=smoothers, line_search = args.elem == 'drig')
+    vmg2 = VMG(grids, args.nsmooth, ncyc=1, smoothers=smoothers, 
+        line_search = args.elem == 'drig'
+    )
     
     # assembler.u, nsteps = right_pcg2(
     #     A=assembler.kmat, b=assembler.force,
@@ -218,10 +232,24 @@ elif args.solve == 'kmg':
     # pc = None
     assembler._assemble_system()
 
+    norm_hist = []
     assembler.u, nsteps = right_pgmres2(
         A=assembler.kmat, b=assembler.force,
         restart=100, M=pc, #M=vmg
+        norm_hist=norm_hist,
     )
+
+    # assembler.u, nsteps = right_pcg2(
+    #     A=assembler.kmat, b=assembler.force,
+    #     M=pc, rtol=1e-6, atol=1e-20,
+    #     max_iter=200,
+    #     print_freq=3,
+    #     norm_hist=norm_hist,
+    # )
+    # print(f"{norm_hist=}")
+
+    total_vcyc = vmg2.total_vcycles
+    print(f"{total_vcyc=}")
 
 
 

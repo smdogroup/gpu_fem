@@ -1379,7 +1379,7 @@ class MITCShellElement:
     #         length: float = 1.0,
     #         n_sweeps: int = 10,
     #         omega: float = 0.5,
-    #         with_fillin: bool = False,
+    #         with_fillin: bool = True,
     #         use_mask: bool = True,
     #     ):
     #     """
@@ -1491,7 +1491,7 @@ class MITCShellElement:
         length: float = 1.0,
         n_sweeps: int = 10,
         omega: float = 0.7,
-        with_fillin: bool = False,
+        with_fillin: bool = True,
         use_mask: bool = True,
     ):
         """

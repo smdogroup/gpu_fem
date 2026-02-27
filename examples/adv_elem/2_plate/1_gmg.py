@@ -9,6 +9,7 @@ from elem import DiscreteKirchoffLoveTrianglePlateElement, ReissnerMindlinPlateE
 from dkt_assembler import DKTPlateAssembler
 from std_assembler import StandardPlateAssembler
 from elem import ReissnerMindlinPlateElement_OptProlong, MITCPlateElement_OptProlong
+from elem import AlgebraicSubGridScaleElement
 
 from smooth import TwoDimAddSchwarzDeRhamVertexEdges
 # from smooth import TwodimAddSchwarzColored22_BC, TwodimAddSchwarzColored22
@@ -93,14 +94,11 @@ elif args.elem == 'rmrp':
         # lam=1e-2,
         # lam=1.0,
     )
-
 elif args.elem == 'mitc':
     # standard prolongation so regular MITC
     ELEMENT = MITCPlateElement_OptProlong(
         prolong_mode='standard',
     )
-
-
 elif args.elem == 'mitc_gp':
     ELEMENT = MITCPlateElement_OptProlong(
         prolong_mode='locking-global', # best..
@@ -109,7 +107,6 @@ elif args.elem == 'mitc_gp':
         # lam=1e-6,
         # lam=1e-4,
     )
-
 elif args.elem == 'mitc_lp':
     ELEMENT = MITCPlateElement_OptProlong(
         # prolong_mode='locking-global', # best..
@@ -134,7 +131,6 @@ elif args.elem == 'mitc_lp':
         a=1.0, b=1.0, # true MITC shells use edge tying points for first order (but leads to slower and a bit more unstable smooth prolong conv) than a,b = 1/sqrt(3) below
         # a=1.0/np.sqrt(3), b=1.0/np.sqrt(3)
     )
-
 elif args.elem == 'mitc_ep':
     ELEMENT = MITCPlateElement_OptProlong(
         prolong_mode='energy-jacobi',
@@ -151,6 +147,8 @@ elif args.elem == 'mitc_ep':
         a=1.0, b=1.0, # true MITC shells use edge tying points for first order (but leads to slower and a bit more unstable smooth prolong conv) than a,b = 1/sqrt(3) below
         # a=1.0/np.sqrt(3), b=1.0/np.sqrt(3)
     )
+elif args.elem == 'asgs':
+    ELEMENT = AlgebraicSubGridScaleElement()
 
 # ================================
 # make plate assembler
@@ -242,7 +240,7 @@ if 'mg' in args.solve:
             )
         elif 'asw' in args.smoother:
             if args.elem in ['drig', 'drigr']:
-                omega = args.omega * 0.7 # need extra mult for them (default best values)
+                omega = args.omega * 0.5 # need extra mult for them (default best values)
                 coupled = args.coupled
                 if coupled > 2:
                     print(f"{args.elem=} and {args.coupled=} dropped to 2")
@@ -320,7 +318,7 @@ elif args.solve == 'vmg':
 
     # mitc_ep does better without line search btw
     # line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
-    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep']
+    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep', 'asgs']
     # if args.elem == 'mitcp':
     #     line_search = ELEMENT.prolong_mode != 'locking-local'
 
@@ -341,7 +339,7 @@ elif args.solve == 'vmg':
 elif args.solve == 'kmg':
 
     # line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
-    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep']
+    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep', 'asgs']
     # if args.elem == 'mitcp':
     #     line_search = ELEMENT.prolong_mode != 'locking-local'
 
@@ -392,6 +390,10 @@ if args.plot:
 # ==============================
 # VERIFICATION
 # ==============================
+
+w = assembler.u[0::3]
+w_max = np.max(np.abs(w))
+print(f"{args.nxe=} {w_max=:.4e}")
 
 # if args.verify:
 

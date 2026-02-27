@@ -717,7 +717,7 @@ class DeRhamMITC_IGACylinderElement:
         self,
         P: sp.csr_matrix,
         fine_bc_dofs: np.ndarray,
-        coarse_bc_dofs: np.ndarray | None = None,
+        coarse_bc_dofs: np.ndarray = None,
         inject_identity_on_fine: bool = False,
     ) -> sp.csr_matrix:
         """

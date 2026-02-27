@@ -91,7 +91,7 @@ def right_pcg2(A, b, x0=None, rtol=1e-8, atol=1e-7, max_iter=1000, M=None, print
     return x, k+1
 
 
-def right_pgmres2(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None, rtol:float=1e-6):
+def right_pgmres2(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None, rtol:float=1e-6, norm_hist:list=[]):
     """
     Right-precond Modified Gram-Schmidt GMRES
     
@@ -130,6 +130,8 @@ def right_pgmres2(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None, rt
     beta = np.linalg.norm(r)
     init_defect_nrm = beta
     # print(f"{beta=}")
+
+    norm_hist += [1.0]
     
     if beta < tol:
         return x
@@ -186,6 +188,8 @@ def right_pgmres2(A, b, x0=None, restart=50, tol=1e-8, max_iter=1000, M=None, rt
             H[j+1,j] = 0.0
 
             if (jj % 4 == 0): print(f"GMRES [{jj}] : {g[j+1]=}")
+
+            norm_hist += [abs(g[j+1]) / init_defect_nrm]
 
             # Check convergence
             if abs(g[j+1]) <= (tol + init_defect_nrm * rtol):

@@ -31,6 +31,15 @@ DeRham IGA element (DRIG) - great multigrid performance
 
 
 ## Elements still to implement
+ASGS (algebraic subgrid scale) element 1
+- [ ] subgrid formulation is interesting [A variational multiscale stabilized finite element formulation for Reissner–Mindlin plates and Timoshenko beams](https://upcommons.upc.edu/server/api/core/bitstreams/73fce476-07ab-4ea8-84b0-3552f852f9e7/content)
+    - [ ] [Subscales on the element boundaries in the variational two-scale finite element method](https://www.sciencedirect.com/science/article/pii/S0045782508003873)
+    - [ ] [Virtual bubbles and Galerkin-least-squares type methods (Ga.L.S.)](https://www.sciencedirect.com/science/article/pii/004578259390119I)
+
+ASGS element 2
+- [ ] [Improving stability and accuracy of Reissner–Mindlin plate finite elements via algebraic subgrid scale stabilization](https://www.sciencedirect.com/science/article/pii/S0045782504000477)
+    * this one uses some DSG and may be better than the first version?
+
 Hu-Zhang mixed element
 - [ ] [Alleviating shear-locking in the Reissner-Mindlin plate via symmetric Hu-Zhang elements](https://www.researchgate.net/profile/Adam-Sky/publication/372647437_Alleviating_shear-locking_in_the_Reissner-Mindlin_plate_via_symmetric_Hu-Zhang_elements/links/64c130efc41fb852dd9d6889/Alleviating-shear-locking-in-the-Reissner-Mindlin-plate-via-symmetric-Hu-Zhang-elements.pdf)
     * full paper link [A Reissner–Mindlin plate formulation using symmetric Hu-Zhang elements via polytopal transformations](https://www.sciencedirect.com/science/article/pii/S0045782523004152)
@@ -54,10 +63,11 @@ Falk-Tu element
 Full set of Reissner-Mindlin plate elements (review paper)
 - [ ] just read and cite this: [Finite Elements for the Reissner–Mindlin Plate](https://link.springer.com/chapter/10.1007/978-3-540-78319-0_5)
 
+Non-conforming bubble element
+- [ ] [Nonconforming locking-free finite elements for Reissner–Mindlin plates](https://www.sciencedirect.com/science/article/pii/S004578250500277X)
 
 ## New Reading
 * don't spend too much time going over plates again (great performance), but do go over this first subgrid or any interesting papers here
-- [ ] subgrid formulation is interesting [A variational multiscale stabilized finite element formulation for Reissner–Mindlin plates and Timoshenko beams](https://upcommons.upc.edu/server/api/core/bitstreams/73fce476-07ab-4ea8-84b0-3552f852f9e7/content)
 - [ ] [Developments of Mindlin-Reissner Plate Elements](https://onlinelibrary.wiley.com/doi/10.1155/2015/456740)
 - [ ] D. Boffi, F. Brezzi, and M. Fortin, Mixed Finite Element Methods and Applications (Springer
 Series in Computational Mathematics), 1st ed. Berlin, Heidelberg: Springer Berlin Heidel-

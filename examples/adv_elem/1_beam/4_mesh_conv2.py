@@ -9,6 +9,8 @@ from elem import EulerBernoulliElement, TimoshenkoElement, HierarchicRotHermiteE
 from multigrid import VcycleSolver
 from smoothers import BlockGaussSeidel, OnedimAddSchwarz, right_pcg2, right_pgmres2, OneDimAddSchwarzVertex2Edges
 from multigrid2 import vcycle_solve, VMG
+from elem import AlgebraicSubGridScaleElement
+
 
 # IGA elements
 from elem import AsymptoticIsogeometricTimoshenkoElement, HierarchicIsogeometricDispElement
@@ -63,6 +65,8 @@ for nxe in nxe_vec:
             # derham isogeometric element, special vertex-edge style IGA 2nd order basis that is auto locking-free!
             ELEMENT = DeRhamIsogeometricElement()
             is_iga = True
+        elif args.elem == 'asgs':
+            ELEMENT = AlgebraicSubGridScaleElement()
 
         # ================================
         # make beam assembler

@@ -2746,7 +2746,7 @@ class MITCPlateElement_OptProlong:
             length: float = 1.0,
             n_sweeps: int = 10,
             omega: float = 0.5,
-            with_fillin: bool = False,
+            with_fillin: bool = True,
             use_mask: bool = True,
         ):
         """
@@ -2966,8 +2966,8 @@ class MITCPlateElement_OptProlong:
         RHS_csr = sp.csr_matrix(rhs)
         X = sp.csr_matrix(P0_all)  # initial guess
 
-        # mask_mode = 1
-        mask_mode = 2
+        mask_mode = 1
+        # mask_mode = 2
 
         if mask_mode == 1:
             mask = None
@@ -3079,7 +3079,7 @@ class MITCPlateElement_OptProlong:
         length: float = 1.0,
         n_sweeps: int = 10,
         omega: float = 0.7,
-        with_fillin: bool = False,
+        with_fillin: bool = True,
         use_mask: bool = True,
     ):
         """
@@ -3175,6 +3175,7 @@ class MITCPlateElement_OptProlong:
         nxf = nxe_f + 1
         Nf = nxf * nxf
 
+        # NOTE : make sure with_fillin = True for all energy / locking smoothed methods
         if self.prolong_mode == "locking-global":
             method = self._locking_aware_prolong_global_mitc_v1
             # method = self._locking_aware_prolong_global_mitc_v2
@@ -3209,6 +3210,7 @@ class MITCPlateElement_OptProlong:
         nxc = nxe_coarse + 1
         Nc = nxc * nxc
 
+        # NOTE : make sure with_fillin = True for all energy / locking smoothed methods
         if self.prolong_mode == "locking-global":
             method = self._locking_aware_prolong_global_mitc_v1
             # method = self._locking_aware_prolong_global_mitc_v2

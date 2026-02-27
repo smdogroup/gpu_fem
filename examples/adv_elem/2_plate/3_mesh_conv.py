@@ -9,6 +9,7 @@ from elem import (
     DeRhamIsogeometricPlateElement,
     DiscreteKirchoffLoveTrianglePlateElement,
     ReissnerMindlinPlateElement,
+    AlgebraicSubGridScaleElement,
 )
 
 from dkt_assembler import DKTPlateAssembler
@@ -128,10 +129,11 @@ args = parser.parse_args()
 # ----------------------------
 # problem setup
 # ----------------------------
-nxe_vec = [4, 8, 16, 32, 64]
-# nxe_vec = [4, 8, 16, 32, 64, 128]
+# nxe_vec = [4, 8, 16, 32, 64]
+nxe_vec = [4, 8, 16, 32, 64, 128]
 # plate_types = ["rmr"]
-plate_types = ["dkt", "rm", "rmr", "higd", "drig", "drigr"]
+# plate_types = ["dkt", "rm", "rmr", "higd", "drig", "drigr", "asgs"]
+plate_types = ['asgs']
 deflections = {key: [] for key in plate_types}
 
 # load_fcn = lambda x: np.sin(4 * np.pi * x)
@@ -159,6 +161,8 @@ def build_element(elem):
         ELEMENT = ReissnerMindlinPlateElement(reduced_integrated=True)
         if args.nsmooth < 4:
             print("need much more nsmooth like 4 for Reissner-Mindlin element")
+    elif elem == 'asgs':
+        ELEMENT = AlgebraicSubGridScaleElement()
     else:
         raise ValueError(f"Unknown elem type: {elem}")
     return ELEMENT, is_iga
