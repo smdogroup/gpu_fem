@@ -4,73 +4,144 @@ from .basis import interp_lagrange, interp_lagrange_transpose
 from .basis import get_lagrange_basis_2d_all
 
 import scipy.sparse as sp
+# ============================================================
+# ASGS element + added CIP edge stabilization
+# ============================================================
+
+import numpy as np
+import scipy.sparse as sp
+from .basis import second_order_quadrature
+from .basis import get_lagrange_basis_2d_all
 
 class AlgebraicSubGridScaleElement:
-    # reissner-mindlin C0-continuous element 
-    # with ASGS method (algebraic sub-grid scale)
-    # A variational multiscale stabilized finite element formulation for Reissner–Mindlin plates and Timoshenko beams
-    # https://upcommons.upc.edu/server/api/core/bitstreams/73fce476-07ab-4ea8-84b0-3552f852f9e7/content
+    """
+    ASGS Reissner–Mindlin Q1 plate element + inter-element edge SGS terms.
 
-    def __init__(self):              
+    Compatibility requirements (for your StabilizedPlateAssembler):
+      - attributes:
+          dof_per_node = 3
+          nodes_per_elem = 4
+          ndof = 12
+          clamped (bool)
+          edge_stab (bool)
+      - methods:
+          get_kelem(E,nu,thick,elem_xpts) -> (12,12)
+          get_felem(mag,elem_xpts) -> (12,)
+          get_edge_stab_kelem(E,nu,thick, elem_xpts_L, elem_xpts_R,
+                              edge_L, edge_R, nx, ny, loc_conn_L=None, loc_conn_R=None)
+              -> (Kedge6(6,6), gnodes2(g0,g1))
+
+    Notes on the paper:
+      - Volume ASGS uses tau_w/eps^2 and tau_th/eps^2 (your current structure).
+      - Edge SGS terms for RM plates are (paper Eq. 5.14):
+            -(δ k1/2) < [[ n·∇θ ]], [[ n·∇φ ]] >_E
+            -(δ k2/2) < [[ n (div θ) ]], [[ n (div φ) ]] >_E
+            -(δ /(2ε))< [[ n·∇w ]], [[ n·∇v ]] >_E
+        with δ = δ0 * h (δ0 dimensionless).
+      - Because those appear with MINUS sign in the bilinear form,
+        we assemble Kedge6 as NEGATIVE semi-definite.
+    """
+
+    def __init__(self, edge_stab: bool = True):
         self.dof_per_node = 3
         self.nodes_per_elem = 4
-        self.ndof = self.dof_per_node * self.nodes_per_elem
+        self.ndof = 12
         self.clamped = False
+        self.edge_stab = bool(edge_stab)
 
-        # stabilization constants for A
-        # this is copied from TS beam, does this still work for RM plate? idk..
+        # ASGS constants (same family you already use)
         self.c1 = 12.0
-
-        # sweep in c3 values (should be 12 but a bit better with c3 = 6 (c3 = 6 makes t/L = 1e-2 worse though)?)
         self.c3 = 12.0
-        # self.c3 = 24.0
-        # self.c3 = 10.0
-        # self.c3 = 6.0
-        # self.c3 = 3.0
-        # self.c3 = 20.0
-        # self.c3 = 2.0
-        self.c2 = self.c4 = 1.0
+        self.c2 = 1.0
+        self.c4 = 1.0
 
-        # cache for prolong/restrict operators
-        self._P1_cache = {}   # key: nxe_coarse -> P1 (csr)
-        self._P2_cache = {}   # key: nxe_coarse -> P2 (csr)
+        # edge SGS parameter δ = δ0 * h (dimensionless δ0)
+        self.delta0 = 0.1  # start modest; sweep 0.01..0.5 first
 
-    def get_kelem(self, E: float, nu: float, thick: float, elem_xpts: np.ndarray):
+        # Q1 local edge -> local node ids (KEEP STANDARD ORDER for compatibility)
+        # local nodes: 0:(ex,ey), 1:(ex+1,ey), 2:(ex+1,ey+1), 3:(ex,ey+1)
+        self._edge_lnodes = {
+            0: (0, 1),  # bottom
+            1: (1, 2),  # right
+            2: (2, 3),  # top
+            3: (3, 0),  # left
+        }
 
-        pts, wts = second_order_quadrature()
+        # caches for your MG hooks (keep if you use them elsewhere)
+        self._P1_cache = {}
+        self._P2_cache = {}
 
-        kelem = np.zeros((self.ndof, self.ndof))
+    # ----------------------------
+    # helpers: material constants
+    # ----------------------------
+    @staticmethod
+    def _k1k2(E, nu, t):
+        k1 = E * t**3 / (24.0 * (1.0 + nu))
+        k2 = E * t**3 / (24.0 * (1.0 - nu))
+        return float(k1), float(k2)
 
-        k1 = E * thick**3 / (24.0 * (1.0 + nu))
-        k2 = E * thick**3 / (24.0 * (1.0 - nu))
-
+    @staticmethod
+    def _ksGh_eps(E, nu, t):
         ks = 5.0 / 6.0
         G = E / (2.0 * (1.0 + nu))
-        ksGh = ks * G * thick
+        ksGh = ks * G * t
+        eps = 1.0 / ksGh
+        return float(ksGh), float(eps)
+
+    @staticmethod
+    def _elem_h(elem_xpts):
+        x = elem_xpts[0::3]
+        y = elem_xpts[1::3]
+        dx = float(np.max(x) - np.min(x))
+        dy = float(np.max(y) - np.min(y))
+        # structured quad
+        return float(np.sqrt(abs(dx * dy)))
+
+    @staticmethod
+    def _edge_quad_2pt():
+        s = np.array([-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)], dtype=float)
+        w = np.array([1.0, 1.0], dtype=float)
+        return s, w
+
+    @staticmethod
+    def _ref_edge(edge_id: int, s: float):
+        # reference quad edges (xi,eta) in [-1,1]^2
+        if edge_id == 0:  # bottom: eta=-1
+            return s, -1.0
+        if edge_id == 1:  # right: xi=+1
+            return 1.0, s
+        if edge_id == 2:  # top: eta=+1
+            return s, 1.0
+        if edge_id == 3:  # left: xi=-1
+            return -1.0, s
+        raise ValueError("edge_id must be 0..3")
+
+    # ----------------------------
+    # volume element stiffness
+    # ----------------------------
+    def get_kelem(self, E: float, nu: float, thick: float, elem_xpts: np.ndarray):
+        pts, wts = second_order_quadrature()
+        kelem = np.zeros((self.ndof, self.ndof), dtype=float)
+
+        k1, k2 = self._k1k2(E, nu, thick)
+        ksGh, eps = self._ksGh_eps(E, nu, thick)
+
+        # shear matrix
         Ds = ksGh * np.eye(2)
+
+        # mesh size and taus
+        h = self._elem_h(elem_xpts)
+        kstab = k1 + k2
+
+        tau_th = 1.0 / (self.c1 * kstab / (h**2) + self.c2 / eps)
+        tau_w  = 1.0 / (self.c3 / eps / (h**2) + self.c4 / (eps**2) / kstab)
 
         x = elem_xpts[0::3]
         y = elem_xpts[1::3]
 
-        dx = abs(np.max(x) - np.min(x))
-        dy = abs(np.max(y) - np.min(y))
-        h = np.sqrt(dx * dy)     # or h = max(dx, dy)
-
-        eps = 1.0 / ksGh
-        kstab = k1 + k2
-        # tau_w = 0.0
-        tau_th = 1.0 / (self.c1 * kstab / h**2 + self.c2 / eps)
-        tau_w = 1.0 / (self.c3 / eps / h**2 + self.c4 / eps**2 / kstab)
-
-        # tau_w goes to zero
-        # ks_final = k2 - tau_w * (ksGh**2)
-        # ksGh_final = 1.0 - tau_th * ksGh
-        # print(f"{ks_final=:.4e} {ksGh_final=:.4e}")
-
         for ii, xi in enumerate(pts):
             for jj, eta in enumerate(pts):
                 wt = wts[ii] * wts[jj]
-
                 N, Nxi, Neta = get_lagrange_basis_2d_all(xi, eta)
 
                 x_xi = np.dot(Nxi, x);  x_eta = np.dot(Neta, x)
@@ -86,193 +157,206 @@ class AlgebraicSubGridScaleElement:
                 Nx = Nxi * xi_x + Neta * eta_x
                 Ny = Nxi * xi_y + Neta * eta_y
 
+                dA = wt * J
+
+                # div(theta) = thx_x + thy_y
+                Bdiv = np.zeros((1, self.ndof))
+                Bdiv[0, 1::3] = Nx
+                Bdiv[0, 2::3] = Ny
+
+                # k1 ||∇θ||^2 + k2 ||div θ||^2 (your "paper formulation" variant)
                 Bgrad = np.zeros((4, self.ndof))
                 Bgrad[0, 1::3] = Nx
                 Bgrad[1, 1::3] = Ny
                 Bgrad[2, 2::3] = Nx
                 Bgrad[3, 2::3] = Ny
 
-                kelem += k1 * (Bgrad.T @ Bgrad) * (wt * J)
-                
-                # # proper plate bending
-                # # NOTE : not sure how to get consistent results with paper yet (this doesn't seem to match)
-                # # if use above bending => not mesh converging but great GMG performance
-                # Bk = np.zeros((3, self.ndof))
-                # Bk[0, 1::3] = Nx          # thx_x
-                # Bk[1, 2::3] = Ny          # thy_y
-                # Bk[2, 1::3] = Ny          # thx_y
-                # Bk[2, 2::3] = Nx          # thy_x
+                kelem += k1 * (Bgrad.T @ Bgrad) * dA
+                kelem += k2 * (Bdiv.T  @ Bdiv)  * dA
 
-                # Db = (E*thick**3)/(12.0*(1.0-nu**2)) * np.array([
-                #     [1.0, nu, 0.0],
-                #     [nu, 1.0, 0.0],
-                #     [0.0, 0.0, 0.5*(1.0-nu)]
-                # ])
-
-                # kelem += (Bk.T @ Db @ Bk) * (wt*J)
-
-                Bdiv = np.zeros((1, self.ndof))
-                Bdiv[0, 1::3] = Nx
-                Bdiv[0, 2::3] = Ny
-
-                kelem += k2 * (Bdiv.T @ Bdiv) * (wt * J)
-
+                # shear operator: [w_x - thx, w_y - thy]
                 Bs = np.zeros((2, self.ndof))
                 Bs[0, 0::3] = Nx
                 Bs[0, 1::3] -= N
                 Bs[1, 0::3] = Ny
                 Bs[1, 2::3] -= N
 
-                kelem += (Bs.T @ Ds @ Bs) * (wt * J)
+                kelem += (Bs.T @ Ds @ Bs) * dA
 
-                kelem -= tau_w * (ksGh**2) * (Bdiv.T @ Bdiv) * (wt * J)
-                kelem -= tau_th * ksGh * (Bs.T @ Ds @ Bs) * (wt * J)
+                # ASGS interior stabilization (paper uses tau/eps^2)
+                kelem -= (tau_w  / (eps**2)) * (Bdiv.T @ Bdiv) * dA
+                kelem -= (tau_th / (eps**2)) * (Bs.T   @ Bs)   * dA
 
         return kelem
 
-    # def get_kelem(self, E: float, nu: float, thick: float, elem_xpts: np.ndarray):
-    #     pts, wts = second_order_quadrature()
-    #     kelem = np.zeros((self.ndof, self.ndof))
-
-    #     # material
-    #     ks = 5.0 / 6.0
-    #     G = E / (2.0 * (1.0 + nu))
-    #     ksGh = ks * G * thick
-    #     Ds = ksGh * np.eye(2)
-
-    #     x = elem_xpts[0::3]
-    #     y = elem_xpts[1::3]
-    #     dx = abs(np.max(x) - np.min(x))
-    #     dy = abs(np.max(y) - np.min(y))
-    #     h = max(dx, dy)  # recommend for robustness
-
-    #     eps = 1.0 / ksGh
-    #     # if you keep your tau formulas:
-    #     k1 = E * thick**3 / (24.0 * (1.0 + nu))
-    #     k2 = E * thick**3 / (24.0 * (1.0 - nu))
-    #     kstab = k1 + k2
-    #     tau_th = 1.0 / (self.c1 * kstab / h**2 + self.c2 / eps)
-    #     tau_w  = 1.0 / (self.c3 / eps / h**2 + self.c4 / eps**2 / kstab)
-
-    #     # --- accumulators for projected residual operators ---
-    #     # area = 0.0
-    #     # Bs_int   = np.zeros((2, self.ndof))  # ∫ Bs0 dA
-    #     # Bdiv_int = np.zeros((1, self.ndof))  # ∫ Bdiv dA
-    #     # accumulators
-    #     b2_int = 0.0
-    #     Bs_b_int   = np.zeros((2, self.ndof))  # ∫ b Bs0 dA
-    #     Bdiv_b_int = np.zeros((1, self.ndof))  # ∫ b Bdiv dA
-
-    #     for ii, xi in enumerate(pts):
-    #         for jj, eta in enumerate(pts):
-    #             wt = wts[ii] * wts[jj]
-    #             N, Nxi, Neta = get_lagrange_basis_2d_all(xi, eta)
-
-    #             x_xi = np.dot(Nxi, x);  x_eta = np.dot(Neta, x)
-    #             y_xi = np.dot(Nxi, y);  y_eta = np.dot(Neta, y)
-    #             J = x_xi * y_eta - x_eta * y_xi
-
-    #             invJ = 1.0 / J
-    #             xi_x  =  y_eta * invJ
-    #             xi_y  = -x_eta * invJ
-    #             eta_x = -y_xi  * invJ
-    #             eta_y =  x_xi  * invJ
-
-    #             Nx = Nxi * xi_x + Neta * eta_x
-    #             Ny = Nxi * xi_y + Neta * eta_y
-
-    #             dA = wt * J
-
-    #             # --- your bending (whatever you use) ---
-    #             Bgrad = np.zeros((4, self.ndof))
-    #             Bgrad[0, 1::3] = Nx
-    #             Bgrad[1, 1::3] = Ny
-    #             Bgrad[2, 2::3] = Nx
-    #             Bgrad[3, 2::3] = Ny
-    #             kelem += k1 * (Bgrad.T @ Bgrad) * dA
-
-    #             Bdiv = np.zeros((1, self.ndof))
-    #             Bdiv[0, 1::3] = Nx
-    #             Bdiv[0, 2::3] = Ny
-    #             kelem += k2 * (Bdiv.T @ Bdiv) * dA
-
-    #             # --- kinematic shear operator Bs0 ---
-    #             Bs0 = np.zeros((2, self.ndof))
-    #             Bs0[0, 0::3] = Nx
-    #             Bs0[0, 1::3] -= N
-    #             Bs0[1, 0::3] = Ny
-    #             Bs0[1, 2::3] -= N
-
-    #             # physical shear energy (full integration, MG-friendly)
-    #             kelem += (Bs0.T @ Ds @ Bs0) * dA
-
-    #             # --- accumulate integrals for projected-ASGS ---
-    #             # area += dA
-    #             # Bs_int   += Bs0 * dA
-    #             # Bdiv_int += Bdiv * dA
-
-    #             # in quad loop, after you have xi, eta, dA, Bs0, Bdiv:
-    #             b = (1.0 - xi*xi) * (1.0 - eta*eta)
-
-    #             b2_int     += (b*b) * dA
-    #             Bs_b_int   += (b)   * Bs0  * dA
-    #             Bdiv_b_int += (b)   * Bdiv * dA
-
-    #     # # --- projected operators (P0 L2 projection) ---
-    #     # Bs_bar   = Bs_int / area          # 2 x ndof
-    #     # Bdiv_bar = Bdiv_int / area        # 1 x ndof
-
-    #     # # --- ASGS stabilization using projected residuals ---
-    #     # # paper uses tau/eps^2; since eps=1/ksGh => 1/eps^2 = ksGh^2
-    #     # coef = 1.0 / (eps**2)
-
-    #     # kelem -= (tau_th * coef) * (Bs_bar.T @ Bs_bar) * area
-    #     # kelem -= (tau_w  * coef) * (Bdiv_bar.T @ Bdiv_bar) * area
-
-    #     coef = 1.0 / (eps**2)  # = ksGh**2
-
-    #     # bubble-projected stabilization (scalar “mass” b2_int)
-    #     kelem -= (tau_th * coef) * (Bs_b_int.T @ Bs_b_int) / b2_int
-    #     kelem -= (tau_w  * coef) * (Bdiv_b_int.T @ Bdiv_b_int) / b2_int
-
-    #     return kelem
-
-    def get_felem(self, mag, elem_xpts:np.ndarray):
-        """get element load vector"""
-
+    def get_felem(self, mag, elem_xpts: np.ndarray):
         pts, wts = second_order_quadrature()
-        felem = np.zeros(self.ndof)
+        felem = np.zeros(self.ndof, dtype=float)
+
         x = elem_xpts[0::3]
         y = elem_xpts[1::3]
 
-        for ipt in range(9):
-            ii, jj = ipt % 3, ipt // 3
-            xi = pts[ii]; eta = pts[jj]
-            wt = wts[ii] * wts[jj]
-            # basis (need N to map load; Nxi/Neta to get geometry jacobian)
-            N, Nxi, Neta= get_lagrange_basis_2d_all(
-                xi, eta, 
-            )
+        for ii, xi in enumerate(pts):
+            for jj, eta in enumerate(pts):
+                wt = wts[ii] * wts[jj]
+                N, Nxi, Neta = get_lagrange_basis_2d_all(xi, eta)
 
-            # geometry jacobian determinant
-            x_xi  = np.dot(Nxi,  x);  x_eta = np.dot(Neta, x)
-            y_xi  = np.dot(Nxi,  y);  y_eta = np.dot(Neta, y)
-            J = x_xi * y_eta - x_eta * y_xi
+                x_xi = np.dot(Nxi, x);  x_eta = np.dot(Neta, x)
+                y_xi = np.dot(Nxi, y);  y_eta = np.dot(Neta, y)
+                J = x_xi * y_eta - x_eta * y_xi
 
-            # physical point (x,y) at this quadrature point
-            xq = float(np.dot(N, x))
-            yq = float(np.dot(N, y))
+                xq = float(np.dot(N, x))
+                yq = float(np.dot(N, y))
+                q = float(mag(xq, yq))
 
-            q = float(mag(xq, yq))   # distributed transverse load
-            # q *= 60.0 # not sure where this correction is coming from tbh
-
-            # consistent nodal load contribution: ∫ N^T q dA = Σ N_i q * wt * J
-            fN = q * wt * J * N  # length 9
-
-            # Apply load to the DOFs that contribute to transverse displacement.
-            felem[0::3] += fN  # w
+                felem[0::3] += q * wt * J * N  # load on w
 
         return felem
+
+    # ----------------------------
+    # EDGE SGS: required by your assembler
+    # ----------------------------
+    def get_edge_stab_kelem(
+        self,
+        E: float, nu: float, thick: float,
+        elem_xpts_L: np.ndarray, elem_xpts_R: np.ndarray,
+        edge_L: int, edge_R: int,
+        nx: float, ny: float,
+        loc_conn_L: np.ndarray = None,
+        loc_conn_R: np.ndarray = None,
+    ):
+        """
+        Returns:
+          Kedge6: (6,6) over the two shared edge nodes (in left edge node order)
+          gnodes2: (g0,g1) global node ids in that same order
+
+        Assembles the inter-element SGS edge terms (paper Eq. 5.14):
+          Kedge6 = - ∫_E [ (δ k1/2) [[n·∇θ]]·[[n·∇φ]]
+                         + (δ k2/2) [[div θ]] [[div φ]]
+                         + (δ /(2ε)) [[n·∇w]] [[n·∇v]] ] ds
+
+        where δ = delta0 * h, h from the left element size.
+        """
+        if (loc_conn_L is None) or (loc_conn_R is None):
+            raise ValueError("Assembler must pass loc_conn_L and loc_conn_R for consistent edge DOF ordering.")
+
+        dpn = 3
+        k1, k2 = self._k1k2(E, nu, thick)
+        _, eps = self._ksGh_eps(E, nu, thick)
+
+        # δ = δ0 * h
+        h = self._elem_h(elem_xpts_L)
+        delta = float(self.delta0) * h
+
+        # left edge local nodes (standard)
+        l0, l1 = self._edge_lnodes[edge_L]
+        g0 = int(loc_conn_L[l0])
+        g1 = int(loc_conn_L[l1])
+        gnodes2 = (g0, g1)
+
+        def cols3(ln):
+            return [3*ln + 0, 3*ln + 1, 3*ln + 2]  # w, thx, thy
+
+        cols6_L = cols3(l0) + cols3(l1)
+
+        # right side local edge nodes, reorder to match (g0,g1)
+        r0, r1 = self._edge_lnodes[edge_R]
+        rg0 = int(loc_conn_R[r0])
+        rg1 = int(loc_conn_R[r1])
+        if (rg0, rg1) == (g0, g1):
+            cols6_R = cols3(r0) + cols3(r1)
+        elif (rg1, rg0) == (g0, g1):
+            cols6_R = cols3(r1) + cols3(r0)
+        else:
+            raise RuntimeError("Neighbor edge node mismatch: wrong edge pairing or mesh not conforming.")
+
+        xL = elem_xpts_L[0::3]; yL = elem_xpts_L[1::3]
+        xR = elem_xpts_R[0::3]; yR = elem_xpts_R[1::3]
+
+        spts, swts = self._edge_quad_2pt()
+        Kedge6 = np.zeros((2*dpn, 2*dpn), dtype=float)
+
+        for s, ws in zip(spts, swts):
+            xiL, etaL = self._ref_edge(edge_L, float(s))
+            xiR, etaR = self._ref_edge(edge_R, float(s))
+
+            NL, NxiL, NetaL = get_lagrange_basis_2d_all(xiL, etaL)
+            NR, NxiR, NetaR = get_lagrange_basis_2d_all(xiR, etaR)
+
+            # ---- L mapping / grads
+            x_xi  = np.dot(NxiL, xL); x_eta = np.dot(NetaL, xL)
+            y_xi  = np.dot(NxiL, yL); y_eta = np.dot(NetaL, yL)
+            JL = x_xi * y_eta - x_eta * y_xi
+            invJL = 1.0 / JL
+            xi_x  =  y_eta * invJL
+            xi_y  = -x_eta * invJL
+            eta_x = -y_xi  * invJL
+            eta_y =  x_xi  * invJL
+            NxL = NxiL * xi_x + NetaL * eta_x
+            NyL = NxiL * xi_y + NetaL * eta_y
+
+            # ---- R mapping / grads
+            x_xiR  = np.dot(NxiR, xR); x_etaR = np.dot(NetaR, xR)
+            y_xiR  = np.dot(NxiR, yR); y_etaR = np.dot(NetaR, yR)
+            JR = x_xiR * y_etaR - x_etaR * y_xiR
+            invJR = 1.0 / JR
+            xi_xR  =  y_etaR * invJR
+            xi_yR  = -x_etaR * invJR
+            eta_xR = -y_xiR  * invJR
+            eta_yR =  x_xiR  * invJR
+            NxR = NxiR * xi_xR + NetaR * eta_xR
+            NyR = NxiR * xi_yR + NetaR * eta_yR
+
+            # edge metric ds (from L)
+            if edge_L in (0, 2):  # eta const, xi varies
+                tx, ty = x_xi, y_xi
+            else:                 # xi const, eta varies
+                tx, ty = x_eta, y_eta
+            ds = float(np.sqrt(tx*tx + ty*ty))
+            w = float(ws * ds)
+
+            # d/dn for shape fns on each side
+            dndL = nx * NxL + ny * NyL
+            dndR = nx * NxR + ny * NyR
+
+            # (1) n·∇θ  => 2 components [thx_n, thy_n]
+            Bn_th_L = np.zeros((2, self.ndof))
+            Bn_th_R = np.zeros((2, self.ndof))
+            Bn_th_L[0, 1::3] = dndL
+            Bn_th_L[1, 2::3] = dndL
+            Bn_th_R[0, 1::3] = dndR
+            Bn_th_R[1, 2::3] = dndR
+
+            # (2) div θ = thx_x + thy_y
+            Bdiv_L = np.zeros((1, self.ndof))
+            Bdiv_R = np.zeros((1, self.ndof))
+            Bdiv_L[0, 1::3] = NxL
+            Bdiv_L[0, 2::3] = NyL
+            Bdiv_R[0, 1::3] = NxR
+            Bdiv_R[0, 2::3] = NyR
+
+            # (3) n·∇w
+            Bn_w_L = np.zeros((1, self.ndof))
+            Bn_w_R = np.zeros((1, self.ndof))
+            Bn_w_L[0, 0::3] = dndL
+            Bn_w_R[0, 0::3] = dndR
+
+            # restrict to the 2 edge nodes (6 dofs)
+            J_th  = (Bn_th_L[:, cols6_L] - Bn_th_R[:, cols6_R])   # (2,6)
+            J_div = (Bdiv_L[:,  cols6_L] - Bdiv_R[:,  cols6_R])   # (1,6)
+            J_w   = (Bn_w_L[:,  cols6_L] - Bn_w_R[:,  cols6_R])   # (1,6)
+
+            # coefficients (5.14): -δ k1/2, -δ k2/2, -δ/(2ε)
+            c_th  = (delta * k1) / 2.0
+            c_div = (delta * k2) / 2.0
+            c_w   = (delta / (2.0 * eps))
+
+            # assemble with MINUS sign (important)
+            Kedge6 -= c_th  * (J_th.T  @ J_th)  * w
+            Kedge6 -= c_div * (J_div.T @ J_div) * w
+            Kedge6 -= c_w   * (J_w.T   @ J_w)   * w
+
+        return Kedge6, gnodes2
     
     # ----------------------------
     # Prolongation / Restriction

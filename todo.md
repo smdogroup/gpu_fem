@@ -2,6 +2,9 @@
 
 ## Current Task
 - [ ] try ASGS on plate and/or shell case some more
+   - [ ] add edge stabilization terms to plate (+ maybe beam)
+   - [ ] read + annotate ASGS plate element should mesh converge, make sure I've implemented it correctly
+   
 - [ ] try HRA element on plate + shell now using discont strains + static condensation, [Two-field formulations for isogeometric Reissner–Mindlin plates and shells with global and local condensation](https://link.springer.com/article/10.1007/s00466-021-02080-8)
 - [ ] try bubble element or other advanced geometric methods (so consistent), see subdivision surfaces below (fully consistent without IGA or with IGA?)
 - [ ] try non-uniform integration or other projection methods => would prefer to remove singularity without penalizing sub-grid modes basically

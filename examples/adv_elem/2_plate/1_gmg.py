@@ -4,12 +4,13 @@ import sys
 sys.path.append("src/")
 from iga_assembler import IGAPlateAssembler
 from drig_assembler import DeRhamIGAPlateAssembler
+from stab_assembler import StabilizedPlateAssembler
 from elem import HierarchicIsogeometricDispElement9, DeRhamIsogeometricPlateElement
 from elem import DiscreteKirchoffLoveTrianglePlateElement, ReissnerMindlinPlateElement
 from dkt_assembler import DKTPlateAssembler
 from std_assembler import StandardPlateAssembler
 from elem import ReissnerMindlinPlateElement_OptProlong, MITCPlateElement_OptProlong
-from elem import AlgebraicSubGridScaleElement
+from elem import AlgebraicSubGridScaleElement, AlgebraicSubGridScaleElement_V2
 
 from smooth import TwoDimAddSchwarzDeRhamVertexEdges
 # from smooth import TwodimAddSchwarzColored22_BC, TwodimAddSchwarzColored22
@@ -148,7 +149,11 @@ elif args.elem == 'mitc_ep':
         # a=1.0/np.sqrt(3), b=1.0/np.sqrt(3)
     )
 elif args.elem == 'asgs':
-    ELEMENT = AlgebraicSubGridScaleElement()
+    # ELEMENT = AlgebraicSubGridScaleElement()
+    ELEMENT = AlgebraicSubGridScaleElement(
+        edge_stab=True,
+        # edge_stab=False
+    )
 
 # ================================
 # make plate assembler
@@ -183,6 +188,8 @@ elif args.elem == 'dkt':
     ASSEMBLER = DKTPlateAssembler
 elif is_iga:
     ASSEMBLER = IGAPlateAssembler
+elif args.elem == 'asgs':
+    ASSEMBLER = StabilizedPlateAssembler
 else:
     ASSEMBLER = StandardPlateAssembler
 

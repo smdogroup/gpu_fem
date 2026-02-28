@@ -4,4 +4,6 @@ from .dkt_elem import DiscreteKirchoffLoveTrianglePlateElement
 from .rm_elem import ReissnerMindlinPlateElement
 from .rmp_elem import ReissnerMindlinPlateElement_OptProlong
 from .mitc_elem import MITCPlateElement_OptProlong
+
+# stabilized finite elements
 from .asgs_elem import AlgebraicSubGridScaleElement
