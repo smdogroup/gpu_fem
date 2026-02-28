@@ -5,7 +5,7 @@ sys.path.append("src/")
 from std_assembler import StandardBeamAssembler
 from elem import EulerBernoulliElement, TimoshenkoElement, HierarchicRotHermiteElement, HierarchicDispHermiteElement
 from elem import AlgebraicSubGridScaleElement, OrthogonalSubGridScaleElement
-from elem import HellingerReissnerAnsatzElement
+from elem import HellingerReissnerAnsatzElement, HellingerReissnerIsogeometricElement
 # sys.path.append("src/elem")
 # from eb_elem import EulerBernoulliElement
 from multigrid import VcycleSolver
@@ -97,10 +97,29 @@ elif 'osgs' in args.elem:
         # schur_complement=True,
         schur_complement=False
     )
-elif 'hra' in args.elem:
+elif args.elem == 'hra':
     ELEMENT = HellingerReissnerAnsatzElement(
-        schur_complement=False,
+        schur_complement=True, # at element-level
+        # schur_complement=False,
+        # these DOF can only be eliminated at global patch level..
+        # hra_method = 'disp', 
+        # hra_method = 'strain',
+        # uses edge DOF for internal strain so can static condensate (idea from this paper Two-field formulations for isogeometric Reissner–Mindlin plates and shells with global and local condensation)
+        hra_method='strain-int',
     )
+elif args.elem == 'hrap':
+    ELEMENT = HellingerReissnerAnsatzElement(
+        schur_complement=True, # at element-level
+        hra_method='strain-int', 
+        # prolong_mode="global-locking", 
+        # prolong_mode="local-locking", 
+        prolong_mode="global-kmat",
+        lam=args.lam
+    )
+elif 'hrig' in args.elem:
+    # doesn't smooth well for IGA case?
+    ELEMENT = HellingerReissnerIsogeometricElement()
+    is_iga = True
 
 # ================================
 # make beam assembler
@@ -121,8 +140,17 @@ ASSEMBLER = IGABeamAssemblerV2 if is_iga else StandardBeamAssembler
 if args.elem == 'drig':
     ASSEMBLER = DeRhamIGABeamAssembler
 elif args.elem in ['osgs', 'hra']:
-    ASSEMBLER = SchurComplementBeamAssembler # does global condensation
-    # ASSEMBLER = StandardBeamAssembler
+    # For these mixed elements the auxiliary (strain/stress) DOF are globally continuous (shared across elements).
+    # => You cannot do element-local static condensation without changing the method, because aux DOF couple across elements.
+    # Global Schur complement is consistent, but it densifies / increases fill in the condensed operator,
+    # which often hurts multigrid smoother effectiveness (less locality).
+    #
+    # A formulation with DISCONTINUOUS (elementwise) auxiliary fields would allow true element-level condensation,
+    # preserving operator locality and typically improving smoothing / multigrid performance.
+    # if ELEMENT.schur_complement:
+    #     ASSEMBLER = SchurComplementBeamAssembler  # global condensation (fill increases)
+    # else:
+    ASSEMBLER = StandardBeamAssembler         # keep mixed system (may need block/Vanka/Uzawa smoother)
 
 assembler = ASSEMBLER(
     ELEMENT=ELEMENT,
@@ -166,7 +194,7 @@ if 'mg' in args.solve:
         )
         grid._assemble_system()
 
-        if args.elem in ['tsrp', 'asgsp']:
+        if args.elem in ['tsrp', 'asgsp', 'hrap']:
             ELEMENT._kmat_cache[nxe // 2] = grid.kmat.tocsr()
             
         grids += [grid]

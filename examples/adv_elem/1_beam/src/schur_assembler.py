@@ -71,6 +71,27 @@ class SchurComplementBeamAssembler(StandardBeamAssembler):
             S[bc, bc] = 1.0
             f[bc] = 0.0
         return S.tocsr(), f
+    
+    def _build_nofill_mask_kept(self, nnodes: int, dpn_keep: int) -> sp.csr_matrix:
+        """
+        Mask for a 1D nodal nearest-neighbor stencil on the KEPT unknowns.
+        Keeps block entries between node i and nodes in {i-1,i,i+1}.
+        """
+        rows, cols = [], []
+        for i in range(nnodes):
+            for j in (i - 1, i, i + 1):
+                if 0 <= j < nnodes:
+                    # keep the entire dpn_keep x dpn_keep block between node i and node j
+                    for a in range(dpn_keep):
+                        r = dpn_keep * i + a
+                        for b in range(dpn_keep):
+                            c = dpn_keep * j + b
+                            rows.append(r)
+                            cols.append(c)
+
+        data = np.ones(len(rows), dtype=float)
+        return sp.coo_matrix((data, (rows, cols)),
+                            shape=(dpn_keep * nnodes, dpn_keep * nnodes)).tocsr()
 
     def _assemble_system(self):
         # ---- Assemble FULL global K,f with dpn_full ----
@@ -153,13 +174,31 @@ class SchurComplementBeamAssembler(StandardBeamAssembler):
         # Factorize Kbb once
         Kbb_fac = spla.splu(Kbb.tocsc())
 
-        # X = Kbb^{-1} Kbu  (dense is fine for 1D; for larger problems you'd do a LinearOperator)
+        # X = Kbb^{-1} Kbu ; y = Kbb^{-1} fb
         X = Kbb_fac.solve(Kbu.toarray())
         y = Kbb_fac.solve(fb)
 
-        # Schur complement and rhs
-        S = Kuu - Kub @ sp.csr_matrix(X)
+        # Exact Schur complement and rhs
+        S_exact = Kuu - Kub @ sp.csr_matrix(X)
         fS = fu - Kub @ y
+
+
+        # -----------------------------
+        # Enforce NO-FILL pattern:
+        # keep only nearest-neighbor nodal coupling in the KEPT space
+        # -----------------------------
+        # tried but this doesn't work..
+        # mask = self._build_nofill_mask_kept(self.nnodes, dpn_keep)
+
+        # # Drop off-pattern entries
+        # S = S_exact.tocsr().multiply(mask)
+        S = S_exact.tocsr()
+        
+        plt.spy(S_exact)
+        plt.show()
+
+        # (optional) clean tiny numerical trash introduced by solve/multiply
+        S.eliminate_zeros()
 
         # Apply BCs ONLY to condensed system
         S, fS = self._apply_bcs_condensed(S, np.asarray(fS).ravel())

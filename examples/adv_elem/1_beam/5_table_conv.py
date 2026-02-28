@@ -13,6 +13,7 @@ from elem import (
     HierarchicIsogeometricDispElement,
     DeRhamIsogeometricElement,
     AlgebraicSubGridScaleElement,
+    HellingerReissnerAnsatzElement,
 )
 
 from smoothers import BlockGaussSeidel, OnedimAddSchwarz, OneDimAddSchwarzVertex2Edges
@@ -134,8 +135,8 @@ args = parser.parse_args()
 # problem setup
 # ----------------------------
 nxe_vec = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
-beam_types = ["eb", "ts", "tsr", "aig", "hhr", "hhd", "higd", "drig", "asgs"]
-# beam_types = ['asgs']
+# beam_types = ["eb", "ts", "tsr", "aig", "hhr", "hhd", "higd", "drig", "asgs", "hra"]
+beam_types = ['hra']
 deflections = {key: [] for key in beam_types}
 
 load_fcn = lambda x: np.sin(4 * np.pi * x)
@@ -164,6 +165,11 @@ def build_element(elem):
         is_iga = True
     elif elem == 'asgs':
         ELEMENT = AlgebraicSubGridScaleElement()
+    elif elem == 'hra':
+        ELEMENT = HellingerReissnerAnsatzElement(
+            schur_complement=True, # static condensation at element-level
+            hra_method='strain-int', # has a discontinuous (lower-order polynomial strain DOF to remove locking that is eliminated from element Schur-complement)
+        )
     else:
         raise ValueError(f"Unknown elem type: {elem}")
     return ELEMENT, is_iga

@@ -1,12 +1,39 @@
 # Devel tasks
 
 ## Current Task
-* the nedelec-style shells + thesis below (maybe do them on plate first or something)
+* consistent geomNL shell which uses Hellinger-Reissner method to avoid locking
+   - [ ] use this formulation with discontinuous aux stresses and element-level static condensation, [Two-field formulations for isogeometric Reissner–Mindlin plates and shells with global and local condensation](https://link.springer.com/article/10.1007/s00466-021-02080-8)
+   * implement on beam then plate then shell (if works at each stage)
+
+* then add all new papers to the thesis? 
+
+## Reading list
+- [ ] [A Consistent Finite Element Formulation of the Geometrically Non‑linear Reissner‑Mindlin Shell Mode](https://link.springer.com/article/10.1007/s11831-021-09702-7)
+- [ ] [An efficient and robust rotational formulation for isogeometric Reissner–Mindlin shell elements](https://www.sciencedirect.com/science/article/pii/S0045782516300111)
+- [ ] [Improved numerical integration for locking treatment in isogeometric structural elements, Part I: Beams](https://www.sciencedirect.com/science/article/pii/S0045782514002096)
+   * and next parts for plate / shells
+- [ ] DSG discrete shear gap, [Numerical efficiency, locking and unlocking of NURBS finite elements](https://www.sciencedirect.com/science/article/pii/S0045782509001108)
+- [ ] DSG discrete shear gap 2, [A hierarchic family of isogeometric shell finite elements](https://www.sciencedirect.com/science/article/pii/S0045782512003337)
+
+B and F projection methods
+- [ ] [B and F projection methods for nearly incompressible linear and non-linear elasticity and plasticity using higher-order NURBS elements](https://www.sciencedirect.com/science/article/pii/S0045782508000248)
+- [ ] [Locking free isogeometric formulations of curved thick beams](https://www.sciencedirect.com/science/article/pii/S004578251200196X)
+- [ ] [An efficient blended mixed B-spline formulation for removing membrane locking in plane curved Kirchhoff rod](https://www.sciencedirect.com/science/article/pii/S0045782517305467)
+- [ ] [Efficient isogeometric NURBS-based solid-shell elements: Mixed formulation and ¯B-method](https://www.sciencedirect.com/science/article/pii/S0045782513002053)
 
 ## Thickness-Ind Multigrid
 
 * NOTE : line search needs to be very small (1e-3 updates for wing to get best performance) => smoother doing heavy work, multigrid barely anything
 
+- [ ] try this new subdivison surface shell element [SUBDIVISION SURFACES: A NEW PARADIGM FOR THIN-SHELL FINITE-ELEMENT ANALYSIS](https://multires.caltech.edu/pubs/thinshell.pdf)
+
+New plate elements (that may help shell)
+- [ ] implementing ASGS (algebraic sub-grid scale) for plate elements
+   * see if can get right mesh convergence again
+   - [ ] does OSGS work better?
+- [ ] maybe try ASGS with machine learning (and nondim params) to discover good stability constants (like people do for turbulence)?
+   * cite some of those papers (could be new method)
+- [ ] try bubble and other elements in theory/plate.md
 
 NEW SHELL ELEMENTS
 
@@ -49,6 +76,7 @@ NEW SHELL ELEMENTS
    - [ ] compile various shell theory solution methods (for curved surf)
    - [ ] read up on and implement Nedelec H1, H-div, H-curl and L2 elements (Seiyon), see if they can do them on curved surfaces. May learn valuable info
    - [ ] read up on Kirchoff-IGA shells and other manifold methods
+- [ ] [Do locking-free finite element schemes lock for holey Reissner-Mindlin plates with mixed boundary conditions?](https://arxiv.org/pdf/2506.21999)
 
 - [ ] see if new discretization / better smooth prolong can speedup wing + cylinder cases (more energy-smooth prolong and less V(k,k) smooth steps needed)
 - [ ] how to discretize cylinder with 2nd order IGA (see IGA book)
@@ -110,7 +138,6 @@ NEW SHELL ELEMENTS
    - [ ] different coarsening methods + CF, RN, SA
    - [ ] good in thin plate, cylinder / wing or no?
    - [ ] machine learning coarsening methods?
-
 
 =============================================
 =============================================

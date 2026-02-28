@@ -536,6 +536,8 @@ class TimoshenkoElement_OptProlong:
                 # relax like your locking routine
                 X[sl, :] = X[sl, :] + omega * (Xnew - X[sl, :])
 
+        # print("ENERGY SMOOTH PROLONG LOCAL")
+
         # reinsert into full P
         P = np.zeros((n_f, n_c))
         P[:, free_cols] = X
@@ -557,7 +559,7 @@ class TimoshenkoElement_OptProlong:
         elif self.prolong_mode == 'local-locking':
             P = self._locking_aware_prolong_local(P0, nelems_coarse, length, block_nodes=2, n_sweeps=1, omega=1.0)
         elif self.prolong_mode == 'global-kmat':
-            P = self._energy_smooth_prolong_local(P0, nelems_coarse, block_nodes=1, n_sweeps=2, omega=1.0, tau=0.7)
+            P = self._energy_smooth_prolong_local(P0, nelems_coarse, block_nodes=1, n_sweeps=8, omega=1.0, tau=0.5)
         else:
             P = P0
         fine_disp = P @ coarse_disp
@@ -580,7 +582,7 @@ class TimoshenkoElement_OptProlong:
         elif self.prolong_mode == 'local-locking':
             P = self._locking_aware_prolong_local(P0, nelems_coarse, length, block_nodes=2, n_sweeps=1, omega=1.0)
         elif self.prolong_mode == 'global-kmat':
-            P = self._energy_smooth_prolong_local(P0, nelems_coarse, block_nodes=1, n_sweeps=2, omega=1.0, tau=0.7)
+            P = self._energy_smooth_prolong_local(P0, nelems_coarse, block_nodes=1, n_sweeps=8, omega=1.0, tau=0.5)
         else:
             P = P0
 

@@ -20,3 +20,4 @@ from .osgs import OrthogonalSubGridScaleElement
 
 # hellinger-reissner elements
 from .hra_elem import HellingerReissnerAnsatzElement
+from .hrig_elem import HellingerReissnerIsogeometricElement

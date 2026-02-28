@@ -81,6 +81,8 @@ class StandardBeamAssembler:
         unit_felem = self.element.get_felem(mag=1.0, elem_length=self.elem_length)
         dpn = self.dof_per_node
         self.force = np.zeros(self.N)
+
+        # print(f"{unit_felem.shape=}")
         
         # compute LHS and RHS no BCs
         for ielem in range(self.nxe):
@@ -91,8 +93,36 @@ class StandardBeamAssembler:
                     block_col = self.cols[colp]
                     if block_col in [ielem, ielem+1]:
                         lblock_col = block_col - ielem
+
+                        # sometimes need to do schur complement
+                        kd = self.dof_per_node * 2
+                        c_kelem_dim = kelem.shape[0]
+                        if c_kelem_dim > kd and self.element.schur_complement:
+                            _kelem = kelem.copy()
+                            assert not self.element.clamped
+                            if ielem == 0:
+                                _kelem[0, :] = 0.0
+                                _kelem[:, 0] = 0.0
+                                _kelem[0,0] = 1.0
+                            elif ielem == self.nxe - 1:
+                                _kelem[1, :] = 0.0
+                                _kelem[:, 1] = 0.0
+                                _kelem[1,1] = 1.0
+
+                            Kaa = _kelem[:kd, :kd].copy()
+                            Kab = _kelem[:kd, kd:].copy()
+                            Kba = _kelem[kd:, :kd].copy()
+                            Kbb = _kelem[kd:, kd:].copy()
+
+                            _kelem = Kaa - Kab @ np.linalg.solve(Kbb, Kba)
+
+                            # inds = np.arange(0, )
+                            new_order = np.array([0, 2, 1, 3])
+                            _kelem = _kelem[new_order, :][:, new_order]
+                        else:
+                            _kelem = kelem
                         
-                        self.data[colp,:,:] += kelem[dpn*lblock_row:dpn*(lblock_row+1), 
+                        self.data[colp,:,:] += _kelem[dpn*lblock_row:dpn*(lblock_row+1), 
                                                      dpn*lblock_col:dpn*(lblock_col+1)]
 
             # add felem into RHS
