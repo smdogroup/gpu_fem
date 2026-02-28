@@ -23,6 +23,8 @@ class OnedimAddSchwarz:
         soln = np.zeros_like(rhs)
         defect = rhs.copy()
 
+        # print(f"{self.K.toarray()=} {self.block_dim=}")
+
         for iter in range(self.iters):
 
             # loop over each subspace of 1D
@@ -40,6 +42,11 @@ class OnedimAddSchwarz:
                 
                 Fc = defect[bs * ind : bs * (ind + self.coupled_size)].copy()
                 # print(f"{Kc.shape=} {Fc.shape=} for {ind=} to {ind+self.coupled_size-1=}")
+
+                # print(f"{Kc.shape=} {Fc.shape=}")
+                # import matplotlib.pyplot as plt
+                # plt.imshow(Kc)
+                # plt.show()
 
                 uc = np.linalg.solve(Kc, Fc)
                 soln[bs * ind : bs * (ind + self.coupled_size)] += self.omega * uc

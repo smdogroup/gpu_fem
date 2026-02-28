@@ -10,14 +10,18 @@ class OrthogonalSubGridScaleElement:
         A variational multiscale stabilized finite element formulation for Reissner–Mindlin plates and Timoshenko beams
         https://upcommons.upc.edu/server/api/core/bitstreams/73fce476-07ab-4ea8-84b0-3552f852f9e7/content
     """
-    def __init__(self):              
-        self.dof_per_node = 4
+    def __init__(self, schur_complement:bool=True):              
+        self.schur_complement = schur_complement
+        # self.dof_per_node = 2 if self.schur_complement else 4
+        self.dof_per_node = 2
+        self.full_dof_per_node = 4 # for schur complement global assembler
+        # self.dof_per_node = 2
         self.nodes_per_elem = 2
         self.clamped = True
 
         # stabilization constants
-        self.c1 = 1e-4 # needs to be chosen < 1e-3 in paper? other constants the same?
-        # self.c1 = 1e-3
+        # self.c1 = 1e-4 # needs to be chosen < 1e-3 in paper? other constants the same?
+        self.c1 = 1e-3
         # self.c1 = 1e-2
         # self.c1 = 1.0
         self.c3 = 12.0
@@ -25,6 +29,10 @@ class OrthogonalSubGridScaleElement:
 
         self._P0_cache = {}
         self._P1_cache = {}
+
+        # self.Kaa = None
+        self.Kab = None
+        self.Kbb = None
 
     def get_kelem(self, E:float, nu:float, thick:float, elem_length:float):
         # quadratic element with 2 DOF per node
@@ -87,20 +95,60 @@ class OrthogonalSubGridScaleElement:
         # plt.imshow(kelem)
         # plt.show()
 
-        # change order from [w1,w2,th1,th2,xiw1,xiw2,xith1,xith2] => [w1, th1, xiw1, xith1, w2, th2, xiw2, xith2]
-        new_order = np.array([0, 2, 4, 6, 1, 3, 5 ,7])
-        kelem = kelem[new_order, :][:, new_order]
-        return kelem
+        if self.schur_complement:
+            # remove the gamma DOF from the system
+            # kelem0 = kelem.copy()
+            Kaa = kelem[:4, :][:,:4]
+            Kab = kelem[:4,:][:,4:]
+            Kba = kelem[4:,:][:,:4]
+            Kbb = kelem[4:,:][:,4:]
+
+            self.Kab = Kab
+            self.Kbb = Kbb
+
+            # Build Schur complement
+            X = np.linalg.solve(Kbb, Kba)
+            S = Kaa - Kab @ X  # Schur complement
+            kelem = S.copy()
+
+            # # pick arbitrary u
+            # u = np.random.randn(4)
+
+            # # take g = 0 (typical when eliminating internal vars)
+            # g = np.zeros(4)
+
+            # # reconstruct v from elimination
+            # v = np.linalg.solve(Kbb, g - Kba @ u)   # = -Kbb^{-1} Kba u
+
+            # # build consistent f
+            # f = Kaa @ u + Kab @ v
+
+            # # residual of full block system
+            # r_top = Kaa @ u + Kab @ v - f           # should be 0 by construction
+            # r_bot = Kba @ u + Kbb @ v - g           # should be 0 (this is the real check)
+
+            # print("||r_top||, ||r_bot|| =", np.linalg.norm(r_top), np.linalg.norm(r_bot))
+
+            new_order = np.array([0, 2, 1, 3])
+            kelem = kelem[new_order, :][:, new_order]
+            return kelem
+        else:
+            # change order from [w1,w2,th1,th2,xiw1,xiw2,xith1,xith2] => [w1, th1, xiw1, xith1, w2, th2, xiw2, xith2]
+            new_order = np.array([0, 2, 4, 6, 1, 3, 5 ,7])
+            kelem = kelem[new_order, :][:, new_order]
+            return kelem
 
     def get_felem(self, mag, elem_length):
         """get element load vector"""
         J = elem_length / 2.0
         pts, wts = second_order_quadrature()
-        felem = np.zeros(8)
+        # dpn = self.dof_per_node
+        dpn = self.full_dof_per_node
+        felem = np.zeros(2*dpn)
         for xi, wt in zip(pts, wts):
             psi_val = [lagrange(i, xi) for i in range(2)]
             for i in range(2):
-                felem[4 * i] += mag * wt * J * psi_val[i]
+                felem[dpn * i] += mag * wt * J * psi_val[i]
         return felem
     
     # def prolongate(self, coarse_disp, length:float):
@@ -249,7 +297,7 @@ class OrthogonalSubGridScaleElement:
         self._P1_cache[key] = P1
         return P1
 
-    def _build_P0_wth(self, nxe_coarse: int, ndof_per_node: int = 4) -> sp.csr_matrix:
+    def _build_P0_wth(self, nxe_coarse: int, ndof_per_node: int = 2) -> sp.csr_matrix:
         """
         Build initial P0 for [w, th, xiw, xith] using same scalar P1 on each dof,
         and apply BCs at the P0 level selectively.
@@ -263,7 +311,8 @@ class OrthogonalSubGridScaleElement:
         if hasattr(self, "_P0_cache") and key in self._P0_cache:
             return self._P0_cache[key]
 
-        assert ndof_per_node == 4, "This builder is intended for 4 DOF/node: [w, th, xiw, xith]"
+        dpn = self.dof_per_node
+        # assert ndof_per_node == dpn, "This builder is intended for 4 DOF/node: [w, th, xiw, xith]"
 
         # scalar prolongation without BCs
         P1 = self._build_P1_scalar(nxe_coarse, apply_bcs=False)
@@ -315,13 +364,15 @@ class OrthogonalSubGridScaleElement:
     def prolongate(self, coarse_disp, length: float):
         """
         Prolongation using cached P0 for 4 DOF/node: [w, th, xiw, xith].
+        Or just 2 dof per node if static condensed.. [w, th]
         coarse_disp ordering: [w0, th0, xiw0, xith0, w1, th1, ...]
         """
         ndof_coarse = coarse_disp.shape[0]
-        nnodes_coarse = ndof_coarse // 4
+        dpn = 2 # for exposing to multigrid
+        nnodes_coarse = ndof_coarse // dpn
         nelems_coarse = nnodes_coarse - 1
 
-        P = self._build_P0_wth(nelems_coarse, ndof_per_node=4)
+        P = self._build_P0_wth(nelems_coarse, ndof_per_node=dpn)
         fine_disp = P @ coarse_disp
         return np.asarray(fine_disp).ravel()
 
@@ -329,13 +380,18 @@ class OrthogonalSubGridScaleElement:
     def restrict_defect(self, fine_defect, length: float):
         """
         Galerkin restriction using P0^T for 4 DOF/node: [w, th, xiw, xith].
+        Or just 2 dof per node if static condensed.. [w, th]
         """
         ndof_fine = fine_defect.shape[0]
-        nnodes_fine = ndof_fine // 4
+        dpn = 2 # for exposing to multigrid
+        # print(f"{dpn=}")
+        nnodes_fine = ndof_fine // dpn
         nelems_fine = nnodes_fine - 1
 
         nelems_coarse = nelems_fine // 2
+        # print(f"{nelems_coarse=}")
 
-        P = self._build_P0_wth(nelems_coarse, ndof_per_node=4)
+        P = self._build_P0_wth(nelems_coarse, ndof_per_node=dpn)
+        # print(f"{P.shape=} {fine_defect.shape=} {P.}")
         coarse_defect = P.T @ fine_defect
         return np.asarray(coarse_defect).ravel()

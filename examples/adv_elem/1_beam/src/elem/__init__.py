@@ -17,3 +17,6 @@ from .tsp_elem import TimoshenkoElement_OptProlong
 # subgrid scale elements
 from .asgs import AlgebraicSubGridScaleElement
 from .osgs import OrthogonalSubGridScaleElement
+
+# hellinger-reissner elements
+from .hra_elem import HellingerReissnerAnsatzElement

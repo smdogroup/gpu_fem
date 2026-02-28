@@ -5,6 +5,7 @@ sys.path.append("src/")
 from std_assembler import StandardBeamAssembler
 from elem import EulerBernoulliElement, TimoshenkoElement, HierarchicRotHermiteElement, HierarchicDispHermiteElement
 from elem import AlgebraicSubGridScaleElement, OrthogonalSubGridScaleElement
+from elem import HellingerReissnerAnsatzElement
 # sys.path.append("src/elem")
 # from eb_elem import EulerBernoulliElement
 from multigrid import VcycleSolver
@@ -20,6 +21,7 @@ from iga_assembler2 import IGABeamAssemblerV2
 # special vertex-edge DeRham style element
 from elem import DeRhamIsogeometricElement
 from diga_assembler import DeRhamIGABeamAssembler
+from schur_assembler import SchurComplementBeamAssembler
 
 # DeRham type interpolation
 from elem import TimoshenkoElement_OptProlong
@@ -91,7 +93,14 @@ elif 'asgs' in args.elem:
         prolong_mode=prolong_mode, omega=0.3
     )
 elif 'osgs' in args.elem:
-    ELEMENT = OrthogonalSubGridScaleElement()
+    ELEMENT = OrthogonalSubGridScaleElement(
+        # schur_complement=True,
+        schur_complement=False
+    )
+elif 'hra' in args.elem:
+    ELEMENT = HellingerReissnerAnsatzElement(
+        schur_complement=False,
+    )
 
 # ================================
 # make beam assembler
@@ -111,6 +120,9 @@ else:
 ASSEMBLER = IGABeamAssemblerV2 if is_iga else StandardBeamAssembler
 if args.elem == 'drig':
     ASSEMBLER = DeRhamIGABeamAssembler
+elif args.elem in ['osgs', 'hra']:
+    ASSEMBLER = SchurComplementBeamAssembler # does global condensation
+    # ASSEMBLER = StandardBeamAssembler
 
 assembler = ASSEMBLER(
     ELEMENT=ELEMENT,
@@ -314,8 +326,8 @@ else:
     print(f"{pred_disp=}")
 
 
-# idof = 0
-idof = 1
+idof = 0
+# idof = 1
 # idof = 2
 
 if args.plot:
