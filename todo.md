@@ -1,6 +1,7 @@
 # Devel tasks
 
 ## Current Task
+- [ ] try ASGS on plate and/or shell case some more
 * consistent geomNL shell which uses Hellinger-Reissner method to avoid locking
    - [ ] use this formulation with discontinuous aux stresses and element-level static condensation, [Two-field formulations for isogeometric Reissner–Mindlin plates and shells with global and local condensation](https://link.springer.com/article/10.1007/s00466-021-02080-8)
    * implement on beam then plate then shell (if works at each stage)
