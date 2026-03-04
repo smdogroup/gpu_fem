@@ -52,6 +52,7 @@ class DampedJacobiSmoother : public BaseSolver {
         const bool startup = false;
         buildDiagInvMat<startup>();
     }
+    void factor() {}
 
     T precond_complexity() {
         // get [nnzb(precond) + nnzb(A)] / nnzb(A)

@@ -59,6 +59,7 @@ class MulticolorGSSmoother_V1 : public BaseSolver {
         buildDiagInvMat<startup>();
         buildTransposeColorMatrices<startup>();
     }
+    void factor() {}
 
     T precond_complexity() {
         // get [nnzb(precond) + nnzb(A)] / nnzb(A)

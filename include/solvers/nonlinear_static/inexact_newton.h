@@ -16,7 +16,8 @@ class InexactNewtonSolver {
    public:
     InexactNewtonSolver(cublasHandle_t &cublasHandle_, Assembler &assembler_, Mat &kmat_,
                         Vec &loads_, Solver *linear_solver_, T initLinSolveRtol_ = 1e-1,
-                        T linSolveAtol_ = 1e-8, T minLinSolveTol_ = 1e-6, T maxLinSolveTol_ = 0.25, T restart_dlam_ = 1e-2)
+                        T linSolveAtol_ = 1e-8, T minLinSolveTol_ = 1e-6, T maxLinSolveTol_ = 0.25,
+                        T restart_dlam_ = 1e-2)
         : assembler(assembler_),
           kmat(kmat_),
           loads(loads_),
@@ -85,7 +86,8 @@ class InexactNewtonSolver {
             // Eisenstat-Walker method to update linear solve atol (to prevent over-solving)
             // ------------------------------------------------------------
 
-            // except with predictor, doesn't always dec so keep inewton > 0 or inewton > 1 condition instead
+            // except with predictor, doesn't always dec so keep inewton > 0 or inewton > 1
+            // condition instead
             if (inewton > 1) {
                 // don't check immediately, it almost always inc on first newton step so don't adapt
                 // if (inewton > 1) {
@@ -109,6 +111,7 @@ class InexactNewtonSolver {
             res.permuteData(block_dim,
                             d_iperm);                                // res from VIS => SOLVE order
             fatalFailure = linear_solver->solve(res, update, true);  // check_conv = true
+            num_lin_solves++;
             update.permuteData(block_dim,
                                d_perm);  // update from SOLVE => VIS order
 
@@ -152,7 +155,7 @@ class InexactNewtonSolver {
     T computeResidual(T &lambda) {
         /* compute r(u) = fint(u) - lambda * loads */
         assembler.add_residual_fast(res);
-        T a = -lambda; // loads assumed to be in VIS order here
+        T a = -lambda;  // loads assumed to be in VIS order here
         CHECK_CUBLAS(cublasDaxpy(cublasHandle, nvars, &a, loads.getPtr(), 1, res.getPtr(), 1));
         assembler.apply_bcs(res);
 
@@ -188,7 +191,13 @@ class InexactNewtonSolver {
     }
 
     int get_num_newton_steps() {
-        return inewton_iters;  // return how many newton steps used by solver
+        return inewton_iters;  // return how many newton steps used by solver (for this newton
+                               // solve)
+    }
+
+    int get_num_lin_solves() {
+        return num_lin_solves;  // how many total linear solves across all newton solves of
+                                // continuation
     }
 
     T _dotProduct(Vec &vec1, Vec &vec2) {
@@ -287,7 +296,7 @@ class InexactNewtonSolver {
 
             /* now predict the optimal energy load scale */
             T opt_load_scale = (FeUi + FiUe) / (-2.0 * FeUe);
-            opt_load_scale *= -1.0; // opposite sign because Ali defines fext differently here
+            opt_load_scale *= -1.0;  // opposite sign because Ali defines fext differently here
 
             // then determine if it is reasonable and if we should restart
             if (opt_load_scale > (2.0 * max_lambda) || (opt_load_scale < 0.0)) {
@@ -320,7 +329,8 @@ class InexactNewtonSolver {
                 opt_load_scale = max(opt_load_scale, init_step);
                 if (opt_load_scale0 < init_step) {
                     printf(
-                        "New Design - set LAM_INIT=%.4e, as |1-energy_opt_lam|=%.4e < init step size "
+                        "New Design - set LAM_INIT=%.4e, as |1-energy_opt_lam|=%.4e < init step "
+                        "size "
                         "%.4e\n",
                         opt_load_scale, opt_load_scale0, init_step);
                 } else {
@@ -339,8 +349,6 @@ class InexactNewtonSolver {
             lambda = opt_load_scale;
 
         }  // end of nonzero state check
-
-        
 
         return restart_design;
     }
@@ -364,7 +372,8 @@ class InexactNewtonSolver {
         linear_solver->solve(res, update, true);
         // update kept in solve order for inner product
         res.zeroValues();
-        T a = 1.0; // don't think this should be lambda here (just want based on full external loads lam = 1 final)
+        T a = 1.0;  // don't think this should be lambda here (just want based on full external
+                    // loads lam = 1 final)
         CHECK_CUBLAS(cublasDaxpy(cublasHandle, nvars, &a, loads.getPtr(), 1, res.getPtr(), 1));
         assembler.apply_bcs(res);  // res thus in VIS order here
         // convert res from VIS to solve order
@@ -446,4 +455,5 @@ class InexactNewtonSolver {
 
     int line_search_iters = 0;
     int inewton_iters = 0;
+    int num_lin_solves = 0;
 };

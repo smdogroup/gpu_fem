@@ -23,6 +23,7 @@ class MultigridTwoLevelSolver : public BaseSolver {
     void set_abs_tol(T atol) { options.atol = atol; }
     void set_rel_tol(T rtol) { options.rtol = rtol; }
     int get_num_iterations() { return n_steps; }
+    void factor() {}
 
     bool solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) {
         // printf("in subpsace solve\n");

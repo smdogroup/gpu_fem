@@ -181,6 +181,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
     if (is_kcycle) {
         int n_krylov = 500;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
+        kmg->coarse_solver->factor();
+    } else {
+        mg->coarse_solver->factor();
     }
 
     // fastest is K-cycle usually

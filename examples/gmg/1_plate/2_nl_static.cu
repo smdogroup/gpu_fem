@@ -218,10 +218,11 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, std::string
     int print_freq = 3;
 
     if (is_kcycle) {
-        // int n_krylov = 500;
-        // int n_krylov = 10;
         int n_krylov = 20;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omegaMC, atol, rtol, print_freq, print, double_smooth);    
+        kmg->coarse_solver->factor();
+    } else {
+        mg->coarse_solver->factor();
     }
 
     std::vector<GRID>& grids = kmg->grids;
@@ -441,10 +442,10 @@ int main(int argc, char **argv) {
     double pressure = 8.0e6;
 
     int nsmooth = 2; // typically faster right now
-    int ninnercyc = 2; // inner V-cycles to precond K-cycle
+    int ninnercyc = 1; // inner V-cycles to precond K-cycle
     std::string cycle_type = "K"; // "V", "F", "W", "K"
-    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
-    std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
+    std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+    // std::string elem_type = "CFI4"; // careful CFI4 shear locks some (need better element here)
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {

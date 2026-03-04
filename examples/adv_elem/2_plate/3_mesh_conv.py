@@ -15,6 +15,7 @@ from elem import (
 from dkt_assembler import DKTPlateAssembler
 from iga_assembler import IGAPlateAssembler
 from drig_assembler import DeRhamIGAPlateAssembler
+from stab_assembler import StabilizedPlateAssembler
 
 # from asw_derham import TwoDimAddSchwarzDeRhamVertexEdges
 
@@ -162,7 +163,10 @@ def build_element(elem):
         if args.nsmooth < 4:
             print("need much more nsmooth like 4 for Reissner-Mindlin element")
     elif elem == 'asgs':
-        ELEMENT = AlgebraicSubGridScaleElement()
+        ELEMENT = AlgebraicSubGridScaleElement(
+            edge_stab=True,
+            # edge_stab=False,
+        )
     else:
         raise ValueError(f"Unknown elem type: {elem}")
     return ELEMENT, is_iga
@@ -175,6 +179,8 @@ def build_assembler(elem, is_iga):
         ASSEMBLER = DKTPlateAssembler
     elif is_iga:
         ASSEMBLER = IGAPlateAssembler
+    elif elem == 'asgs':
+        ASSEMBLER = StabilizedPlateAssembler
     else:
         ASSEMBLER = StandardPlateAssembler
     return ASSEMBLER
@@ -229,18 +235,19 @@ print("-------------------------------------------------------------------------
 rel_err_by_elem = {}
 Rc_by_elem = {}
 
-for beam in plate_types:
-    deflns = np.array(deflections[beam], dtype=float)
+for plate in plate_types:
+    deflns = np.array(deflections[plate], dtype=float)
+    print(f"{plate=} {deflns=}")
 
     # rel error vs finest deflection (exclude finest point, like your plot)
     rel_err = np.abs((deflns[:-1] - deflns[-1]) / deflns[-1])
-    rel_err_by_elem[beam] = rel_err
+    rel_err_by_elem[plate] = rel_err
 
     # mesh-rate Rc using rel_err as epsilon
     Rc = compute_Rc(rel_err.tolist(), h_vec[:-1].tolist(), mode=args.Rc_mode)
-    Rc_by_elem[beam] = Rc
+    Rc_by_elem[plate] = Rc
 
-    print(f"{beam:>4s}: Rc = {Rc: .6f}")
+    print(f"{plate:>4s}: Rc = {Rc: .6f}")
 
 
 # ----------------------------

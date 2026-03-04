@@ -30,7 +30,7 @@
 // ----------------
 // ----------------
 
-void solve_linear(MPI_Comm &comm, bool full_LU = true) {
+void solve_linear(MPI_Comm &comm, bool full_LU = true, double thick = 1e-2, int fill = 1, double qorder = 0.5) {
   using T = double;
 
   auto start0 = std::chrono::high_resolution_clock::now();
@@ -52,17 +52,18 @@ void solve_linear(MPI_Comm &comm, bool full_LU = true) {
   using Physics = IsotropicShell<T, Data, is_nonlinear>;
   using Assembler = MITCShellAssembler<T, Director, Basis, Physics, DeviceVec, BsrMat>;
 
-  double E = 70e9, nu = 0.3, thick = 0.005;  // material & thick properties
+  double E = 70e9, nu = 0.3;
+//   double thick = 0.005;  // material & thick properties
+//   double thick = 1e-1;
 
   // make the assembler from the uCRM mesh
   auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
 
-  int ndvs = assembler.get_num_dvs();
-  printf("ndvs %d\n", ndvs);
-  T thick2 = 1e-2;
-  HostVec<T> h_dvs(ndvs, thick2);
-  auto global_dvs = h_dvs.createDeviceVec();
-  assembler.set_design_variables(global_dvs);
+//   int ndvs = assembler.get_num_dvs();
+//   printf("ndvs %d\n", ndvs);
+//   HostVec<T> h_dvs(ndvs, thick2);
+//   auto global_dvs = h_dvs.createDeviceVec();
+//   assembler.set_design_variables(global_dvs);
 
   // T mass = assembler._compute_mass();
   // printf("mass %.4e\n", mass);
@@ -76,8 +77,8 @@ void solve_linear(MPI_Comm &comm, bool full_LU = true) {
     bsr_data.compute_full_LU_pattern(fillin, print);
   } else {
     bsr_data.RCM_reordering();
-    bsr_data.qorder_reordering(0.5); // qordering not working well for some reason..
-    bsr_data.compute_ILUk_pattern(0, fillin); // 10, 20 (for BiCGStab)
+    bsr_data.qorder_reordering(qorder); // qordering not working well for some reason..
+    bsr_data.compute_ILUk_pattern(fill, fillin); // 10, 20 (for BiCGStab)
     // bsr_data.compute_full_LU_pattern(fillin, print);
   }
   assembler.moveBsrDataToDevice();
@@ -115,8 +116,9 @@ void solve_linear(MPI_Comm &comm, bool full_LU = true) {
   if (full_LU) {
       CUSPARSE::direct_LU_solve(kmat, loads, soln);
   } else {
-      int n_iter = 200, max_iter = 200;
-      T abs_tol = 1e-11, rel_tol = 1e-15;
+      int n_iter = 400, max_iter = 400;
+    //   T abs_tol = 1e-11, rel_tol = 1e-15;
+    T rel_tol = 1e-6, abs_tol = 1e-11;
       bool print = true;
       constexpr bool right = true, modifiedGS = true; // better with modifiedGS true, yeah it is..
       CUSPARSE::GMRES_solve<T, right, modifiedGS>(kmat, loads, soln, n_iter, max_iter, abs_tol, rel_tol, print);
@@ -238,6 +240,9 @@ int main(int argc, char **argv) {
 
     bool run_linear = false;
     bool full_LU = true;
+    double thick = 1e-2;
+    int fill = 2;
+    double qorder = 0.5;
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -250,6 +255,27 @@ int main(int argc, char **argv) {
             run_linear = false;
         } else if (strcmp(arg, "--iterative") == 0) {
             full_LU = false;
+        } else if (strcmp(arg, "--thick") == 0) {
+            if (i + 1 < argc) {
+                thick = std::atof(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --thick\n";
+                return 1;
+            }
+        } else if (strcmp(arg, "--qorder") == 0) {
+            if (i + 1 < argc) {
+                qorder = std::atof(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --qorder\n";
+                return 1;
+            }
+        } else if (strcmp(arg, "--fill") == 0) {
+            if (i + 1 < argc) {
+                fill = std::atoi(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --fill\n";
+                return 1;
+            }
         } else {
             int rank;
             MPI_Comm_rank(comm, &rank);
@@ -263,7 +289,7 @@ int main(int argc, char **argv) {
     }
   
     if (run_linear) {
-        solve_linear(comm, full_LU);
+        solve_linear(comm, full_LU, thick, fill, qorder);
     } else {
         solve_nonlinear(comm);
     }

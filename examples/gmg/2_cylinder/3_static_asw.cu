@@ -152,6 +152,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
         printf("nsmooth %d, omega = %.4e\n", nsmooth, omega);
         auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, 
             omega, nsmooth);
+        smoother->factor();
         auto prolongation = new Prolongation(assembler);
         auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, omegaLS_min, omegaLS_max);
         
@@ -187,6 +188,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
     if (is_kcycle) {
         int n_krylov = 500;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
+        kmg->coarse_solver->factor();
+    } else {
+        mg->coarse_solver->factor();
     }
 
     // fastest is K-cycle usually

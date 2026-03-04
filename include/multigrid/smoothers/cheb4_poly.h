@@ -95,6 +95,7 @@ class ChebyshevPolynomialSmoother : public BaseSolver {
             compute_spectral_radius();  // for more robustness update rho(Dinv*A) aka max eigenvalue
                                         // estimate
     }
+    void factor() {}
 
     void set_abs_tol(T atol) {}
     void set_rel_tol(T atol) {}

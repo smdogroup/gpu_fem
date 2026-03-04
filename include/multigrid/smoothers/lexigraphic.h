@@ -31,6 +31,7 @@ class LexigraphicGaussSeidelSmoother {
         const bool startup = false;
         initLowerMatForGaussSeidel<startup>();
     }
+    void factor() {}
 
     void initCuda() {
         // init handles
@@ -61,16 +62,17 @@ class LexigraphicGaussSeidelSmoother {
             cusparseSetMatIndexBase(descr_kmat_L, CUSPARSE_INDEX_BASE_ZERO);
             cusparseSetMatType(descr_kmat_L, CUSPARSE_MATRIX_TYPE_GENERAL);
             cusparseSetMatFillMode(descr_kmat_L, CUSPARSE_FILL_MODE_LOWER);
-            cusparseSetMatDiagType(descr_kmat_L, CUSPARSE_DIAG_TYPE_NON_UNIT);  // includes diag here..
+            cusparseSetMatDiagType(descr_kmat_L,
+                                   CUSPARSE_DIAG_TYPE_NON_UNIT);  // includes diag here..
             cusparseCreateBsrsv2Info(&info_kmat_L);
 
             // get buffer size
             int pbufferSize;
             CHECK_CUSPARSE(cusparseDbsrsv2_bufferSize(
-                cusparseHandle, dir, trans_L, nnodes, kmat_nnzb, descr_kmat_L, d_kmat_vals, d_kmat_rowp,
-                d_kmat_cols, block_dim, info_kmat_L, &pbufferSize));
+                cusparseHandle, dir, trans_L, nnodes, kmat_nnzb, descr_kmat_L, d_kmat_vals,
+                d_kmat_rowp, d_kmat_cols, block_dim, info_kmat_L, &pbufferSize));
             cudaMalloc(&kmat_pBuffer, pbufferSize);
-        } // end of startup part
+        }  // end of startup part
 
         // compute symbolic analysis for efficient triangular solves
         CHECK_CUSPARSE(cusparseDbsrsv2_analysis(cusparseHandle, dir, trans_L, nnodes, kmat_nnzb,
@@ -79,9 +81,8 @@ class LexigraphicGaussSeidelSmoother {
         // CHECK_CUDA(cudaDeviceSynchronize());
     }
 
-    void smoothDefect(DeviceVec<T> d_defect, DeviceVec<T> d_soln,
-        int n_iters, bool print = false, int print_freq = 10) {
-
+    void smoothDefect(DeviceVec<T> d_defect, DeviceVec<T> d_soln, int n_iters, bool print = false,
+                      int print_freq = 10) {
         // this is lexigraphic or RCM GS (RCM if more general mesh..)
         T a, b;
 

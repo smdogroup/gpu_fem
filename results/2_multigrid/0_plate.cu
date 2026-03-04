@@ -146,6 +146,7 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
         } else if constexpr (std::is_same_v<Smoother,MulticolorGSSmoother_V1<Assembler>>) {
             bool symmetric = true;
             smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omega, symmetric, nsmooth);
+            smoother->factor();
         } else {
             static_assert(sizeof(Smoother) == 0, "Unsupported smoother type");
         }
@@ -188,6 +189,7 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     auto start1 = std::chrono::high_resolution_clock::now();
 
     // fastest is K-cycle usually
+    kmg->coarse_solver->factor(); // factor
     kmg->solve(rhs, soln);
 
     // get final residual
@@ -314,7 +316,7 @@ void solve_direct(int nxe, double SR) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
     // run factor again so that we give fair comparison
-    pc->factor_matrix();
+    pc->factor();
     
 
     // get initial residual
@@ -462,6 +464,10 @@ int main(int argc, char **argv) {
         using Smoother = MulticolorGSSmoother_V1<Assembler>; // still calls direct later if direct
         gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);
     }
+    //  else if (smoother_type == "asw") {
+    //     using Smoother = StructuredAdditiveSchwarzSmoother<T, Assembler, S_CYLINDER>; // still calls direct later if direct
+    //     gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);
+    // }
 
     return 0;
 

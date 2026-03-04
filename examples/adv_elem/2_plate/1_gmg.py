@@ -10,7 +10,7 @@ from elem import DiscreteKirchoffLoveTrianglePlateElement, ReissnerMindlinPlateE
 from dkt_assembler import DKTPlateAssembler
 from std_assembler import StandardPlateAssembler
 from elem import ReissnerMindlinPlateElement_OptProlong, MITCPlateElement_OptProlong
-from elem import AlgebraicSubGridScaleElement, AlgebraicSubGridScaleElement_V2
+from elem import AlgebraicSubGridScaleElement
 
 from smooth import TwoDimAddSchwarzDeRhamVertexEdges
 # from smooth import TwodimAddSchwarzColored22_BC, TwodimAddSchwarzColored22
@@ -325,7 +325,8 @@ elif args.solve == 'vmg':
 
     # mitc_ep does better without line search btw
     # line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
-    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep', 'asgs']
+    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep'] # better not with asgs?
+    # line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep', 'asgs']
     # if args.elem == 'mitcp':
     #     line_search = ELEMENT.prolong_mode != 'locking-local'
 
@@ -346,7 +347,8 @@ elif args.solve == 'vmg':
 elif args.solve == 'kmg':
 
     # line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp']
-    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep', 'asgs']
+    line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep'] # better not with asgs?
+    # line_search = args.elem in ['drig', 'drigr', 'mitc_lp', 'mitc_gp', 'mitc', 'mitc_ep', 'asgs']
     # if args.elem == 'mitcp':
     #     line_search = ELEMENT.prolong_mode != 'locking-local'
 

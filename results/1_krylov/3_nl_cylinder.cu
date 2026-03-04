@@ -30,7 +30,6 @@
 // #include "multigrid/smoothers/damped_jacobi.h"
 #include "multigrid/smoothers/cheb4_poly.h"
 #include "multigrid/smoothers/asw_struct.h"
-#include "multigrid/smoothers/asw_support.h"
 #include "multigrid/smoothers/spai.h"
 #include "multigrid/solvers/gmg.h"
 #include <string>
@@ -157,57 +156,94 @@ void chebyshev_polynomial_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
 
-    // get initial residual
-    T init_resid = pcg_solver->getResidualNorm(grid->d_defect, lin_soln);
+    // pc->factor();
 
-    // linear solve
+    // printf("running GSMC-GMRES linear solve\n");
     bool fail = pcg_solver->solve(grid->d_defect, lin_soln, true);
-    
-    // final residual
-    T final_resid = pcg_solver->getResidualNorm(grid->d_defect, lin_soln);
+    // printf("\t\ndone with GSMC-GMRES linear solve\n");
+
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end_solve = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end_solve - start_solve;
-
-    // compute log residual reduction per unit time
-    T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    if (ORDER == 1) {
-        printf("\nDJ-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
-        printf("\tinit resid %.4e => final resid %.4e in %.3e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
-    } else {
-        printf("\nChebyshev-Polynomial-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
-        printf("\tinit resid %.4e => final resid %.4e in %.3e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
-    }
+    printf("\tCP-linear solve time %.2e on %d nxe\n", solve_time.count(), nxe);
 
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = pcg_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "out/cyl_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
-    if (!fail) {
-        T pc_compl = smoother->precond_complexity();
-
-        // write to csv (this particular run)
-        // ---------------------------------------
-        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
-        if (csv.tellp() == 0)
-            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
-        // Set high precision for CSV output
-        csv << std::setprecision(15) << std::scientific;
-        if (ORDER == 1) {
-            csv << (1.0/SR) << "," << nxe << "," << N << ","
-            << "DJ" << "," << pc_compl << "," << solve_time.count() << "\n";
-        } else {
-            csv << (1.0/SR) << "," << nxe << "," << N << ","
-            << "CP" << "," << pc_compl << "," << solve_time.count() << "\n";
-        }
-        
+    if (fail) {
+        printf("\tPCG linear solve failed, so not proceeding to nonlinear solves\n");
+        return;
     }
 
+    // -----------------------------------------------------------
+    // 2) actually try Newton-mg solve here (this is just V1, later versions may use FMG cycle so less extra work needs to be done on fine grids)
+    //     i.e. you can do most of hte nonlinear solves to get in basin of attraction on coarser grids first.. (then nonlinear fine grid at end only, or some FMG cycle)
+
+    // new nonlinear solver
+    // ======================
+
+    // build the inexact newton + outer continuation solver
+    using Mat = BsrMat<DeviceVec<T>>;
+    using Vec = DeviceVec<T>;
+    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, PCG>;
+    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
+
+    T initLinSolveRtol = 1e-3;
+    T initLinSolveAtol = 1e-4;
+    T minRtol = 1e-4, maxRtol = 1e-2; // don't want min rtol too low, cause GMRES will run out of steps (with GSMC precond)
+
+    // get the loads out again cause they were permuted by grid
+    bool perm_out = true;
+    grid->getDefect(loads2, perm_out);
+
+    pcg_solver->set_print(false);
+
+    INK *inner_solver = new INK(cublasHandle, assembler, kmat, loads2, pcg_solver, initLinSolveRtol, initLinSolveAtol, minRtol, maxRtol);
+    // bool use_predictor = true, debug = false;
+    bool use_predictor = true, debug = false;
+    NL *nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
+
+    // now try calling it
+    T lambda0 = 0.2;
+    // T lambda0 = 0.05;
+    // T inner_atol = 1e-2;
+    // T inner_atol = 1e-4;
+    // T inner_atol = 1e-4;
+    T inner_atol = 1e-6;
+    T lambdaf = 1.0;
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start1 = std::chrono::high_resolution_clock::now();
+    nl_solver->solve(vars, lambda0, inner_atol, lambdaf);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end1 = std::chrono::high_resolution_clock::now();
+
+    T nl_max_disp = get_max_disp(vars);
+
+    // print some of the data of host residual
+    auto h_vars = vars.createHostVec();
+    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/cylinder_kry_nl.vtk");
+
+    // important to know reduction for how NL regime we are
+    T ratio = nl_max_disp / lin_max_disp;
+    printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
+
+    // auto end1 = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> nl_solve_time = end1 - start1;
+    int ndof = assembler.get_num_vars();
+    double total = startup_time.count() + nl_solve_time.count();
+    printf("nonlinear Newton-Raphson CP-PCG solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), nl_solve_time.count(), total);
+
+    int num_newton = inner_solver->get_num_lin_solves();
+    printf("\tlin solve time %.3e, nl solve time %.3e, #lin-solves %d\n", solve_time.count(), nl_solve_time.count(), num_newton);
+
     if (fail) {
-        printf("\tPCG linear solver failed\n");
+        printf("\tnonlinear solver failed\n");
         return;
     }
 }
@@ -319,379 +355,94 @@ void asw_solve(int nxe, double SR, T omega, int n_smooth, int size, T pressure =
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
 
-    pc->factor(); // ASW factor time
+    pc->factor();
 
-    // get initial residual
-    T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
-
-    // linear solve
+    // printf("running GSMC-GMRES linear solve\n");
     bool fail = linear_solver->solve(grid->d_defect, lin_soln, true);
-    // bool fail = smoother->solve(grid->d_defect, lin_soln); // just preconditioner solve
-    
-    // final residual
-    T final_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
+    // printf("\t\ndone with GSMC-GMRES linear solve\n");
+
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end_solve = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end_solve - start_solve;
-
-    // compute log residual reduction per unit time
-    T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nASW-GMRES on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
-    printf("\tinit resid %.4e => final resid %.4e in %.3e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
+    printf("\tASW-linear solve time %.2e on %d nxe\n", solve_time.count(), nxe);
 
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/cyl_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
-    int nx = nxe + 1;
-    int ndof = nx * nx * 6;
-    double total = startup_time.count() + solve_time.count();
-    size_t bytes_per_double = sizeof(double);
-    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
-    printf("ASW-PCG memory in MB %.4e with NDOF %d\n", mem_mb, ndof);
-
-    if (!fail) {
-        T pc_compl = smoother->precond_complexity();
-
-        // write to csv (this particular run)
-        // ---------------------------------------
-        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
-        if (csv.tellp() == 0)
-            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
-        // Set high precision for CSV output
-        csv << std::setprecision(15) << std::scientific;
-        csv << (1.0/SR) << "," << nxe << "," << N << ","
-            << "ASW" << "," << pc_compl << "," << solve_time.count() << "\n";
-    }
-
     if (fail) {
-        printf("\tPCG linear solver failed\n");
+        printf("\tPCG linear solve failed, so not proceeding to nonlinear solves\n");
         return;
     }
-}
 
-template <typename T, class Assembler>
-void asw_elem3x3_solve(int nxe, double SR, T omega, int n_smooth, T pressure = 5.0e7) {
-    /* SPAI-GMRES solve */
+    // -----------------------------------------------------------
+    // 2) actually try Newton-mg solve here (this is just V1, later versions may use FMG cycle so less extra work needs to be done on fine grids)
+    //     i.e. you can do most of hte nonlinear solves to get in basin of attraction on coarser grids first.. (then nonlinear fine grid at end only, or some FMG cycle)
 
-    using Basis = typename Assembler::Basis;
-    using Physics = typename Assembler::Phys;
-    const SCALER scaler  = LINE_SEARCH;
-    const bool TEMP_ELEM3x3 = true; // off by default
-    using Smoother = UnstructuredQuadSupportAdditiveSchwarzSmoother<T, Assembler, TEMP_ELEM3x3>;
-    using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
+    // new nonlinear solver
+    // ======================
 
-    // for K-cycles
-    // linear solver
-    // using Precond = CusparseMGDirectLU<T, Assembler>;
-    using PCG = PCGSolver<T, GRID>;
+    // build the inexact newton + outer continuation solver
+    using Mat = BsrMat<DeviceVec<T>>;
+    using Vec = DeviceVec<T>;
+    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, PCG>;
+    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
 
-    // create cublas and cusparse handles (single one each)
-    // -----------------------------------------------------
-    cublasHandle_t cublasHandle = NULL;
-    CHECK_CUBLAS(cublasCreate(&cublasHandle));
-    cusparseHandle_t cusparseHandle = NULL;
-    CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
+    T initLinSolveRtol = 1e-3;
+    T initLinSolveAtol = 1e-4;
+    T minRtol = 1e-4, maxRtol = 1e-2; // don't want min rtol too low, cause GMRES will run out of steps (with GSMC precond)
 
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto start0 = std::chrono::high_resolution_clock::now();
+    // get the loads out again cause they were permuted by grid
+    bool perm_out = true;
+    grid->getDefect(loads2, perm_out);
 
-    double L = 1.0, R = 0.5, thick = L / SR;
-    double E = 70e9, nu = 0.3;
-    // double rho = 2500, ys = 350e6;
-    bool imperfection = false; // option for geom imperfection
-    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-    auto assembler = createCylinderAssembler<Assembler>(nxe, nxe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
-    constexpr bool compressive = false;
-    const int load_case = 3; // petal and chirp load
-    double uniform_force = pressure * 1.0 * 1.0;
-    double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
-    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-    double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderLoads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
-    printf("making grid with nxe %d\n", nxe);
+    linear_solver->set_print(false);
 
-    // perform multicolor reordering
-    auto &bsr_data = assembler.getBsrData();
-    bsr_data.compute_nofill_pattern();
+    INK *inner_solver = new INK(cublasHandle, assembler, kmat, loads2, linear_solver, initLinSolveRtol, initLinSolveAtol, minRtol, maxRtol);
+    // bool use_predictor = true, debug = false;
+    bool use_predictor = true, debug = false;
+    NL *nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
 
-    // T *_color_rowp = new T[2];
-    auto h_color_rowp = HostVec<int>(2);
-    assembler.moveBsrDataToDevice();
-
-    // create the loads and kmat
-    auto loads = assembler.createVarsVec(my_loads);
-    assembler.apply_bcs(loads);
-    auto kmat = createBsrMat<Assembler, VecType<T>>(assembler);
-    auto res = assembler.createVarsVec();
-    auto lin_soln = assembler.createVarsVec();
-    auto vars = assembler.createVarsVec();
-    auto loads2 = assembler.createVarsVec();
-    int N = res.getSize();
-
-    // assemble the kmat
-    auto startkmat = std::chrono::high_resolution_clock::now();
-    assembler.add_jacobian_fast(kmat);
-    assembler.apply_bcs(kmat);
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto endkmat = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat in %.3e sec\n", assembly_time.count());
-
-    // build smoother and prolongations..
-    // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
-    printf("making ASW support smoother\n");
-    // int size = 2; // size x size coupled blocks of smoothing
-    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat,  
-        omega, n_smooth);
-    smoother->set_temp_elem3x3(nxe);
-    printf("\tdone making ASW smoother\n");
-    auto prolongation = new Prolongation(assembler);
-    auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
-    auto pc = smoother;
-
-    // create the preconditioner and GMRES solver now
-    auto options = SolverOptions();
-    options.ncycles = 4000; // number of max PCG cycles
-    options.print_freq = 10;
-
-    // PCG solver
-    auto linear_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options);
-
-    // // can maybe use BiCGStab if need be..
-    // // only use GMRES if SR > 100
-    // const int N_SUBSPACE = 200; // 100
-    // using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
-    // int MAX_ITER = N_SUBSPACE;
-    // auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
-
-    // out settings
-    linear_solver->set_rel_tol(1e-6);
-    linear_solver->set_abs_tol(1e-6);
-    linear_solver->set_print(true);
-
-    auto endstartup = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> startup_time = endstartup - start0;
-
-    // run the linear solver
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto start_solve = std::chrono::high_resolution_clock::now();
-
-    pc->factor(); // ASW factor time
-
-    // get initial residual
-    T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
-
-    // linear solve
-    bool fail = linear_solver->solve(grid->d_defect, lin_soln, true);
-    // bool fail = smoother->solve(grid->d_defect, lin_soln); // just preconditioner solve
-    
-    // final residual
-    T final_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
+    // now try calling it
+    T lambda0 = 0.2;
+    // T lambda0 = 0.05;
+    // T inner_atol = 1e-2;
+    // T inner_atol = 1e-4;
+    // T inner_atol = 1e-4;
+    T inner_atol = 1e-6;
+    T lambdaf = 1.0;
 
     CHECK_CUDA(cudaDeviceSynchronize());
-    auto end_solve = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> solve_time = end_solve - start_solve;
+    auto start1 = std::chrono::high_resolution_clock::now();
+    nl_solver->solve(vars, lambda0, inner_atol, lambdaf);
 
-    // compute log residual reduction per unit time
-    T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nASW-elem3x3-GMRES on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
-    printf("\tinit resid %.4e => final resid %.4e in %.3e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end1 = std::chrono::high_resolution_clock::now();
 
-    // // print to VTK (permuting from solve to vis order)
-    int *d_perm = linear_solver->grid->d_perm;
-    auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
-    T lin_max_disp = get_max_disp(lin_soln);
+    T nl_max_disp = get_max_disp(vars);
 
-    int nx = nxe + 1;
-    int ndof = nx * nx * 6;
-    double total = startup_time.count() + solve_time.count();
-    size_t bytes_per_double = sizeof(double);
-    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
-    printf("ASW-elem3x3-PCG memory in MB %.4e with NDOF %d\n", mem_mb, ndof);
+    // print some of the data of host residual
+    auto h_vars = vars.createHostVec();
+    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/cylinder_kry_nl.vtk");
 
-    if (!fail) {
-        T pc_compl = smoother->precond_complexity();
+    // important to know reduction for how NL regime we are
+    T ratio = nl_max_disp / lin_max_disp;
+    printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
 
-        // write to csv (this particular run)
-        // ---------------------------------------
-        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
-        if (csv.tellp() == 0)
-            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
-        // Set high precision for CSV output
-        csv << std::setprecision(15) << std::scientific;
-        csv << (1.0/SR) << "," << nxe << "," << N << ","
-            << "ASW" << "," << pc_compl << "," << solve_time.count() << "\n";
-    }
+    // auto end1 = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> nl_solve_time = end1 - start1;
+    int ndof = assembler.get_num_vars();
+    double total = startup_time.count() + nl_solve_time.count();
+    printf("nonlinear Newton-Raphson ASW-PCG solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), nl_solve_time.count(), total);
+
+    int num_newton = inner_solver->get_num_lin_solves();
+    printf("\tlin solve time %.3e, nl solve time %.3e, #lin-solves %d\n", solve_time.count(), nl_solve_time.count(), num_newton);
 
     if (fail) {
-        printf("\tPCG linear solver failed\n");
-        return;
-    }
-}
-
-
-template <typename T, class Assembler>
-void asw_supp_solve(int nxe, double SR, T omega, int n_smooth, T pressure = 5.0e7) {
-    /* SPAI-GMRES solve */
-
-    using Basis = typename Assembler::Basis;
-    using Physics = typename Assembler::Phys;
-    const SCALER scaler  = LINE_SEARCH;
-    using Smoother = UnstructuredQuadSupportAdditiveSchwarzSmoother<T, Assembler>;
-    using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
-    using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
-
-    // for K-cycles
-    // linear solver
-    // using Precond = CusparseMGDirectLU<T, Assembler>;
-    using PCG = PCGSolver<T, GRID>;
-
-    // create cublas and cusparse handles (single one each)
-    // -----------------------------------------------------
-    cublasHandle_t cublasHandle = NULL;
-    CHECK_CUBLAS(cublasCreate(&cublasHandle));
-    cusparseHandle_t cusparseHandle = NULL;
-    CHECK_CUSPARSE(cusparseCreate(&cusparseHandle));
-
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto start0 = std::chrono::high_resolution_clock::now();
-
-    double L = 1.0, R = 0.5, thick = L / SR;
-    double E = 70e9, nu = 0.3;
-    // double rho = 2500, ys = 350e6;
-    bool imperfection = false; // option for geom imperfection
-    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-    auto assembler = createCylinderAssembler<Assembler>(nxe, nxe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
-    constexpr bool compressive = false;
-    const int load_case = 3; // petal and chirp load
-    double uniform_force = pressure * 1.0 * 1.0;
-    double nodal_loads = uniform_force; // / (nxe - 1) / (nxe - 1);
-    nodal_loads *= (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
-    double Q = 1.0; // load magnitude
-    T *my_loads = getCylinderLoads<T,  Basis,Physics, load_case>(nxe, nxe, L, R, nodal_loads);
-    printf("making grid with nxe %d\n", nxe);
-
-    // perform multicolor reordering
-    auto &bsr_data = assembler.getBsrData();
-    bsr_data.compute_nofill_pattern();
-
-    // T *_color_rowp = new T[2];
-    auto h_color_rowp = HostVec<int>(2);
-    assembler.moveBsrDataToDevice();
-
-    // create the loads and kmat
-    auto loads = assembler.createVarsVec(my_loads);
-    assembler.apply_bcs(loads);
-    auto kmat = createBsrMat<Assembler, VecType<T>>(assembler);
-    auto res = assembler.createVarsVec();
-    auto lin_soln = assembler.createVarsVec();
-    auto vars = assembler.createVarsVec();
-    auto loads2 = assembler.createVarsVec();
-    int N = res.getSize();
-
-    // assemble the kmat
-    auto startkmat = std::chrono::high_resolution_clock::now();
-    assembler.add_jacobian_fast(kmat);
-    assembler.apply_bcs(kmat);
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto endkmat = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> assembly_time = endkmat - startkmat;
-    printf("\tassemble kmat in %.3e sec\n", assembly_time.count());
-
-    // build smoother and prolongations..
-    // auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
-    printf("making ASW support smoother\n");
-    // int size = 2; // size x size coupled blocks of smoothing
-    auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat,  
-        omega, n_smooth);
-    printf("\tdone making ASW smoother\n");
-    auto prolongation = new Prolongation(assembler);
-    auto grid = new GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle);
-    auto pc = smoother;
-
-    // create the preconditioner and GMRES solver now
-    auto options = SolverOptions();
-    options.ncycles = 4000; // number of max PCG cycles
-    options.print_freq = 10;
-
-    // PCG solver
-    auto linear_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options);
-
-    // // can maybe use BiCGStab if need be..
-    // // only use GMRES if SR > 100
-    // const int N_SUBSPACE = 200; // 100
-    // using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
-    // int MAX_ITER = N_SUBSPACE;
-    // auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
-
-    // out settings
-    linear_solver->set_rel_tol(1e-6);
-    linear_solver->set_abs_tol(1e-6);
-    linear_solver->set_print(true);
-
-    auto endstartup = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> startup_time = endstartup - start0;
-
-    // run the linear solver
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto start_solve = std::chrono::high_resolution_clock::now();
-
-    pc->factor(); // ASW factor time
-
-    // get initial residual
-    T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
-
-    // linear solve
-    bool fail = linear_solver->solve(grid->d_defect, lin_soln, true);
-    // bool fail = smoother->solve(grid->d_defect, lin_soln); // just preconditioner solve
-    
-    // final residual
-    T final_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
-
-    CHECK_CUDA(cudaDeviceSynchronize());
-    auto end_solve = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> solve_time = end_solve - start_solve;
-
-    // compute log residual reduction per unit time
-    T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nASW-GMRES on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
-    printf("\tinit resid %.4e => final resid %.4e in %.3e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
-
-    // // print to VTK (permuting from solve to vis order)
-    int *d_perm = linear_solver->grid->d_perm;
-    auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
-    T lin_max_disp = get_max_disp(lin_soln);
-
-    int nx = nxe + 1;
-    int ndof = nx * nx * 6;
-    double total = startup_time.count() + solve_time.count();
-    size_t bytes_per_double = sizeof(double);
-    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
-    printf("ASW-support-PCG memory in MB %.4e with NDOF %d\n", mem_mb, ndof);
-
-    if (!fail) {
-        T pc_compl = smoother->precond_complexity();
-
-        // write to csv (this particular run)
-        // ---------------------------------------
-        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
-        if (csv.tellp() == 0)
-            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
-        // Set high precision for CSV output
-        csv << std::setprecision(15) << std::scientific;
-        csv << (1.0/SR) << "," << nxe << "," << N << ","
-            << "ASW" << "," << pc_compl << "," << solve_time.count() << "\n";
-    }
-
-    if (fail) {
-        printf("\tPCG linear solver failed\n");
+        printf("\tnonlinear solver failed\n");
         return;
     }
 }
@@ -791,47 +542,91 @@ void gsmc_solve(int nxe, double SR, int nsmooth, T omegaMC = 1.5, T pressure = 5
     // run the linear solver
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
-
-    // get initial residual
-    T init_resid = pcg_solver->getResidualNorm(grid->d_defect, lin_soln);
-
-    // linear solve
+    // printf("running GSMC-GMRES linear solve\n");
     bool fail = pcg_solver->solve(grid->d_defect, lin_soln, true);
-    
-    // final residual
-    T final_resid = pcg_solver->getResidualNorm(grid->d_defect, lin_soln);
+    // printf("\t\ndone with GSMC-GMRES linear solve\n");
+
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end_solve = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end_solve - start_solve;
-
-    // compute log residual reduction per unit time
-    T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nGSMC-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
-    printf("\tinit resid %.4e => final resid %.4e in %.3e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
+    printf("\tGSMC-linear solve time %.2e on %d nxe\n", solve_time.count(), nxe);
 
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = pcg_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(pcg_solver->grid->assembler, h_soln, "out/cyl_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
-    if (!fail) {
-        T pc_compl = smoother->precond_complexity();
-
-        // write to csv (this particular run)
-        // ---------------------------------------
-        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
-        if (csv.tellp() == 0)
-            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
-        // Set high precision for CSV output
-        csv << std::setprecision(15) << std::scientific;
-        csv << (1.0/SR) << "," << nxe << "," << N << ","
-            << "GSMC" << "," << pc_compl << "," << solve_time.count() << "\n";
+    if (fail) {
+        printf("\tPCG linear solve failed, so not proceeding to nonlinear solves\n");
+        return;
     }
 
+    // -----------------------------------------------------------
+    // 2) actually try Newton-mg solve here (this is just V1, later versions may use FMG cycle so less extra work needs to be done on fine grids)
+    //     i.e. you can do most of hte nonlinear solves to get in basin of attraction on coarser grids first.. (then nonlinear fine grid at end only, or some FMG cycle)
+
+    // new nonlinear solver
+    // ======================
+
+    // build the inexact newton + outer continuation solver
+    using Mat = BsrMat<DeviceVec<T>>;
+    using Vec = DeviceVec<T>;
+    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, PCG>;
+    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
+
+    T initLinSolveRtol = 1e-3;
+    T initLinSolveAtol = 1e-4;
+    T minRtol = 1e-4, maxRtol = 1e-2; // don't want min rtol too low, cause GMRES will run out of steps (with GSMC precond)
+
+    // get the loads out again cause they were permuted by grid
+    bool perm_out = true;
+    grid->getDefect(loads2, perm_out);
+
+    pcg_solver->set_print(false);
+
+    INK *inner_solver = new INK(cublasHandle, assembler, kmat, loads2, pcg_solver, initLinSolveRtol, initLinSolveAtol, minRtol, maxRtol);
+    // bool use_predictor = true, debug = false;
+    bool use_predictor = true, debug = false;
+    NL *nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
+
+    // now try calling it
+    T lambda0 = 0.2;
+    // T lambda0 = 0.05;
+    // T inner_atol = 1e-2;
+    // T inner_atol = 1e-4;
+    // T inner_atol = 1e-4;
+    T inner_atol = 1e-6;
+    T lambdaf = 1.0;
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start1 = std::chrono::high_resolution_clock::now();
+    nl_solver->solve(vars, lambda0, inner_atol, lambdaf);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end1 = std::chrono::high_resolution_clock::now();
+
+    T nl_max_disp = get_max_disp(vars);
+
+    // print some of the data of host residual
+    auto h_vars = vars.createHostVec();
+    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/cylinder_kry_nl.vtk");
+
+    // important to know reduction for how NL regime we are
+    T ratio = nl_max_disp / lin_max_disp;
+    printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
+
+    std::chrono::duration<double> nl_solve_time = end1 - start1;
+    int ndof = assembler.get_num_vars();
+    double total = startup_time.count() + nl_solve_time.count();
+    printf("nonlinear Newton-Raphson GSMC-GMRES solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), nl_solve_time.count(), total);
+
+    int num_newton = inner_solver->get_num_lin_solves();
+    printf("\tlin solve time %.3e, nl solve time %.3e, #lin-solves %d\n", solve_time.count(), nl_solve_time.count(), num_newton);
+
     if (fail) {
-        printf("\tPCG linear solver failed\n");
+        printf("\tnonlinear solver failed\n");
         return;
     }
 }
@@ -848,7 +643,6 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, int nsmooth, T omeg
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
 
     // for K-cycles
-    // linear solver
     const bool MULTI_SMOOTH = true;
     using Precond = CusparseMGDirectLU<T, Assembler, MULTI_SMOOTH>;
     using PCG = PCGSolver<T, GRID>;
@@ -885,8 +679,8 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, int nsmooth, T omeg
     int kmat_orig_nnzb = bsr_data.nnzb;
 
 
-    // bsr_data.compute_nofill_pattern();
-    bsr_data.RCM_reordering();
+    bsr_data.compute_nofill_pattern();
+    // bsr_data.RCM_reordering();
     // bsr_data.AMD_reordering();
     bsr_data.qorder_reordering(qorder);
     bsr_data.compute_ILUk_pattern(fill_level, 10.0);
@@ -905,10 +699,6 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, int nsmooth, T omeg
     auto loads2 = assembler.createVarsVec();
     int N = res.getSize();
 
-    if (omega != 0.9) {
-        printf("WARNING - choose omega like 0.9 or 0.7 for ILU(k) smoother typically and 2 to 4 smoothing steps\n");
-    }
-
     // assemble the kmat
     auto startkmat = std::chrono::high_resolution_clock::now();
     assembler.add_jacobian_fast(kmat);
@@ -917,6 +707,12 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, int nsmooth, T omeg
     auto endkmat = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> assembly_time = endkmat - startkmat;
     printf("\tassemble kmat in %.3e sec\n", assembly_time.count());
+
+
+
+    if (omega != 0.9) {
+        printf("WARNING - choose omega like 0.9 or 0.7 for ILU(k) smoother typically and 2 to 4 smoothing steps\n");
+    }
 
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
@@ -960,54 +756,92 @@ void ilu_solve(int nxe, double SR, T qorder, int fill_level, int nsmooth, T omeg
 
     pc->factor();
 
-    // get initial residual
-    T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
-
-    // linear solve
+    // printf("running GSMC-GMRES linear solve\n");
     bool fail = linear_solver->solve(grid->d_defect, lin_soln, true);
-    
-    // final residual
-    T final_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
+    // printf("\t\ndone with GSMC-GMRES linear solve\n");
+
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end_solve = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end_solve - start_solve;
-
-    // compute log residual reduction per unit time
-    T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nGSMC-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
-    printf("\tinit resid %.4e => final resid %.4e in %.3e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
+    printf("\tILU-linear solve time %.2e on %d nxe\n", solve_time.count(), nxe);
 
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/cyl_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
-    int nx = nxe + 1;
-    int ndof = nx * nx * 6;
-    double total = startup_time.count() + solve_time.count();
-    size_t bytes_per_double = sizeof(double);
-    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
-    printf("ILU(%d)-memory in MB %.4e with NDOF %d\n", fill_level, mem_mb, ndof);
-
-    if (!fail) {
-        T pc_compl = pc->precond_complexity(kmat_orig_nnzb);
-
-        // write to csv (this particular run)
-        // ---------------------------------------
-        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
-        if (csv.tellp() == 0)
-            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
-        // Set high precision for CSV output
-        csv << std::setprecision(15) << std::scientific;
-        csv << (1.0/SR) << "," << nxe << "," << N << ","
-            << "ILU" << fill_level << "," << pc_compl << "," << solve_time.count() << "\n";
+    if (fail) {
+        printf("\tPCG linear solve failed, so not proceeding to nonlinear solves\n");
+        return;
     }
 
+    // -----------------------------------------------------------
+    // 2) actually try Newton-mg solve here (this is just V1, later versions may use FMG cycle so less extra work needs to be done on fine grids)
+    //     i.e. you can do most of hte nonlinear solves to get in basin of attraction on coarser grids first.. (then nonlinear fine grid at end only, or some FMG cycle)
+
+    // new nonlinear solver
+    // ======================
+
+    // build the inexact newton + outer continuation solver
+    using Mat = BsrMat<DeviceVec<T>>;
+    using Vec = DeviceVec<T>;
+    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, GMRES>;
+    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
+
+    T initLinSolveRtol = 1e-3;
+    T initLinSolveAtol = 1e-4;
+    T minRtol = 1e-4, maxRtol = 1e-2; // don't want min rtol too low, cause GMRES will run out of steps (with GSMC precond)
+
+    // get the loads out again cause they were permuted by grid
+    bool perm_out = true;
+    grid->getDefect(loads2, perm_out);
+
+    linear_solver->set_print(false);
+
+    INK *inner_solver = new INK(cublasHandle, assembler, kmat, loads2, linear_solver, initLinSolveRtol, initLinSolveAtol, minRtol, maxRtol);
+    // bool use_predictor = true, debug = false;
+    bool use_predictor = true, debug = false;
+    NL *nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
+
+    // now try calling it
+    T lambda0 = 0.2;
+    // T lambda0 = 0.05;
+    // T inner_atol = 1e-2;
+    // T inner_atol = 1e-4;
+    // T inner_atol = 1e-4;
+    T inner_atol = 1e-6;
+    T lambdaf = 1.0;
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start1 = std::chrono::high_resolution_clock::now();
+    nl_solver->solve(vars, lambda0, inner_atol, lambdaf);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end1 = std::chrono::high_resolution_clock::now();
+
+    T nl_max_disp = get_max_disp(vars);
+
+    // print some of the data of host residual
+    auto h_vars = vars.createHostVec();
+    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/cylinder_kry_nl.vtk");
+
+    // important to know reduction for how NL regime we are
+    T ratio = nl_max_disp / lin_max_disp;
+    printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
+
+    // auto end1 = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> nl_solve_time = end1 - start1;
+    int ndof = assembler.get_num_vars();
+    double total = startup_time.count() + nl_solve_time.count();
+    printf("nonlinear Newton-Raphson ILU-GMRES solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), nl_solve_time.count(), total);
+
+    int num_newton = inner_solver->get_num_lin_solves();
+    printf("\tlin solve time %.3e, nl solve time %.3e, #lin-solves %d\n", solve_time.count(), nl_solve_time.count(), num_newton);
 
     if (fail) {
-        printf("\tPCG linear solver failed\n");
+        printf("\tnonlinear solver failed\n");
         return;
     }
 }
@@ -1285,58 +1119,94 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
 
-    pc->factor(); // run factor again so fair comparison
+    pc->factor();
 
-    // get initial residual
-    T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
-
-    // linear solve
+    // printf("running GSMC-GMRES linear solve\n");
     bool fail = linear_solver->solve(grid->d_defect, lin_soln, true);
-    
-    // final residual
-    T final_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
+    // printf("\t\ndone with GSMC-GMRES linear solve\n");
+
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end_solve = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end_solve - start_solve;
-
-    // compute log residual reduction per unit time
-    // it's converging about 1e14 resid drop, only need like 1e7 so half
-    T log_resid_drop = (log(init_resid) - log(final_resid)) / log(10.0);
-    // T log_resid_cap = log(1e6) / log(10.0); // cap out past 1e6 because don't need deeper than this really for Newton-Krylov..
-    T log_red_rate =  log_resid_drop / solve_time.count(); // 0.5 * 
-    printf("\nDirectLU-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
-    printf("\tinit resid %.4e => final resid %.4e in %.3e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
-
-    int nx = nxe + 1;
-    int ndof = nx * nx * 6;
-    double total = startup_time.count() + solve_time.count();
-    size_t bytes_per_double = sizeof(double);
-    double mem_mb = static_cast<double>(bytes_per_double) * static_cast<double>(bsr_data.nnzb) * 36.0 / 1024.0 / 1024.0;
-    printf("fullLU-memory in MB %.4e with NDOF %d\n", mem_mb, ndof);
+    printf("\tLU-linear solve time %.2e on %d nxe\n", solve_time.count(), nxe);
 
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = linear_solver->grid->d_perm;
     auto h_soln = lin_soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "./out/plate_kry_lin.vtk");
+    printToVTK<Assembler,HostVec<T>>(linear_solver->grid->assembler, h_soln, "out/cyl_kry_lin.vtk");
     T lin_max_disp = get_max_disp(lin_soln);
 
-    if (!fail) {
-        T pc_compl = pc->precond_complexity(kmat_orig_nnzb);
-
-        // write to csv (this particular run)
-        // ---------------------------------------
-        std::ofstream csv("./out/cylinder-times.csv", std::ios::app);
-        if (csv.tellp() == 0)
-            csv << "t/R,nxe,NDOF,solver,pc_complexity,lin_runtime(s)\n";
-        // Set high precision for CSV output
-        csv << std::setprecision(15) << std::scientific;
-        csv << (1.0/SR) << "," << nxe << "," << N << ","
-            << "LU" << "," << pc_compl << "," << solve_time.count() << "\n";
+    if (fail) {
+        printf("\tPCG linear solve failed, so not proceeding to nonlinear solves\n");
+        return;
     }
 
+    // -----------------------------------------------------------
+    // 2) actually try Newton-mg solve here (this is just V1, later versions may use FMG cycle so less extra work needs to be done on fine grids)
+    //     i.e. you can do most of hte nonlinear solves to get in basin of attraction on coarser grids first.. (then nonlinear fine grid at end only, or some FMG cycle)
+
+    // new nonlinear solver
+    // ======================
+
+    // build the inexact newton + outer continuation solver
+    using Mat = BsrMat<DeviceVec<T>>;
+    using Vec = DeviceVec<T>;
+    using INK = InexactNewtonSolver<T, Mat, Vec, Assembler, GMRES>;
+    using NL = NonlinearContinuationSolver<T, Vec, Assembler, INK>;
+
+    T initLinSolveRtol = 1e-3;
+    T initLinSolveAtol = 1e-4;
+    T minRtol = 1e-4, maxRtol = 1e-2; // don't want min rtol too low, cause GMRES will run out of steps (with GSMC precond)
+
+    // get the loads out again cause they were permuted by grid
+    bool perm_out = true;
+    grid->getDefect(loads2, perm_out);
+
+    linear_solver->set_print(false);
+
+    INK *inner_solver = new INK(cublasHandle, assembler, kmat, loads2, linear_solver, initLinSolveRtol, initLinSolveAtol, minRtol, maxRtol);
+    // bool use_predictor = true, debug = false;
+    bool use_predictor = true, debug = false;
+    NL *nl_solver = new NL(cublasHandle, assembler, inner_solver, use_predictor, debug);
+
+    // now try calling it
+    T lambda0 = 0.2;
+    // T lambda0 = 0.05;
+    // T inner_atol = 1e-2;
+    // T inner_atol = 1e-4;
+    // T inner_atol = 1e-4;
+    T inner_atol = 1e-6;
+    T lambdaf = 1.0;
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto start1 = std::chrono::high_resolution_clock::now();
+    nl_solver->solve(vars, lambda0, inner_atol, lambdaf);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    auto end1 = std::chrono::high_resolution_clock::now();
+
+    T nl_max_disp = get_max_disp(vars);
+
+    // print some of the data of host residual
+    auto h_vars = vars.createHostVec();
+    printToVTK<Assembler,HostVec<T>>(assembler, h_vars, "out/cylinder_kry_nl.vtk");
+
+    // important to know reduction for how NL regime we are
+    T ratio = nl_max_disp / lin_max_disp;
+    printf("lin max disp %.8e, nl max disp %.8e, ratio = %.8e\n", lin_max_disp, nl_max_disp, ratio);
+
+    // auto end1 = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> nl_solve_time = end1 - start1;
+    int ndof = assembler.get_num_vars();
+    double total = startup_time.count() + nl_solve_time.count();
+    printf("nonlinear Newton-Raphson LU solve of plate geom, ndof %d : startup time %.2e, solve time %.2e, total %.2e\n", ndof, startup_time.count(), nl_solve_time.count(), total);
+
+    int num_newton = inner_solver->get_num_lin_solves();
+    printf("\tlin solve time %.3e, nl solve time %.3e, #lin-solves %d\n", solve_time.count(), nl_solve_time.count(), num_newton);
+
     if (fail) {
-        printf("\tPCG linear solver failed\n");
+        printf("\tnonlinear solver failed\n");
         return;
     }
 }
@@ -1361,20 +1231,15 @@ void gatekeeper_method(std::string solver_type, int nxe, double SR, int nsmooth,
         ilu_solve<T, Assembler>(nxe, SR, qorder, 2, nsmooth, omega, load_mag);
     } else if (solver_type == "ilu3") {
         ilu_solve<T, Assembler>(nxe, SR, qorder, 3, nsmooth, omega, load_mag);
-    } else if (solver_type == "asw2") {
+    } else if (solver_type == "ilu4") {
+        ilu_solve<T, Assembler>(nxe, SR, qorder, 4, nsmooth, omega, load_mag);
+    } else if (solver_type == "ilu5") {
+        ilu_solve<T, Assembler>(nxe, SR, qorder, 5, nsmooth, omega, load_mag);
+    } else if (solver_type == "asw") {
         omega = 0.2;
         printf("ASW : setting omega = 0.2 and size to 2, comment this out to change it\n");
         int size = 2; // recommend omega = 0.2 here, nsmooth = 2
         asw_solve<T, Assembler>(nxe, SR, omega, nsmooth, size, load_mag);
-    } else if (solver_type == "aswe3") {
-        omega = 0.1;
-        printf("ASW : setting omega = 0.1 and size to 3, comment this out to change it\n");
-        // int size = 3; // recommend omega = 0.2 here, nsmooth = 2
-        asw_elem3x3_solve<T, Assembler>(nxe, SR, omega, nsmooth, load_mag);
-    } else if (solver_type == "asws3") {
-        omega = 0.1;
-        printf("ASW : setting omega = 0.1 and size to 3, comment this out to change it\n");
-        asw_supp_solve<T, Assembler>(nxe, SR, omega, nsmooth, load_mag);
     } else if (solver_type == "spai") {
         int fill_level = 1;
         // int fill_level = 2;

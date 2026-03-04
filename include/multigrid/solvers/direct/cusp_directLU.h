@@ -4,16 +4,19 @@
 // cusparse directLU solves with multigrid (V-cycle style preconditioner for two levels)
 // only works from coarsest grid to next level
 
-template <typename T, class Assembler>
+template <typename T, class Assembler, bool MULTI_SMOOTH = false>
 class CusparseMGDirectLU : public BaseSolver {
    public:
     CusparseMGDirectLU(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
-                       Assembler &assembler_, BsrMat<DeviceVec<T>> &kmat_)
+                       Assembler &assembler_, BsrMat<DeviceVec<T>> &kmat_, T omega_ = 1.0,
+                       int n_iters_ = 1)
         : cublasHandle(cublasHandle_), cusparseHandle(cusparseHandle_) {
         /* create the cusparse direct solver (for repeated solves) */
 
         assembler = assembler_;
         kmat = kmat_;
+        n_iters = n_iters_;
+        omega = omega_;
 
         BsrData bsr_data = kmat.getBsrData();
         N = assembler.get_num_vars();
@@ -28,6 +31,13 @@ class CusparseMGDirectLU : public BaseSolver {
         d_temp = temp_vec.getPtr();
         d_vals = kmat.getVec().getPtr();
         d_vals_ILU0 = DeviceVec<T>(nnz).getPtr();
+
+        // for smoothing
+        d_rhs_vec = DeviceVec<T>(N);
+        d_rhs = d_rhs_vec.getPtr();
+        d_inner_soln_vec = DeviceVec<T>(N);
+        d_inner_soln = d_inner_soln_vec.getPtr();
+        d_temp2 = DeviceVec<T>(N).getPtr();
 
         cusparseHandle = cusparseHandle_;
 
@@ -98,12 +108,12 @@ class CusparseMGDirectLU : public BaseSolver {
         CHECK_CUDA(cudaDeviceSynchronize());
 
         // first time, then factor the matrix
-        factor_matrix();
+        // factor();
     }
 
     void update_after_assembly(DeviceVec<T> &vars) {
         // do a new LU factorization
-        factor_matrix();
+        factor();
     }
 
     // does nothing cause it's a directLU solve
@@ -126,7 +136,7 @@ class CusparseMGDirectLU : public BaseSolver {
         return (precond_nnzb + kmat_new_nnzb) * 1.0 / kmat_orig_nnzb;
     }
 
-    void factor_matrix() {
+    void factor() {
         // copy the data from the original matrix to new place for factor
         CHECK_CUDA(cudaMemcpy(d_vals_ILU0, d_vals, nnz * sizeof(T), cudaMemcpyDeviceToDevice));
 
@@ -145,20 +155,67 @@ class CusparseMGDirectLU : public BaseSolver {
         CHECK_CUDA(cudaDeviceSynchronize());
     }
 
+    void smoothDefect(DeviceVec<T> d_defect, DeviceVec<T> d_soln, int _n_iters = -1,
+                      bool print = false, int print_freq = 0) {
+        for (int iter = 0; iter < n_iters; iter++) {
+            // get the solution from the defect rhs
+            // =====================================
+
+            cudaMemset(d_temp2, 0, N * sizeof(T));  // re-zero the solution
+
+            // triangular solve L*z = x
+            const double alpha = 1.0;
+            CHECK_CUSPARSE(cusparseDbsrsv2_solve(
+                cusparseHandle, dir, trans_L, mb, nnzb, &alpha, descr_L, d_vals_ILU0, d_rowp,
+                d_cols, block_dim, info_L, d_defect.getPtr(), d_temp, policy_L, pBuffer));
+
+            // triangular solve U*y = z
+            CHECK_CUSPARSE(cusparseDbsrsv2_solve(cusparseHandle, dir, trans_U, mb, nnzb, &alpha,
+                                                 descr_U, d_vals_ILU0, d_rowp, d_cols, block_dim,
+                                                 info_U, d_temp, d_temp2, policy_U, pBuffer));
+
+            // 4) compute defect update after new solution term..
+            //     ..(with soln change stored in d_temp2)
+            T a = -omega, b = 1.0;  // with omega * d_temp2 update
+            CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandle, CUSPARSE_DIRECTION_ROW,
+                                          CUSPARSE_OPERATION_NON_TRANSPOSE, mb, mb, nnzb, &a,
+                                          descrK, d_vals, d_rowp, d_cols, block_dim, d_temp2, &b,
+                                          d_defect.getPtr()));
+            // also update d_soln += omega * d_temp2
+            a = omega;
+            CHECK_CUBLAS(cublasDaxpy(cublasHandle, N, &a, d_temp2, 1, d_soln.getPtr(), 1));
+        }
+    }
+
     bool solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) {
         /* assume here the rhs and soln are in solver permutations / orderings */
 
-        // coarse grid directLU solve
-        // triangular solve L*z = x
-        const double alpha = 1.0;
-        CHECK_CUSPARSE(cusparseDbsrsv2_solve(cusparseHandle, dir, trans_L, mb, nnzb, &alpha,
-                                             descr_L, d_vals_ILU0, d_rowp, d_cols, block_dim,
-                                             info_L, rhs.getPtr(), d_temp, policy_L, pBuffer));
+        if constexpr (MULTI_SMOOTH) {
+            // setup rhs and soln with init guess of 0
+            cudaMemcpy(d_rhs, rhs.getPtr(), N * sizeof(T), cudaMemcpyDeviceToDevice);
+            cudaMemset(d_inner_soln, 0, N * sizeof(T));  // re-zero the solution
 
-        // triangular solve U*y = z
-        CHECK_CUSPARSE(cusparseDbsrsv2_solve(cusparseHandle, dir, trans_U, mb, nnzb, &alpha,
-                                             descr_U, d_vals_ILU0, d_rowp, d_cols, block_dim,
-                                             info_U, d_temp, soln.getPtr(), policy_U, pBuffer));
+            // call smoother on the defect=rhs and solution pair
+            this->smoothDefect(d_rhs_vec, d_inner_soln_vec);
+
+            // copy internal soln to external solution of the solve method
+            cudaMemcpy(soln.getPtr(), d_inner_soln, N * sizeof(T), cudaMemcpyDeviceToDevice);
+
+        } else {
+            // not as smoother, just does full-solve (like direct solve here)
+
+            // coarse grid directLU solve
+            // triangular solve L*z = x
+            const double alpha = 1.0;
+            CHECK_CUSPARSE(cusparseDbsrsv2_solve(cusparseHandle, dir, trans_L, mb, nnzb, &alpha,
+                                                 descr_L, d_vals_ILU0, d_rowp, d_cols, block_dim,
+                                                 info_L, rhs.getPtr(), d_temp, policy_L, pBuffer));
+
+            // triangular solve U*y = z
+            CHECK_CUSPARSE(cusparseDbsrsv2_solve(cusparseHandle, dir, trans_U, mb, nnzb, &alpha,
+                                                 descr_U, d_vals_ILU0, d_rowp, d_cols, block_dim,
+                                                 info_U, d_temp, soln.getPtr(), policy_U, pBuffer));
+        }
 
         // TEMP debug
         // bool coarse_fail = computeResidual(rhs, soln);
@@ -240,4 +297,12 @@ class CusparseMGDirectLU : public BaseSolver {
     const cusparseSolvePolicy_t policy_M =
         CUSPARSE_SOLVE_POLICY_USE_LEVEL;  // CUSPARSE_SOLVE_POLICY_NO_LEVEL;
     cusparseStatus_t status;
+
+    // FOR SMOOTHING
+    // updated vectors
+    DeviceVec<T> d_rhs_vec, d_inner_soln_vec;
+    T *d_temp2, *d_resid;
+    T *d_rhs, *d_inner_soln;
+    int n_iters;
+    T omega;
 };

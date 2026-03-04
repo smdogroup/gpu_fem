@@ -64,6 +64,7 @@ class PCGSolver : public BaseSolver {
         grid->update_after_assembly();
         if (pc) pc->update_after_assembly(vars);
     }
+    void factor() {}
 
     void set_print(bool print) { options.print = print; }
     void set_abs_tol(T atol) { options.atol = atol; }

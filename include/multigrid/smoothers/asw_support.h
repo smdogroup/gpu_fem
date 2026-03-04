@@ -10,7 +10,7 @@
 #include "linalg/vec.h"
 #include "multigrid/solvers/solve_utils.h"
 
-template <typename T, class Assembler>
+template <typename T, class Assembler, bool TEMP_ELEM3x3 = false>
 class UnstructuredQuadSupportAdditiveSchwarzSmoother : public BaseSolver {
     // additive schwarz smoother for unstructured 1st order elements (any mesh)
     // uses 3x3 node-support blocks (up to 9 nodes per subdomain) as local smoothing
@@ -79,14 +79,14 @@ class UnstructuredQuadSupportAdditiveSchwarzSmoother : public BaseSolver {
         _schwarzFactorization();
     }
 
-    void update_after_assembly(DeviceVec<T> &vars) {
-        // TODO
-    }
+    void update_after_assembly(DeviceVec<T> &vars) { factor(); }
     void set_abs_tol(T atol) {}
     void set_rel_tol(T atol) {}
     int get_num_iterations() { return 0; }
     void set_print(bool print) {}
     void free() {}  // TBD on this one
+
+    void set_temp_elem3x3(int nxe_) { nxe = nxe_; }
 
     T precond_complexity() {
         // get [nnzb(precond) + nnzb(A)] / nnzb(A)
@@ -136,6 +136,15 @@ class UnstructuredQuadSupportAdditiveSchwarzSmoother : public BaseSolver {
                                             (const double **)d_Xarray, n, &beta, d_Yarray, n,
                                             batchSize));
 
+            // temporarily run element 3x3 for structured mesh problem (temporarily in this class)
+            // cause it has better routines for 3x3 subdomains (when 3x3 is not originally dense in
+            // nofill pattern)
+            if constexpr (TEMP_ELEM3x3) {
+                // hack to make equiv to 3x3-elem ASW on a structured domain
+                k_zeroBatchedSolnOnElemBoundaries<T><<<grid, 32>>>(
+                    nxe, n_rhs_nz_vals, block_dim, size, d_rhsDenseMap, d_rhsSDMap, d_Yarray);
+            }
+
             // (3) Scatter the batched solution stored in d_Yarray into the global 'temp' vector.
             cudaMemset(d_temp, 0.0, N * sizeof(T));
             k_copyBatchedIntoSoln_additiveSupport<T><<<grid, 32>>>(
@@ -178,6 +187,8 @@ class UnstructuredQuadSupportAdditiveSchwarzSmoother : public BaseSolver {
     int n;          // Block dimension (e.g., 24 for 24x24 blocks)
     int batchSize;  // Number of block matrices in the batch
     int ncx, ncy;   // Number of coupling groups / batches in each direction
+
+    int nx;  // for elem3x3 ASW hack
 
     // Device pointer arrays for batched routines.
     T **h_Aarray, **d_Aarray;        // Pointers to LU-factorized 24x24 matrices.
@@ -352,6 +363,8 @@ class UnstructuredQuadSupportAdditiveSchwarzSmoother : public BaseSolver {
     int *d_sdBlockInds, *d_kmatBlockInds;
     int *h_rhsSDMap, *h_rhsDenseMap;
     int *d_rhsSDMap, *d_rhsDenseMap;
+
+    int nxe;
 
     void _computeNZPatterns() {
         // compute nonzero patterns for the copying of the matrix kmat into batched form

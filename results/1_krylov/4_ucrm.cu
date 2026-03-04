@@ -65,7 +65,7 @@ T get_max_disp(DeviceVec<T> &d_soln, int idof = 2) {
 }
 
 template <typename T, class Assembler>
-void chebyshev_polynomial_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.5, T force = 5.0e7, int ORDER = 1) {
+void chebyshev_polynomial_solve(MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.5, T force = 5.0e7, int ORDER = 1) {
     /* damped jacobi / chebyshev_polynomial PCG solve */
 
     using Basis = typename Assembler::Basis;
@@ -94,9 +94,9 @@ void chebyshev_polynomial_solve(int level, MPI_Comm comm, double SR, int nsmooth
 
     // create the assembler
     TACSMeshLoader mesh_loader{comm};
-    std::string fname = "../../examples/gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    std::string fname = "../../examples/ilu/uCRM/CRM_box_2nd.bdf";
     mesh_loader.scanBDFFile(fname.c_str());
-    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+    double E = 70e9, nu = 0.3, thick = 1.0 / SR;  // material & thick properties (start thicker first try)
     printf("making assembler for mesh '%s'\n", fname.c_str());
     auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
 
@@ -186,13 +186,13 @@ void chebyshev_polynomial_solve(int level, MPI_Comm comm, double SR, int nsmooth
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    if (ORDER == 1) {
-        printf("\nDJ-PCG on AOB wingbox case with %d level and %.4e SR\n", level, SR);
-        printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
-    } else {
-        printf("\nChebyshev-Polynomial-PCG on AOB wingbox case with %d level and %.4e SR\n", level, SR);
-        printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
-    }
+    // if (ORDER == 1) {
+    //     printf("\nDJ-PCG on uCRM wingbox case with %d level and %.4e SR\n", level, SR);
+    //     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
+    // } else {
+    //     printf("\nChebyshev-Polynomial-PCG on uCRM wingbox case with %d level and %.4e SR\n", level, SR);
+    //     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
+    // }
 
     // // print to VTK (permuting from solve to vis order)
     int *d_perm = pcg_solver->grid->d_perm;
@@ -208,7 +208,7 @@ void chebyshev_polynomial_solve(int level, MPI_Comm comm, double SR, int nsmooth
 
 
 template <typename T, class Assembler>
-void asw2_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.5, T force = 5.0e7) {
+void asw2_solve(MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.5, T force = 5.0e7) {
     /* damped jacobi / chebyshev_polynomial PCG solve */
 
     using Basis = typename Assembler::Basis;
@@ -237,9 +237,9 @@ void asw2_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.
 
     // create the assembler
     TACSMeshLoader mesh_loader{comm};
-    std::string fname = "../../examples/gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    std::string fname = "../../examples/ilu/uCRM/CRM_box_2nd.bdf";
     mesh_loader.scanBDFFile(fname.c_str());
-    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+    double E = 70e9, nu = 0.3, thick = 1.0 / SR;  // material & thick properties (start thicker first try)
     printf("making assembler for mesh '%s'\n", fname.c_str());
     auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
 
@@ -321,7 +321,7 @@ void asw2_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nElement-ASW2-PCG on AOB wingbox case with %d level and %.4e SR\n", level, SR);
+    // printf("\nElement-ASW2-PCG on uCRM wingbox case with %d level and %.4e SR\n", level, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // // print to VTK (permuting from solve to vis order)
@@ -338,7 +338,7 @@ void asw2_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.
 
 
 template <typename T, class Assembler>
-void asw3_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.5, T force = 5.0e7) {
+void asw3_solve(MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.5, T force = 5.0e7) {
     /* damped jacobi / chebyshev_polynomial PCG solve */
 
     using Basis = typename Assembler::Basis;
@@ -367,9 +367,9 @@ void asw3_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.
 
     // create the assembler
     TACSMeshLoader mesh_loader{comm};
-    std::string fname = "../../examples/gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    std::string fname = "../../examples/ilu/uCRM/CRM_box_2nd.bdf";
     mesh_loader.scanBDFFile(fname.c_str());
-    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+    double E = 70e9, nu = 0.3, thick = 1.0 / SR;  // material & thick properties (start thicker first try)
     printf("making assembler for mesh '%s'\n", fname.c_str());
     auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
 
@@ -451,7 +451,7 @@ void asw3_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nSupport-ASW3-PCG on AOB wingbox case with %d level and %.4e SR\n", level, SR);
+    // printf("\nSupport-ASW3-PCG on uCRM wingbox case with %d level and %.4e SR\n", level, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
 
@@ -468,7 +468,7 @@ void asw3_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.
 }
 
 template <typename T, class Assembler>
-void gsmc_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.5, T force = 5.0e7) {
+void gsmc_solve(MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.5, T force = 5.0e7) {
     /* gauss-seidel multicolor GMRES solve */
 
     using Basis = typename Assembler::Basis;
@@ -497,9 +497,9 @@ void gsmc_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.
 
     // create the assembler
     TACSMeshLoader mesh_loader{comm};
-    std::string fname = "../../examples/gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    std::string fname = "../../examples/ilu/uCRM/CRM_box_2nd.bdf";
     mesh_loader.scanBDFFile(fname.c_str());
-    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+    double E = 70e9, nu = 0.3, thick = 1.0 / SR;  // material & thick properties (start thicker first try)
     printf("making assembler for mesh '%s'\n", fname.c_str());
     auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
 
@@ -590,7 +590,7 @@ void gsmc_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nGSMC-PCG on AOB wingbox case with %d level and %.4e SR\n", level, SR);
+    // printf("\nGSMC-PCG on uCRM wingbox case with %d level and %.4e SR\n", level, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // // print to VTK (permuting from solve to vis order)
@@ -605,9 +605,8 @@ void gsmc_solve(int level, MPI_Comm comm, double SR, int nsmooth, T omegaMC = 1.
     }
 }
 
-
 template <typename T, class Assembler>
-void ilu_solve(int level, MPI_Comm comm, double SR, T qorder, int fill_level, int nsmooth, T omega = 1.5, T force = 5.0e7) {
+void ilu_solve(MPI_Comm comm, double SR, T qorder, int fill_level, int nsmooth, T omega = 1.5, T force = 5.0e7) {
     /* gauss-seidel multicolor GMRES solve */
 
     using Basis = typename Assembler::Basis;
@@ -621,7 +620,6 @@ void ilu_solve(int level, MPI_Comm comm, double SR, T qorder, int fill_level, in
     // for K-cycles
     // linear solver
     const bool MULTI_SMOOTH = true; // means it does smoothing action instead of just single solve now
-    // const bool MULTI_SMOOTH = false;
     using Precond = CusparseMGDirectLU<T, Assembler, MULTI_SMOOTH>;
     using PCG = PCGSolver<T, GRID>;
 
@@ -638,9 +636,9 @@ void ilu_solve(int level, MPI_Comm comm, double SR, T qorder, int fill_level, in
 
     // create the assembler
     TACSMeshLoader mesh_loader{comm};
-    std::string fname = "../../examples/gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    std::string fname = "../../examples/ilu/uCRM/CRM_box_2nd.bdf";
     mesh_loader.scanBDFFile(fname.c_str());
-    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+    double E = 70e9, nu = 0.3, thick = 1.0 / SR;  // material & thick properties (start thicker first try)
     printf("making assembler for mesh '%s'\n", fname.c_str());
     auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
 
@@ -687,6 +685,7 @@ void ilu_solve(int level, MPI_Comm comm, double SR, T qorder, int fill_level, in
     // build smoother and prolongations..
     // nsmooth steps per precond set in the solver
     T omegaMC = 1.0;
+    // int nsmooth = 1; // not used
     auto smoother = new Smoother(cublasHandle, cusparseHandle, assembler, kmat, h_color_rowp, omegaMC, false, nsmooth);
     int ELEM_MAX = 10; // num nearby elements of each fine node for nz pattern construction
     auto prolongation = new Prolongation(cusparseHandle, assembler, ELEM_MAX);
@@ -740,7 +739,7 @@ void ilu_solve(int level, MPI_Comm comm, double SR, T qorder, int fill_level, in
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nGSMC-PCG on AOB wingbox case with %d level and %.4e SR\n", level, SR);
+    // printf("\nGSMC-PCG on uCRM wingbox case with %d level and %.4e SR\n", level, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // // print to VTK (permuting from solve to vis order)
@@ -756,7 +755,7 @@ void ilu_solve(int level, MPI_Comm comm, double SR, T qorder, int fill_level, in
 }
 
 template <typename T, class Assembler>
-void solve_direct(int level, MPI_Comm comm, double SR, T force = 5.0e7) {
+void solve_direct(MPI_Comm comm, double SR, T force = 5.0e7) {
 
     /* direct NL solve used to check that how NL the problem is and how */
 
@@ -786,9 +785,9 @@ void solve_direct(int level, MPI_Comm comm, double SR, T force = 5.0e7) {
 
     // create the assembler
     TACSMeshLoader mesh_loader{comm};
-    std::string fname = "../../examples/gmg/3_aob_wing/meshes/aob_wing_L" + std::to_string(level) + ".bdf";
+    std::string fname = "../../examples/ilu/uCRM/CRM_box_2nd.bdf";
     mesh_loader.scanBDFFile(fname.c_str());
-    double E = 70e9, nu = 0.3, thick = 2.0 / SR;  // material & thick properties (start thicker first try)
+    double E = 70e9, nu = 0.3, thick = 1.0 / SR;  // material & thick properties (start thicker first try)
     printf("making assembler for mesh '%s'\n", fname.c_str());
     auto assembler = Assembler::createFromBDF(mesh_loader, Data(E, nu, thick));
 
@@ -886,7 +885,7 @@ void solve_direct(int level, MPI_Comm comm, double SR, T force = 5.0e7) {
 
     // compute log residual reduction per unit time
     T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nGSMC-PCG on AOB wingbox case with %d level and %.4e SR\n", level, SR);
+    // printf("\nGSMC-PCG on uCRM wingbox case with %d level and %.4e SR\n", level, SR);
     printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
 
     // // print to VTK (permuting from solve to vis order)
@@ -902,29 +901,29 @@ void solve_direct(int level, MPI_Comm comm, double SR, T force = 5.0e7) {
 }
 
 template <typename T, class Assembler>
-void gatekeeper_method(std::string solver_type, int level, MPI_Comm comm, double SR, int nsmooth, T omega, int ORDER, T qorder, T load_mag = 5.0e7) {
+void gatekeeper_method(std::string solver_type, MPI_Comm comm, double SR, int nsmooth, T omega, int ORDER, T qorder, T load_mag = 5.0e7) {
     if (solver_type == "direct") {
-        solve_direct<T, Assembler>(level, comm, SR, load_mag);
+        solve_direct<T, Assembler>(comm, SR, load_mag);
     } else if (solver_type == "gsmc") {
-        gsmc_solve<T, Assembler>(level, comm, SR, nsmooth, omega, load_mag);
+        gsmc_solve<T, Assembler>(comm, SR, nsmooth, omega, load_mag);
     } else if (solver_type == "jacobi") {
         int _ORDER = 1; // = damped jacobi
-        chebyshev_polynomial_solve<T, Assembler>(level, comm, SR, nsmooth, omega, load_mag, _ORDER);
+        chebyshev_polynomial_solve<T, Assembler>(comm, SR, nsmooth, omega, load_mag, _ORDER);
     } else if (solver_type == "chebyshev") {
         // int ORDER = 4; // = 4th order chebyshev
-        chebyshev_polynomial_solve<T, Assembler>(level, comm, SR, nsmooth, omega, load_mag, ORDER);
+        chebyshev_polynomial_solve<T, Assembler>(comm, SR, nsmooth, omega, load_mag, ORDER);
     } else if (solver_type == "asw2") {
-        asw2_solve<T, Assembler>(level, comm, SR, nsmooth, omega, load_mag);
+        asw2_solve<T, Assembler>(comm, SR, nsmooth, omega, load_mag);
     } else if (solver_type == "asw3") {
-        asw3_solve<T, Assembler>(level, comm, SR, nsmooth, omega, load_mag);
+        asw3_solve<T, Assembler>(comm, SR, nsmooth, omega, load_mag);
     } else if (solver_type == "ilu0") {
-        ilu_solve<T, Assembler>(level, comm, SR, qorder, 0, nsmooth, omega, load_mag);
+        ilu_solve<T, Assembler>(comm, SR, qorder, 0, nsmooth, omega, load_mag);
     } else if (solver_type == "ilu1") {
-        ilu_solve<T, Assembler>(level, comm, SR, qorder, 1, nsmooth, omega, load_mag);
+        ilu_solve<T, Assembler>(comm, SR, qorder, 1, nsmooth, omega, load_mag);
     } else if (solver_type == "ilu2") {
-        ilu_solve<T, Assembler>(level, comm, SR, qorder, 2, nsmooth, omega, load_mag);
+        ilu_solve<T, Assembler>(comm, SR, qorder, 2, nsmooth, omega, load_mag);
     } else if (solver_type == "ilu3") {
-        ilu_solve<T, Assembler>(level, comm, SR, qorder, 3, nsmooth, omega, load_mag);
+        ilu_solve<T, Assembler>(comm, SR, qorder, 2, nsmooth, omega, load_mag);
     }
 }
 
@@ -935,7 +934,7 @@ int main(int argc, char **argv) {
 
     // input ----------
     std::string solver_type = "asw2";
-    int level = 0; // level 1 wingbox
+    int level = 1; // level 1 wingbox
     double SR = 10.0; // default, the less slender it is, solves much faster
     double pressure = 8.0e6;
     double omega = 0.35; // default omega
@@ -1024,7 +1023,7 @@ int main(int argc, char **argv) {
     // have to use MITC4 shells cause this is before diff element types in paper
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-    gatekeeper_method<T, Assembler>(solver_type, level, comm, SR, nsmooth, omega, ORDER, qorder, pressure);
+    gatekeeper_method<T, Assembler>(solver_type, comm, SR, nsmooth, omega, ORDER, qorder, pressure);
     
 
     return 0;

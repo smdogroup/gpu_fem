@@ -56,7 +56,27 @@ class AlgebraicSubGridScaleElement:
         self.c4 = 1.0
 
         # edge SGS parameter δ = δ0 * h (dimensionless δ0)
-        self.delta0 = 0.1  # start modest; sweep 0.01..0.5 first
+        # NOTE : fix this later, currently is hacked
+
+        # self.delta0 = 0.1  # start modest; sweep 0.01..0.5 first
+        # self.delta0 = 1e-3
+        # self.delta0 = 1e-4
+        # self.delta0 = 2e-5
+        # self.delta0 = 1.25e-5
+        # self.delta0 = 1.225e-5
+        # self.delta0 = 1.21e-5
+        self.delta0 = 1.203e-5 # Rc = 1.927 mesh conv rate at thick = 1e-3
+        # self.delta0 = 1.202e-5 # Rc = 1.756 mesh conv rate at thick = 1e-3
+        # self.delta0 = 1.201e-5
+        # self.delta0 = 1.2e-5
+        # self.delta0 = 1.19e-5
+        # self.delta0 = 1.15e-5
+        # self.delta0 = 1.1e-5
+        # self.delta0 = 1e-5
+        # self.delta0 = 9e-6
+        # self.delta0 = 8e-6
+        # self.delta0 = 1e-6
+        # self.delta0 = 0.0
 
         # Q1 local edge -> local node ids (KEEP STANDARD ORDER for compatibility)
         # local nodes: 0:(ex,ey), 1:(ex+1,ey), 2:(ex+1,ey+1), 3:(ex,ey+1)
@@ -350,6 +370,9 @@ class AlgebraicSubGridScaleElement:
             c_th  = (delta * k1) / 2.0
             c_div = (delta * k2) / 2.0
             c_w   = (delta / (2.0 * eps))
+
+            # c_w *= 1e-1
+            c_w = 0.0
 
             # assemble with MINUS sign (important)
             Kedge6 -= c_th  * (J_th.T  @ J_th)  * w

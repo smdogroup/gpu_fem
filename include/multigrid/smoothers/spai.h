@@ -13,7 +13,7 @@ class SPAI : public BaseSolver {
    public:
     // Constructor: fill specifies how many fill iterations to perform.
     SPAI(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_, Assembler &assembler_,
-         BsrMat<DeviceVec<T>> kmat_, int fill = 3, int optim = 2)
+         BsrMat<DeviceVec<T>> kmat_, int fill = 3, int optim_ = 2)
         : cublasHandle(cublasHandle_),
           cusparseHandle(cusparseHandle_),
           assembler(assembler_),
@@ -29,6 +29,7 @@ class SPAI : public BaseSolver {
         d_kmat_rowp = d_kmat_bsr_data.rowp;
         d_kmat_cols = d_kmat_bsr_data.cols;
         kmat_nnzb = d_kmat_bsr_data.nnzb;
+        optim = optim_;
 
         // kmat_nnzb, d_kmat_rowp, d_kmat_cols, etc. are assumed to be set up already.
         printf("1: compute power fillin SPAI(%d)\n", fill);
@@ -37,15 +38,15 @@ class SPAI : public BaseSolver {
         _compute_initial_preconditioner();
         printf("3: compute temporary matrices\n");
         _create_temp_matrices();
+    }
 
+    void factor() {
         // then do the SPAI optimization with the new matrix values
-        printf("4: perform SPAI optimization\n");
+        printf("perform SPAI optimization\n");
         _spai_optimization(optim);
     }
 
-    void update_after_assembly(DeviceVec<T> &vars) {
-        // TODO
-    }
+    void update_after_assembly(DeviceVec<T> &vars) { factor(); }
     void set_abs_tol(T atol) {}
     void set_rel_tol(T atol) {}
     int get_num_iterations() { return 0; }
@@ -471,6 +472,7 @@ class SPAI : public BaseSolver {
     cublasHandle_t &cublasHandle;
     cusparseHandle_t &cusparseHandle;
     cusparseMatDescr_t descr_M = 0;
+    int optim;  // num SPAI optimization steps
 
     // TACS assembler
     Assembler assembler;

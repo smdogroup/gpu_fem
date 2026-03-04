@@ -180,6 +180,9 @@ void multigrid_plate_solve(int nxe, double SR, int nsmooth, int ninnercyc, T ome
     if (is_kcycle) {
         int n_krylov = 500;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
+        kmg->coarse_solver->factor();
+    } else {
+        mg->coarse_solver->factor();
     }
 
     CHECK_CUDA(cudaDeviceSynchronize());
@@ -297,9 +300,10 @@ int main(int argc, char **argv) {
     double omega = 0.3; // smoother omega for Chebyshev-jacobi
 
     int nsmooth = 2; // typically faster right now
-    int ninnercyc = 2; // inner V-cycles to precond K-cycle
+    int ninnercyc = 1; // inner V-cycles to precond K-cycle
     std::string cycle_type = "K"; // "V", "F", "W", "K"
-    std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
+    // std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
+    std::string elem_type = "MITC4";
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {

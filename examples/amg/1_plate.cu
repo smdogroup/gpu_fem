@@ -146,6 +146,11 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omegas, T omega
         c_amg->build_coarse_system(fake_c_assembler, c_smoother);
         printf("\tMAIN: done building coarse system\n");
 
+        if (!c_amg->is_coarse_mg) {
+            // factor coarse direct problem
+            c_amg->coarse_direct->factor();
+        }
+
         // then set current amg (c_amg) to coarser problem
         c_amg = c_amg->coarse_mg;
         first = false;
@@ -167,7 +172,7 @@ void amg_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omegas, T omega
     // only use GMRES if SR > 100
     const int N_SUBSPACE = 100;
     using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
-    int MAX_ITER = N_SUBSPACE;
+    int MAX_ITER = 2000;
     auto pc = fine_amg;
     auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
     // auto linear_solver = new PCG(cublasHandle, cusparseHandle, grid, pc, options, level);
@@ -309,7 +314,7 @@ void solve_direct(int nxe, double SR) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
     // run factor again so that we give fair comparison
-    pc->factor_matrix();
+    pc->factor();
     
 
     // get initial residual

@@ -325,7 +325,7 @@ void solve_direct(int nxe, double SR) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
     // run factor again so that we give fair comparison
-    pc->factor_matrix();
+    pc->factor();
     
 
     // get initial residual

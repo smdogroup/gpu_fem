@@ -1,6 +1,23 @@
 # Devel tasks
 
 ## Current Task
+
+* implement this BDDC preconditioner for Naghdi shell, it claims mesh and thickness-indepence!
+- [ ] [BDDC preconditioners for Naghdi shell problems and MITC9 elements](https://www.sciencedirect.com/science/article/pii/S004579491200082X)
+
+- [ ] try this new subdivison surface shell element [SUBDIVISION SURFACES: A NEW PARADIGM FOR THIN-SHELL FINITE-ELEMENT ANALYSIS](https://multires.caltech.edu/pubs/thinshell.pdf)
+- [ ] subdivision surfaces to model thin shells with multigrid! [https://www.cs.cmu.edu/~bloodflow/publications/sm02-107-green.pdf](https://www.cs.cmu.edu/~bloodflow/publications/sm02-107-green.pdf)
+* get more refs from the 
+- [ ] [Domain decomposition: parallel multilevel methods for elliptic partial differential equationsAugust 1996](https://dl.acm.org/doi/10.5555/238150)
+- [ ]  [A review of algebraic multigrid](https://www.sciencedirect.com/science/article/pii/S0377042700005161)
+
+* spectrally equivalent operators
+- [ ] [Preconditioning discrete approximations of the {Reissner-Mindlin} plate model](https://www.numdam.org/item/M2AN_1997__31_4_517_0/)
+- [ ] [Mesh Independent Superlinear PCG Rates Via Compact-Equivalent Operators](https://epubs.siam.org/doi/10.1137/06066391X)
+- [ ] [On the theory of equivalent operators and application to the numerical solution of uniformly elliptic partial differential equations](https://www.sciencedirect.com/science/article/pii/019688589090007L)
+
+- [ ] do AMG methods and put in thesis..
+
 - [ ] try ASGS on plate and/or shell case some more
    - [ ] add edge stabilization terms to plate (+ maybe beam)
    - [ ] read + annotate ASGS plate element should mesh converge, make sure I've implemented it correctly
@@ -26,11 +43,24 @@ B and F projection methods
 - [ ] [An efficient blended mixed B-spline formulation for removing membrane locking in plane curved Kirchhoff rod](https://www.sciencedirect.com/science/article/pii/S0045782517305467)
 - [ ] [Efficient isogeometric NURBS-based solid-shell elements: Mixed formulation and ¯B-method](https://www.sciencedirect.com/science/article/pii/S0045782513002053)
 
+
+* prob not do Falk-Tu elements
+- [ ] try Falk-tu elements and read this thesis (very similar to my work) [Domain Decomposition Methods for Reissner-Mindlin
+Plates discretized with the Falk-Tu Elements](https://cs.nyu.edu/media/publications/TR2011-937.pdf?utm_source=chatgpt.com)
+   * maybe not but do cite it => they use just for plate elements here, not extensible to shells I don't think
+   * also try overlapping schwarz methods using Schur complements?
+- [ ] see also this paper cited by the thesis [Robust BDDC preconditioners for Reissner-Mindlin plate bending problems and
+MITC element]()
+- [ ] [A Balancing Domain Decomposition by Constraints Deluxe Method for Reissner--Mindlin Plates with Falk--Tu Elements](https://epubs.siam.org/doi/10.1137/130940669)
+- [ ] [Isogeometric BDDC preconditioners with deluxe scaling](https://epubs.siam.org/doi/10.1137/130917399)
+- [ ] [Mixed Finite Elements, Compatibility Conditions, and Applications] book 2006
+- [ ] [Error analysis of mixed-interpolated elements for Reissner–Mindlin plate](https://www.researchgate.net/publication/246087694_Error_analysis_of_mixed-interpolated_elements_for_Reissner-Mindlin_plate)
+
+
 ## Thickness-Ind Multigrid
 
 * NOTE : line search needs to be very small (1e-3 updates for wing to get best performance) => smoother doing heavy work, multigrid barely anything
 
-- [ ] try this new subdivison surface shell element [SUBDIVISION SURFACES: A NEW PARADIGM FOR THIN-SHELL FINITE-ELEMENT ANALYSIS](https://multires.caltech.edu/pubs/thinshell.pdf)
 
 New plate elements (that may help shell)
 - [ ] implementing ASGS (algebraic sub-grid scale) for plate elements
@@ -148,6 +178,8 @@ NEW SHELL ELEMENTS
 =============================================
 ## Finished Tasks
 
+
+- [x] reading this right now as it proves membrane locking [Fourier analysis of membrane locking and unlocking](https://www.sciencedirect.com/science/article/pii/S0045782523004772)
 - [x] add 3x3 node-support based smoother to GPU using Cublas and node support sparsity from kmat (so general for cylinder / wingbox)
    - [x] see if better performance on wing case (better smoother) => not by much and way more memory
    - [x] see if better perf and more stable conv for cylinder => nope

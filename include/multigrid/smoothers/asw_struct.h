@@ -69,15 +69,20 @@ class StructuredAdditiveSchwarzSmoother : public BaseSolver {
         // Compute the Schwarz factorization during construction.
         // printf("3 - initCuda\n");
         _initCuda();
+        // // printf("4 - copy matrix values to batched memory\n");
+        // _copyMatrixValuesToBatched();
+        // // printf("5 - compute the local Schwarz matrix inverses\n");
+        // _schwarzFactorization();
+    }
+
+    void factor() {
         // printf("4 - copy matrix values to batched memory\n");
         _copyMatrixValuesToBatched();
         // printf("5 - compute the local Schwarz matrix inverses\n");
         _schwarzFactorization();
     }
 
-    void update_after_assembly(DeviceVec<T> &vars) {
-        // TODO
-    }
+    void update_after_assembly(DeviceVec<T> &vars) { factor(); }
     void set_abs_tol(T atol) {}
     void set_rel_tol(T atol) {}
     int get_num_iterations() { return 0; }
@@ -106,7 +111,8 @@ class StructuredAdditiveSchwarzSmoother : public BaseSolver {
         return false;  // fail = False
     }
 
-    void smoothDefect(DeviceVec<T> d_defect, DeviceVec<T> d_soln) {
+    void smoothDefect(DeviceVec<T> d_defect, DeviceVec<T> d_soln, int _n_iters = -1,
+                      bool print = false, int print_freq = 0) {
         const int n_rhs_blocks = batchSize * size2;
         const int n_rhs_vals = n_rhs_blocks * block_dim;
 

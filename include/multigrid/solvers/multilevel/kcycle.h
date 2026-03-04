@@ -49,6 +49,7 @@ class MultilevelKcycleSolver {
 
     int get_num_iterations() { return outer_solver->get_num_iterations(); }
     int get_num_lin_solves() { return num_lin_solves; }
+    void factor() {}
 
     bool solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = true) {
         num_lin_solves++;

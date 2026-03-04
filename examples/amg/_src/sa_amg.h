@@ -86,6 +86,7 @@ class SmoothAggregationAMG : public BaseSolver {
     void update_after_assembly(DeviceVec<T> &vars) {
         // TODO
     }
+    void factor() {}
     void set_abs_tol(T atol) {}
     void set_rel_tol(T atol) {}
     int get_num_iterations() { return 0; }

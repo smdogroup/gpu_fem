@@ -150,9 +150,11 @@ void spai_solve(int nxe, double SR, int fill_level, int optim, T pressure = 5.0e
     // can maybe use BiCGStab if need be..
     // only use GMRES if SR > 100
     // const int N_SUBSPACE = 200; // 100
-    const int N_SUBSPACE = 800;
+    // const int N_SUBSPACE = 300;
+    const int N_SUBSPACE = 500;
     using GMRES = GMRESSolver<T, GRID, N_SUBSPACE>;
-    int MAX_ITER = N_SUBSPACE;
+    // int MAX_ITER = N_SUBSPACE;
+    int MAX_ITER = 4000;
     auto linear_solver = new GMRES(cublasHandle, cusparseHandle, grid, pc, options, MAX_ITER);
 
     // out settings
@@ -166,6 +168,8 @@ void spai_solve(int nxe, double SR, int fill_level, int optim, T pressure = 5.0e
     // run the linear solver
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
+
+    smoother->factor(); // spai optimization
 
     // get initial residual
     T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
@@ -317,7 +321,7 @@ void solve_direct(int nxe, double SR, T pressure = 5.0e7) {
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start_solve = std::chrono::high_resolution_clock::now();
 
-    pc->factor_matrix(); // run factor again so fair comparison
+    pc->factor(); // run factor again so fair comparison
 
     // get initial residual
     T init_resid = linear_solver->getResidualNorm(grid->d_defect, lin_soln);
@@ -371,7 +375,7 @@ int main(int argc, char **argv) {
     double pressure = 8.0e6;
     double omega = 0.35; // default omega
     int fill = 1; // for SPAI pattern (memory fill level)
-    int optim = 10; // 5, number of SPAI opt steps 
+    int optim = 15; // 5, number of SPAI opt steps 
 
     // NOTE : for better convergence, may need higher fill level (but then needs to be coarser problem to work well)
     // sometimes fill = 0 is better also..

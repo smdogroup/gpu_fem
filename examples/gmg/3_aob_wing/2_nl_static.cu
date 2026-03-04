@@ -624,8 +624,8 @@ int main(int argc, char **argv) {
     std::string cycle_type = "K"; // "V", "F", "W", "K"
 
     // probably need more locking / multigrid friendly element than either of these (CFI4 is locking, while MITC4 has bad GMG performance)
-    std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
-    // std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
+    // std::string elem_type = "CFI4"; // 'MITC4', 'CFI4', 'CFI9'
+    std::string elem_type = "MITC4"; // 'MITC4', 'CFI4', 'CFI9'
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
