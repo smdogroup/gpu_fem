@@ -84,6 +84,7 @@ class UnstructuredQuadElementAdditiveSchwarzSmoother : public BaseSolver {
     int get_num_iterations() { return 0; }
     void set_print(bool print) {}
     void free() {}  // TBD on this one
+    void set_cycle_type(std::string cycle_) {}
 
     T precond_complexity() {
         // get [nnzb(precond) + nnzb(A)] / nnzb(A)

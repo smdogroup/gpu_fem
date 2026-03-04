@@ -142,6 +142,10 @@ for csv_file in ["out/cylinder-3060Ti-times.csv", "out/cylinder-A100-times.csv"]
         x = sub["t/R"].to_numpy()
         y = sub["runtime"].to_numpy()
 
+        # I had too high an iteration cap (making plot show super high runtimes)
+        # if I had iteration budget, these would not be shown, so capping them from plot (explain in text)
+        y[y >= 2.0] = np.nan
+
         ax.plot(
             x, y,
             "o-" if name != "GSMC" else "o--",
@@ -154,8 +158,9 @@ for csv_file in ["out/cylinder-3060Ti-times.csv", "out/cylinder-A100-times.csv"]
             linestyle=linestyle.get(name, "-"),
         )
 
-        callouts(x, y, plot_colors.get(name, "k"), left=True,  y_mult=1.04)
-        callouts(x, y, plot_colors.get(name, "k"), left=False, y_mult=1.04)
+        if y[0] < 2.0:
+            callouts(x, y, plot_colors.get(name, "k"), left=True,  y_mult=1.04)
+        # callouts(x, y, plot_colors.get(name, "k"), left=False, y_mult=1.04)
 
     # ==========================
     # Axes / labels
@@ -166,12 +171,12 @@ for csv_file in ["out/cylinder-3060Ti-times.csv", "out/cylinder-A100-times.csv"]
 
     ax.set_xlabel("Normalized Thickness, t/R")
     ax.set_xscale("log")
-    ax.set_ylabel("Linear runtime (s)")
+    ax.set_ylabel("Runtime (s)")
 
-    plt.yscale('log')
+    # plt.yscale('log')
 
-    if y_log:
-        ax.set_yscale("log")
+    # if y_log:
+    #     ax.set_yscale("log")
 
     ax.grid(True, which="major", ls="--", alpha=0.5)
     # ax.set_xmargin(0.025)
@@ -181,12 +186,14 @@ for csv_file in ["out/cylinder-3060Ti-times.csv", "out/cylinder-A100-times.csv"]
     xticks = ax.get_xticks()
     ax.set_xticklabels([f"$10^{{{int(np.log10(x))}}}$" if x > 0 else "" for x in xticks])
 
-    if "3060Ti" in csv_file:
-        ax.set_yticks([0.1, 1.0, 2.0])
-        ax.set_yticklabels([r"$10^{-1}$", r"$10^{0}$", "2.0"])
-    else:
-        ax.set_yticks([5e-2, 1e-1, 1e0, 2.0])
-        ax.set_yticklabels(["5e-2", r"$10^{-1}$", r"$10^{0}$", "2.0"])
+    # if "3060Ti" in csv_file:
+    #     ax.set_yticks([0.1, 1.0, 2.0])
+    #     ax.set_yticklabels([r"$10^{-1}$", r"$10^{0}$", "2.0"])
+    # else:
+    #     ax.set_yticks([5e-2, 1e-1, 1e0, 2.0])
+    #     ax.set_yticklabels(["5e-2", r"$10^{-1}$", r"$10^{0}$", "2.0"])
+
+    ax.set_ylim(bottom=0.0, top=2.0)
 
     plt.tight_layout()
 
@@ -377,7 +384,7 @@ for csv_file in ["out/cylinder-3060Ti-times.csv", "out/cylinder-A100-times.csv"]
 
     ax.set_xlabel("NDOF")
     ax.set_xscale("log")
-    ax.set_ylabel("Linear runtime (s)")
+    ax.set_ylabel("Runtime (s)")
 
     plt.yscale('log')
 

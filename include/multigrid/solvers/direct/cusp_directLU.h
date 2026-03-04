@@ -121,6 +121,7 @@ class CusparseMGDirectLU : public BaseSolver {
     void set_rel_tol(T rtol) {}
     void set_abs_tol(T atol) {}
     int get_num_iterations() { return 1; }
+    void set_cycle_type(std::string cycle_) {}
 
     void assemble_matrix(DeviceVec<T> &vars) {
         assembler.set_variables(vars);

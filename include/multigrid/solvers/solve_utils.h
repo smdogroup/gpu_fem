@@ -13,6 +13,7 @@ class BaseSolver {
     virtual int get_num_iterations() = 0;
     virtual void set_print(bool print) = 0;
     virtual void free() = 0;
+    virtual void set_cycle_type(std::string cycle_) = 0;
 };
 
 class SolverOptions {

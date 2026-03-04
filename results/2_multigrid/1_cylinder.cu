@@ -53,13 +53,14 @@ void to_lowercase(char *str) {
 }
 
 template <typename T, class Smoother, class Assembler>
-void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDER) {
+void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDER, std::string cycle_type) {
     // geometric multigrid method here..
     // need to make a number of grids..
 
     using Basis = typename Assembler::Basis;
     using Physics = typename Assembler::Phys;
     const SCALER scaler  = LINE_SEARCH;
+    // const SCALER scaler = NONE;
     using Prolongation = StructuredProlongation<Assembler, CYLINDER>;
     using GRID = SingleGrid<Assembler, Prolongation, Smoother, scaler>;
     using CoarseSolver = CusparseMGDirectLU<T, Assembler>;
@@ -70,10 +71,20 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     using KrylovSolve = PCGSolver<T, GRID>;
     using TwoLevelSolve = MultigridTwoLevelSolver<GRID>;
     using KMG = MultilevelKcycleSolver<GRID, CoarseSolver, TwoLevelSolve, KrylovSolve>;
+    using MG = GeometricMultigridSolver<GRID, CoarseSolver>;
 
     auto start0 = std::chrono::high_resolution_clock::now();
 
-    KMG *kmg = new KMG();
+    MG *mg;
+    KMG *kmg;
+
+    // FSK is symmetric F-cycle to PCG
+    bool is_kcycle = cycle_type == "VK" || cycle_type == "WK" || cycle_type == "FK" || cycle_type == "FSK";
+    if (is_kcycle) {
+        kmg = new KMG();
+    } else {
+        mg = new MG();
+    }
 
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     T omegaLS_min = 1e-2, omegaLS_max = 4.0;
@@ -132,7 +143,8 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
 
         // assemble the kmat
         auto start0 = std::chrono::high_resolution_clock::now();
-        assembler.add_jacobian(res, kmat);
+        // assembler.add_jacobian(res, kmat);
+        assembler.add_jacobian_fast(kmat);
         // assembler.apply_bcs(res);
         assembler.apply_bcs(kmat);
         CHECK_CUDA(cudaDeviceSynchronize());
@@ -167,11 +179,20 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
 
         auto prolongation = new Prolongation(assembler);
         auto grid = GRID(assembler, prolongation, smoother, kmat, loads, cublasHandle, cusparseHandle, omegaLS_min, omegaLS_max);
-        kmg->grids.push_back(grid);
+        if (is_kcycle) {
+            kmg->grids.push_back(grid);
+        } else {
+            mg->grids.push_back(grid);
+            if (full_LU) mg->coarse_solver = new CoarseSolver(cublasHandle, cusparseHandle, assembler, kmat);
+        }
     }
 
     // register the coarse assemblers to the prolongations..
-    kmg->template init_prolongations<Basis>();
+    if (is_kcycle) {
+        kmg->template init_prolongations<Basis>();
+    } else {
+        mg->template init_prolongations<Basis>();
+    }
 
     auto end0 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> startup_time = end0 - start0;
@@ -180,51 +201,85 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     bool print = true;
     // bool print = false;
     T atol = 1e-6, rtol = 1e-6;
-    bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
+    bool double_smooth = false;
+    // bool double_smooth = true; // twice as many smoothing steps at lower levels (similar cost, better conv?)
 
     int n_cycles = 500; // max # cycles
     int print_freq = 3;
     int n_krylov = 500;
-    kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
+    if (is_kcycle) {
+        kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
+        if (cycle_type == "VK") {
+            // V-cycle precond CG
+            kmg->set_cycle_type("V");
+        } else if (cycle_type == "WK") {
+            // W-cycle precond CG
+            kmg->set_cycle_type("W");
+        } else if (cycle_type == "FK") {
+            // F-cycle precond CG
+            kmg->set_cycle_type("F");
+        } else if (cycle_type == "FSK") {
+            // F-cycle precond CG
+            kmg->set_cycle_type("Fsym");
+        }
+    }
 
     // create solution and right hand side vecs
-    int N_fine = kmg->grids[0].N;
-    auto rhs = DeviceVec<T>(N_fine);
-    auto soln = DeviceVec<T>(N_fine);
-    kmg->grids[0].d_defect.copyValuesTo(rhs);
+    // int N_fine = kmg->grids[0].N;
+    // auto rhs = DeviceVec<T>(N_fine);
+    // auto soln = DeviceVec<T>(N_fine);
+    // kmg->grids[0].d_defect.copyValuesTo(rhs);
 
 
     // get initial residual
-    KrylovSolve* outer_solver = static_cast<KrylovSolve*>(kmg->outer_solver); 
-    T init_resid = outer_solver->getResidualNorm(rhs, soln);
+    // KrylovSolve* outer_solver = static_cast<KrylovSolve*>(kmg->outer_solver); 
+    // T init_resid = outer_solver->getResidualNorm(rhs, soln);
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto start1 = std::chrono::high_resolution_clock::now();
 
+    if (is_kcycle) {
+        kmg->coarse_solver->factor();
+    } else {
+        mg->coarse_solver->factor();
+    }
+
     // fastest is K-cycle usually
-    kmg->coarse_solver->factor();
-    kmg->solve(rhs, soln);
+    if (cycle_type == "V") {
+        mg->vcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); //(good option)
+    } else if (cycle_type == "W") {
+        mg->wcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol);
+    } else if (cycle_type == "F") {
+        mg->fcycle_solve(0, pre_smooth, post_smooth, n_cycles, print, atol, rtol, double_smooth, print_freq); // also decent
+    } else if (is_kcycle) {
+        kmg->solve(); // best
+    }
+
+    // fastest is K-cycle usually
+    // kmg->solve(rhs, soln);
 
     // get final residual
-    T final_resid = outer_solver->getResidualNorm(rhs, soln);
+    // T final_resid = outer_solver->getResidualNorm(rhs, soln);
 
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end1 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> solve_time = end1 - start1;
-    int ndof = kmg->grids[0].N;
+    int ndof = is_kcycle ? kmg->grids[0].N : mg->grids[0].N;
     double total = startup_time.count() + solve_time.count();
-    double mem_MB = kmg->get_memory_usage_mb();
-    printf("cylinder GMG solve, ndof %d : startup time %.2e, solve time %.2e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
+    double mem_MB = is_kcycle ? kmg->get_memory_usage_mb() : mg->get_memory_usage_mb();
+    printf("cylinder GMG solve, ndof %d : startup time %.2e, solve time %.3e, total %.2e, with mem(MB) %.2e\n", ndof, startup_time.count(), solve_time.count(), total, mem_MB);
 
-    // compute log residual reduction per unit time
-    T log_red_rate = (log(init_resid) - log(final_resid)) / log(10.0) / solve_time.count();
-    printf("\nGMG-PCG on cylinder case with %d nxe and %.4e SR\n", nxe, SR);
-    printf("\tinit resid %.4e => final resid %.4e in %.2e sec, log10(reduction)/sec = %.6e\n", init_resid, final_resid, solve_time.count(), log_red_rate);
-
-    // print some of the data of host residual
-    int *d_perm = kmg->grids[0].d_perm;
-    auto h_soln = soln.createPermuteVec(6, d_perm).createHostVec();
-    printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/cylinder_mg_lin.vtk");
+    if (is_kcycle) {
+        // print some of the data of host residual
+        int *d_perm = kmg->grids[0].d_perm;
+        auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
+        printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/cylinder_mg.vtk");
+    } else {
+        // print some of the data of host residual
+        int *d_perm = mg->grids[0].d_perm;
+        auto h_soln = mg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
+        printToVTK<Assembler,HostVec<T>>(mg->grids[0].assembler, h_soln, "out/cylinder_mg.vtk");
+    }
 }
 
 template <typename T, class Assembler>
@@ -381,9 +436,9 @@ void solve_direct(int nxe, double SR) {
 }
 
 template <typename T, class Smoother, class Assembler>
-void gatekeeper_method(std::string smoother_type, int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDER) {
+void gatekeeper_method(std::string smoother_type, int nxe, double SR, int nsmooth, int ninnercyc, T omega, int ORDER, std::string cycle_type) {
     if (smoother_type != "direct") {
-        multigrid_solve<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);
+        multigrid_solve<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER, cycle_type);
     } else {
         solve_direct<T, Assembler>(nxe, SR);
     }
@@ -391,17 +446,18 @@ void gatekeeper_method(std::string smoother_type, int nxe, double SR, int nsmoot
 
 int main(int argc, char **argv) {
     // input ----------
-    int nxe = 256; // default value
+    int nxe = 128; // default value
     double SR = 50.0; // default
     int n_vcycles = 50;
     double omega = 0.2;
     int ORDER = 8; // for chebyshev
 
-    int nsmooth = 1; // typically faster right now
+    int nsmooth = 2; // typically faster right now
     int ninnercyc = 1; // inner V-cycles to precond K-cycle
 
     // chebyshev, jacobi, gsmc, direct 
-    std::string smoother_type = "chebyshev";
+    std::string smoother_type = "asw";
+    std::string cycle_type = "K"; // K-cycle (other options, 'V', 'W', 'F')
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -432,6 +488,13 @@ int main(int argc, char **argv) {
         } else if (strcmp(arg, "--smoother") == 0) {
             if (i + 1 < argc) {
                 smoother_type = argv[++i];
+            } else {
+                std::cerr << "Missing value for --smoother\n";
+                return 1;
+            }
+        } else if (strcmp(arg, "--cycle") == 0) {
+            if (i + 1 < argc) {
+                cycle_type = argv[++i];
             } else {
                 std::cerr << "Missing value for --smoother\n";
                 return 1;
@@ -480,13 +543,13 @@ int main(int argc, char **argv) {
     printf("cylinder mesh with MITC4 elements, nxe %d and SR %.2e\n------------\n", nxe, SR);
     if (smoother_type == "chebyshev" || smoother_type == "jacobi") {
         using Smoother = ChebyshevPolynomialSmoother<Assembler, false>;
-        gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);
+        gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER, cycle_type);
     }  else if (smoother_type == "gsmc" || smoother_type == "direct") {
         using Smoother = MulticolorGSSmoother_V1<Assembler>; // still calls direct later if direct
-        gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);
+        gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER, cycle_type);
     } else if (smoother_type == "asw") {
         using Smoother = StructuredAdditiveSchwarzSmoother<T, Assembler, S_CYLINDER>; // still calls direct later if direct
-        gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER);
+        gatekeeper_method<T, Smoother, Assembler>(smoother_type, nxe, SR, nsmooth, ninnercyc, omega, ORDER, cycle_type);
     }
 
     return 0;

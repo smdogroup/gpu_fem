@@ -69,6 +69,7 @@ class PCGSolver : public BaseSolver {
     void set_print(bool print) { options.print = print; }
     void set_abs_tol(T atol) { options.atol = atol; }
     void set_rel_tol(T rtol) { options.rtol = rtol; }
+    void set_cycle_type(std::string cycle_) { pc->set_cycle_type(cycle_); }
 
     T getResidualNorm(DeviceVec<T> rhs_in, DeviceVec<T> soln_in) {
         // compute r_0 = b - Ax

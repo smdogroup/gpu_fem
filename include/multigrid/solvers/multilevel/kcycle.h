@@ -91,6 +91,18 @@ class MultilevelKcycleSolver {
 
     void set_abs_tol(T rtol) { outer_solver->set_abs_tol(rtol); }
     void set_rel_tol(T rtol) { outer_solver->set_rel_tol(rtol); }
+    void set_cycle_type(const std::string &cycle) {
+        // set on the actual MG subspace preconditioner (the one that uses V/W/F)
+        if (outer_solver) outer_solver->set_cycle_type(cycle);
+
+        // set on everything else you happen to store (fine if redundant)
+        for (BaseSolver *s : solvers) {
+            if (s) s->set_cycle_type(cycle);
+        }
+
+        // // optional: also set on coarse_solver if it exists and might be another MG object
+        // if (coarse_solver) coarse_solver->set_cycle_type(cycle);
+    }
 
     void set_design_variables(DeviceVec<T> dvs) {
         for (int ilevel = 0; ilevel < getNumLevels(); ilevel++) {
@@ -141,15 +153,18 @@ class MultilevelKcycleSolver {
                                                  grids[ilevel].assembler, grids[ilevel].Kmat);
                 solvers.push_back(coarse_solver);
             } else {
+                bool is_coarse_direct =
+                    ilevel == nlevels - 2;  // means level below is the coarse direct solver
                 if (just_outer_krylov) {
                     // first make the subspace solver
                     auto subspace_options =
                         ilevel == 0 ? outer_subspace_options : inner_subspace_options;
                     auto copy_options = SolverOptions(subspace_options);
                     if (double_smooth) copy_options.nsmooth *= (1 << ilevel);
-                    BaseSolver *subspace_solver =
-                        new SubspaceSolver(cublasHandle, cusparseHandle, &grids[ilevel],
-                                           &grids[ilevel + 1], solvers[isolver - 1], copy_options);
+
+                    BaseSolver *subspace_solver = new SubspaceSolver(
+                        cublasHandle, cusparseHandle, &grids[ilevel], &grids[ilevel + 1],
+                        solvers[isolver - 1], copy_options, is_coarse_direct);
                     if (ilevel != 0) solvers.push_back(subspace_solver);
 
                     // then make the krylov solver at this level with the subspace solver as
@@ -171,9 +186,9 @@ class MultilevelKcycleSolver {
                         ilevel == 0 ? outer_subspace_options : inner_subspace_options;
                     auto copy_options = SolverOptions(subspace_options);
                     if (double_smooth) copy_options.nsmooth *= (1 << ilevel);
-                    BaseSolver *subspace_solver =
-                        new SubspaceSolver(cublasHandle, cusparseHandle, &grids[ilevel],
-                                           &grids[ilevel + 1], solvers[isolver - 1], copy_options);
+                    BaseSolver *subspace_solver = new SubspaceSolver(
+                        cublasHandle, cusparseHandle, &grids[ilevel], &grids[ilevel + 1],
+                        solvers[isolver - 1], copy_options, is_coarse_direct);
 
                     // then make the krylov solver at this level with the subspace solver as
                     // preconditioner
