@@ -32,6 +32,7 @@
 12. [ ] [A Neumann--Neumann Domain Decomposition Algorithm for Solving Plate and Shell Problems](https://epubs.siam.org/doi/10.1137/S0036142995291019)
 13. [ ] [Balancing domain decomposition method for large-scale analysis of an assembly structure having millions of multipoint constraints](https://www.sciencedirect.com/science/article/pii/S0045782522008027)
 14. [ ] BDD for plates [Balancing Domain Decomposition for Plates](https://www.bing.com/ck/a?!&&p=6353b886f484c62d61d41a929dbaaee579ab842d7a670e7024a82b7ea43f97b4JmltdHM9MTc3MjY2ODgwMA&ptn=3&ver=2&hsh=4&fclid=23acff18-8a49-65cd-21b2-ebae8ba76408&psq=Balancing+domain+decomposition+for+plates&u=a1aHR0cHM6Ly9kbC5hY20ub3JnL2RvaS9ib29rLzEwLjU1NTUvODY1NzA0)
+15. [ ] BDDC for elasticity [A Substructuring Preconditioner for Nearly Incompressible Elasticity Prob-lems]()
 
 ## Next Tasks
 
