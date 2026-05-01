@@ -6,7 +6,7 @@ A scalable **GPU-accelerated finite element analysis (FEA)** framework for beams
 
 This project is a **GPU-focused development of TACS (Toolkit for the Analysis of Composite Structures)**, extending it to leverage modern GPU architectures for large-scale structural simulations.
 
-See the [TACS github repo](https://github.com/smdogroup/tacs) for the original CPU-parallel implementations.
+See the [TACS github repo](https://github.com/smdogroup/tacs) for the original CPU-parallel implementations. This repo **GPU_FEM** is a temporary code that will be merged back into **TACS**.
 
 ---
 
