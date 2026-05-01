@@ -28,11 +28,11 @@ See the [TACS github repo](https://github.com/smdogroup/tacs) for the original C
 
 Compared 14 state of the art linear solvers for GPU-accelerated runtime on thick and thin Reissner-Mindlin shells. Many solvers break down in thin shells and are not as practical for high DOF problems. The following are some key observations.
 
-- **Additive Schwarz (ASW)** and **Balancing Domain Decomposition by Constraints (BDDC)** methods perform well for thin shells due to improved resolution of node-to-node locking defects.
+- **Additive Schwarz (ASW)** and **Balancing Domain Decomposition by Constraints (BDDC)** methods perform well for thin shells as subdomains with multiple nodes can better handle the ill-conditioning of Reissner-Mindlin shells which comes from node-to-node locking strains.
 
 - Standard multigrid prolongation operators exhibit **zero-strain subspace mismatch**, degrading thin-shell performance.
 
-- **GMG-ASW remains a strong smoother**, especially outside the extreme thin-shell regime.
+- **GMG-ASW is a strong multigrid solver** even for thin shells due to its subdomain ASW smoother, and it is also by far the best thick shell solver. Some work was done with mixed IGA to construct fully **thickness-independent multigrid** methods, but this has not reached general curved shells yet and may have its own limitations still.
 
 - A new **BDDC wraparound subdomain strategy** is introduced for wingbox structures, improving robustness and scalability.
 
