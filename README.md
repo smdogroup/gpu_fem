@@ -15,7 +15,7 @@ See the [TACS github repo](https://github.com/smdogroup/tacs) for the original C
 - GPU-based finite element assembly and solvers  
 - Support for beam, plate, and shell elements (Reissner–Mindlin)  
 - Multi-GPU capability  
-- Solves **millions of DOFs in < 1 second** (problem dependent)  
+- Solves **millions of DOFs in < 1 second**
 - Adjoint-based structural optimization for wingbox problems  
 - Aeroelastic analysis capability  
 - **14+ state-of-the-art linear solvers implemented**  
