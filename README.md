@@ -1,4 +1,4 @@
-# GPU-Accelerated Finite Element Analysis
+# GPU-Accelerated Finite Element Structural Analysis
 
 **Authors:** Sean Engelstad, Graeme Kennedy  
 
