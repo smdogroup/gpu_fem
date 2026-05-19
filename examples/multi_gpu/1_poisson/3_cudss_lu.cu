@@ -152,6 +152,23 @@ void solve_cudss_mg_csr(
         B
     ));
 
+    // CHECK_CUDSS(cudssExecute(
+    //     handle,
+    //     CUDSS_PHASE_SOLVE,
+    //     config,
+    //     data,
+    //     A,
+    //     X,
+    //     B
+    // ));
+
+        cudaEvent_t solve_start, solve_stop;
+    CHECK_CUDA(cudaEventCreate(&solve_start));
+    CHECK_CUDA(cudaEventCreate(&solve_stop));
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    CHECK_CUDA(cudaEventRecord(solve_start, 0));
+
     CHECK_CUDSS(cudssExecute(
         handle,
         CUDSS_PHASE_SOLVE,
@@ -161,6 +178,18 @@ void solve_cudss_mg_csr(
         X,
         B
     ));
+
+    CHECK_CUDA(cudaEventRecord(solve_stop, 0));
+    CHECK_CUDA(cudaEventSynchronize(solve_stop));
+
+    float solve_ms = 0.0f;
+    CHECK_CUDA(cudaEventElapsedTime(&solve_ms, solve_start, solve_stop));
+
+    // printf("cuDSS MG solve phase runtime = %.6f ms\n", solve_ms);
+    printf("cuDSS MG solve phase runtime = %.9f s\n", 1.0e-3 * solve_ms);
+
+    CHECK_CUDA(cudaEventDestroy(solve_start));
+    CHECK_CUDA(cudaEventDestroy(solve_stop));
 
     CHECK_CUDA(cudaMemcpy(h_x, d_x,
                           N * sizeof(double),
