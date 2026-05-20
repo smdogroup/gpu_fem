@@ -1,15 +1,21 @@
-// poisson_cudss_blockdiag_gpu_local_matrices_threaded.cu
+// poisson_cudss_blockdiag_gpu_local_matrices.cu
+//
+// Correct BDDC demo:
+//   - total nsubdomains fixed
+//   - each GPU owns a contiguous group of subdomains
+//   - each GPU assembles ONE local block-diagonal CSR matrix
+//   - each GPU performs ONE regular single-GPU cuDSS solve
+//   - no cudssCreateMg
+//   - no one-cudss-handle-per-subdomain oversubscription
 
 #include <cuda_runtime.h>
 #include <cudss.h>
 
 #include <algorithm>
 #include <cassert>
-#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <thread>
 #include <vector>
 
 #include "include/poisson.h"
@@ -54,13 +60,6 @@ struct GpuLocalSolve {
     double *d_x = nullptr;
 
     cudaStream_t stream = nullptr;
-
-    cudssHandle_t handle = nullptr;
-    cudssConfig_t config = nullptr;
-    cudssData_t data = nullptr;
-    cudssMatrix_t A = nullptr;
-    cudssMatrix_t B = nullptr;
-    cudssMatrix_t X = nullptr;
 
     float analysis_ms = 0.0f;
     float factor_ms = 0.0f;
@@ -124,6 +123,7 @@ __global__ void assemble_gpu_blockdiag_csr_kernel(
     int p = rowp[row];
     double b = 0.0;
 
+    // SPD sign convention: diag +4, offdiag -1.
     if (iy > 0) {
         cols[p] = col_base + block_dim * (inode - nx) + d;
         vals[p] = -1.0;
@@ -173,7 +173,6 @@ static void build_rowp_on_host(
 
     std::vector<int> h_rowp(N + 1);
     h_rowp[0] = 0;
-
     for (int i = 0; i < N; i++) {
         h_rowp[i + 1] = h_rowp[i] + h_counts[i];
     }
@@ -200,7 +199,11 @@ static void assemble_gpu_local_matrix(GpuLocalSolve &g) {
     const int grid = (g.N + block - 1) / block;
 
     count_gpu_blockdiag_nnz_kernel<<<grid, block, 0, g.stream>>>(
-        g.nx, g.block_dim, g.Nsub, g.N, d_counts
+        g.nx,
+        g.block_dim,
+        g.Nsub,
+        g.N,
+        d_counts
     );
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaStreamSynchronize(g.stream));
@@ -216,8 +219,14 @@ static void assemble_gpu_local_matrix(GpuLocalSolve &g) {
     CHECK_CUDA(cudaMemsetAsync(g.d_x, 0, g.N * sizeof(double), g.stream));
 
     assemble_gpu_blockdiag_csr_kernel<<<grid, block, 0, g.stream>>>(
-        g.nx, g.block_dim, g.Nsub, g.N,
-        g.d_rowp, g.d_cols, g.d_vals, g.d_rhs
+        g.nx,
+        g.block_dim,
+        g.Nsub,
+        g.N,
+        g.d_rowp,
+        g.d_cols,
+        g.d_vals,
+        g.d_rhs
     );
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaStreamSynchronize(g.stream));
@@ -226,16 +235,24 @@ static void assemble_gpu_local_matrix(GpuLocalSolve &g) {
            g.device, g.sub_start, g.sub_end, g.nsubs_local, g.N, g.nnz);
 }
 
-static void init_gpu_local_cudss(GpuLocalSolve &g) {
+static void solve_gpu_local_cudss(GpuLocalSolve &g) {
     CHECK_CUDA(cudaSetDevice(g.device));
 
-    CHECK_CUDSS(cudssCreate(&g.handle));
-    CHECK_CUDSS(cudssConfigCreate(&g.config));
-    CHECK_CUDSS(cudssDataCreate(g.handle, &g.data));
-    CHECK_CUDSS(cudssSetStream(g.handle, g.stream));
+    cudssHandle_t handle = nullptr;
+    cudssConfig_t config = nullptr;
+    cudssData_t data = nullptr;
+    cudssMatrix_t A = nullptr;
+    cudssMatrix_t B = nullptr;
+    cudssMatrix_t X = nullptr;
+
+    CHECK_CUDSS(cudssCreate(&handle));
+    CHECK_CUDSS(cudssConfigCreate(&config));
+    CHECK_CUDSS(cudssDataCreate(handle, &data));
+
+    CHECK_CUDSS(cudssSetStream(handle, g.stream));
 
     CHECK_CUDSS(cudssMatrixCreateCsr(
-        &g.A,
+        &A,
         g.N,
         g.N,
         g.nnz,
@@ -253,114 +270,66 @@ static void init_gpu_local_cudss(GpuLocalSolve &g) {
     const int nrhs = 1;
 
     CHECK_CUDSS(cudssMatrixCreateDn(
-        &g.B, g.N, nrhs, g.N, g.d_rhs,
-        CUDA_R_64F, CUDSS_LAYOUT_COL_MAJOR
+        &B,
+        g.N,
+        nrhs,
+        g.N,
+        g.d_rhs,
+        CUDA_R_64F,
+        CUDSS_LAYOUT_COL_MAJOR
     ));
 
     CHECK_CUDSS(cudssMatrixCreateDn(
-        &g.X, g.N, nrhs, g.N, g.d_x,
-        CUDA_R_64F, CUDSS_LAYOUT_COL_MAJOR
+        &X,
+        g.N,
+        nrhs,
+        g.N,
+        g.d_x,
+        CUDA_R_64F,
+        CUDSS_LAYOUT_COL_MAJOR
     ));
-}
-
-static void execute_cudss_phase(
-    GpuLocalSolve &g,
-    cudssPhase_t phase,
-    float &phase_ms
-) {
-    CHECK_CUDA(cudaSetDevice(g.device));
 
     cudaEvent_t start, stop;
     CHECK_CUDA(cudaEventCreate(&start));
     CHECK_CUDA(cudaEventCreate(&stop));
 
     CHECK_CUDA(cudaEventRecord(start, g.stream));
-
-    CHECK_CUDSS(cudssExecute(
-        g.handle,
-        phase,
-        g.config,
-        g.data,
-        g.A,
-        g.X,
-        g.B
-    ));
-
+    CHECK_CUDSS(cudssExecute(handle, CUDSS_PHASE_ANALYSIS,
+                             config, data, A, X, B));
     CHECK_CUDA(cudaEventRecord(stop, g.stream));
     CHECK_CUDA(cudaEventSynchronize(stop));
-    CHECK_CUDA(cudaEventElapsedTime(&phase_ms, start, stop));
+    CHECK_CUDA(cudaEventElapsedTime(&g.analysis_ms, start, stop));
+
+    CHECK_CUDA(cudaEventRecord(start, g.stream));
+    CHECK_CUDSS(cudssExecute(handle, CUDSS_PHASE_FACTORIZATION,
+                             config, data, A, X, B));
+    CHECK_CUDA(cudaEventRecord(stop, g.stream));
+    CHECK_CUDA(cudaEventSynchronize(stop));
+    CHECK_CUDA(cudaEventElapsedTime(&g.factor_ms, start, stop));
+
+    CHECK_CUDA(cudaEventRecord(start, g.stream));
+    CHECK_CUDSS(cudssExecute(handle, CUDSS_PHASE_SOLVE,
+                             config, data, A, X, B));
+    CHECK_CUDA(cudaEventRecord(stop, g.stream));
+    CHECK_CUDA(cudaEventSynchronize(stop));
+    CHECK_CUDA(cudaEventElapsedTime(&g.solve_ms, start, stop));
+
+    printf("GPU %d cuDSS local solve: analysis %.3f ms, factor %.3f ms, solve %.3f ms, fact+solve %.3f ms\n",
+           g.device,
+           g.analysis_ms,
+           g.factor_ms,
+           g.solve_ms,
+           g.factor_ms + g.solve_ms);
 
     CHECK_CUDA(cudaEventDestroy(start));
     CHECK_CUDA(cudaEventDestroy(stop));
-}
 
-static double run_parallel_phase(
-    std::vector<GpuLocalSolve> &gpu_solves,
-    cudssPhase_t phase,
-    const char *name
-) {
-    auto t0 = std::chrono::high_resolution_clock::now();
-
-    std::vector<std::thread> threads;
-    threads.reserve(gpu_solves.size());
-
-    for (int ig = 0; ig < (int)gpu_solves.size(); ig++) {
-        threads.emplace_back([&, ig]() {
-            GpuLocalSolve &g = gpu_solves[ig];
-
-            if (phase == CUDSS_PHASE_ANALYSIS) {
-                execute_cudss_phase(g, phase, g.analysis_ms);
-            } else if (phase == CUDSS_PHASE_FACTORIZATION) {
-                execute_cudss_phase(g, phase, g.factor_ms);
-            } else if (phase == CUDSS_PHASE_SOLVE) {
-                execute_cudss_phase(g, phase, g.solve_ms);
-            }
-        });
-    }
-
-    for (auto &t : threads) {
-        t.join();
-    }
-
-    auto t1 = std::chrono::high_resolution_clock::now();
-    const double wall_ms =
-        std::chrono::duration<double, std::milli>(t1 - t0).count();
-
-    double max_gpu_ms = 0.0;
-    for (const auto &g : gpu_solves) {
-        double gpu_ms = 0.0;
-        if (phase == CUDSS_PHASE_ANALYSIS) {
-            gpu_ms = g.analysis_ms;
-        } else if (phase == CUDSS_PHASE_FACTORIZATION) {
-            gpu_ms = g.factor_ms;
-        } else if (phase == CUDSS_PHASE_SOLVE) {
-            gpu_ms = g.solve_ms;
-        }
-        max_gpu_ms = std::max(max_gpu_ms, gpu_ms);
-    }
-
-    printf("%s wall time = %.3f ms, max per-GPU event time = %.3f ms\n",
-           name, wall_ms, max_gpu_ms);
-
-    return wall_ms;
-}
-
-static void destroy_gpu_local_cudss(GpuLocalSolve &g) {
-    CHECK_CUDA(cudaSetDevice(g.device));
-
-    if (g.A) CHECK_CUDSS(cudssMatrixDestroy(g.A));
-    if (g.B) CHECK_CUDSS(cudssMatrixDestroy(g.B));
-    if (g.X) CHECK_CUDSS(cudssMatrixDestroy(g.X));
-    if (g.data) CHECK_CUDSS(cudssDataDestroy(g.handle, g.data));
-    if (g.config) CHECK_CUDSS(cudssConfigDestroy(g.config));
-    if (g.handle) CHECK_CUDSS(cudssDestroy(g.handle));
-
-    g.A = nullptr;
-    g.B = nullptr;
-    g.X = nullptr;
-    g.data = nullptr;
-    g.config = nullptr;
-    g.handle = nullptr;
+    CHECK_CUDSS(cudssMatrixDestroy(A));
+    CHECK_CUDSS(cudssMatrixDestroy(B));
+    CHECK_CUDSS(cudssMatrixDestroy(X));
+    CHECK_CUDSS(cudssDataDestroy(handle, data));
+    CHECK_CUDSS(cudssConfigDestroy(config));
+    CHECK_CUDSS(cudssDestroy(handle));
 }
 
 static double compute_residual_norm(
@@ -457,83 +426,51 @@ int main(int argc, char **argv) {
         g.block_dim = block_dim;
         g.nnode_sub = nnode_sub;
         g.Nsub = Nsub;
+
+        assemble_gpu_local_matrix(g);
     }
 
-    auto assembly_t0 = std::chrono::high_resolution_clock::now();
+    cudaEvent_t wall_start, wall_stop;
+    CHECK_CUDA(cudaSetDevice(devices[0]));
+    CHECK_CUDA(cudaEventCreate(&wall_start));
+    CHECK_CUDA(cudaEventCreate(&wall_stop));
+    CHECK_CUDA(cudaEventRecord(wall_start, 0));
 
-    {
-        std::vector<std::thread> assembly_threads;
-        assembly_threads.reserve(ngpu);
-
-        for (int ig = 0; ig < ngpu; ig++) {
-            assembly_threads.emplace_back([&, ig]() {
-                assemble_gpu_local_matrix(gpu_solves[ig]);
-            });
-        }
-
-        for (auto &t : assembly_threads) {
-            t.join();
-        }
-    }
-
-    auto assembly_t1 = std::chrono::high_resolution_clock::now();
-    const double assembly_wall_ms =
-        std::chrono::duration<double, std::milli>(assembly_t1 - assembly_t0).count();
-
-    printf("assembly wall time = %.3f ms\n", assembly_wall_ms);
-
+    // One cuDSS solve per GPU-local matrix.
+    //
+    // This uses streams, not one handle per subdomain.
+    // If cuDSS calls are host-blocking on your build, this loop may still enqueue/execute
+    // mostly serially across GPUs. In that case, the only thread usage you should add is
+    // one host thread per GPU, not one per subdomain.
     for (int ig = 0; ig < ngpu; ig++) {
-        init_gpu_local_cudss(gpu_solves[ig]);
+        solve_gpu_local_cudss(gpu_solves[ig]);
     }
 
-    const double analysis_wall_ms = run_parallel_phase(
-        gpu_solves,
-        CUDSS_PHASE_ANALYSIS,
-        "analysis"
-    );
+    CHECK_CUDA(cudaSetDevice(devices[0]));
+    CHECK_CUDA(cudaEventRecord(wall_stop, 0));
+    CHECK_CUDA(cudaEventSynchronize(wall_stop));
 
-    const double factor_wall_ms = run_parallel_phase(
-        gpu_solves,
-        CUDSS_PHASE_FACTORIZATION,
-        "factorization"
-    );
+    float wall_ms = 0.0f;
+    CHECK_CUDA(cudaEventElapsedTime(&wall_ms, wall_start, wall_stop));
 
-    const double solve_wall_ms = run_parallel_phase(
-        gpu_solves,
-        CUDSS_PHASE_SOLVE,
-        "solve"
-    );
+    CHECK_CUDA(cudaEventDestroy(wall_start));
+    CHECK_CUDA(cudaEventDestroy(wall_stop));
 
-    double max_gpu_analysis = 0.0;
-    double max_gpu_factor = 0.0;
-    double max_gpu_solve = 0.0;
-    double max_gpu_fact_solve = 0.0;
+    double sum_fact_solve = 0.0;
+    double max_fact_solve = 0.0;
 
     for (const auto &g : gpu_solves) {
-        max_gpu_analysis = std::max(max_gpu_analysis, (double)g.analysis_ms);
-        max_gpu_factor = std::max(max_gpu_factor, (double)g.factor_ms);
-        max_gpu_solve = std::max(max_gpu_solve, (double)g.solve_ms);
-        max_gpu_fact_solve = std::max(max_gpu_fact_solve,
-                                      (double)(g.factor_ms + g.solve_ms));
-
-        printf("GPU %d cuDSS local solve: analysis %.3f ms, factor %.3f ms, solve %.3f ms, fact+solve %.3f ms\n",
-               g.device,
-               g.analysis_ms,
-               g.factor_ms,
-               g.solve_ms,
-               g.factor_ms + g.solve_ms);
+        const double fs = g.factor_ms + g.solve_ms;
+        sum_fact_solve += fs;
+        max_fact_solve = std::max(max_fact_solve, fs);
     }
 
     printf("\nGPU-local block-diagonal solve summary:\n");
-    printf("  wall analysis             = %.3f ms\n", analysis_wall_ms);
-    printf("  wall factorization        = %.3f ms\n", factor_wall_ms);
-    printf("  wall solve                = %.3f ms\n", solve_wall_ms);
-    printf("  wall factorization+solve  = %.3f ms\n", factor_wall_ms + solve_wall_ms);
-    printf("  max GPU analysis event    = %.3f ms\n", max_gpu_analysis);
-    printf("  max GPU factor event      = %.3f ms\n", max_gpu_factor);
-    printf("  max GPU solve event       = %.3f ms\n", max_gpu_solve);
-    printf("  max GPU fact+solve event  = %.3f ms\n", max_gpu_fact_solve);
+    printf("  sum GPU-local fact+solve = %.3f ms\n", sum_fact_solve);
+    printf("  max GPU-local fact+solve = %.3f ms\n", max_fact_solve);
+    printf("  observed host wall time   = %.3f ms\n", wall_ms);
 
+    // Residual check against one reference subdomain block.
     const int nz_node = 5 * nnode_sub - 4 * nx;
     const int nz_ref = block_dim * nz_node;
 
@@ -575,18 +512,14 @@ int main(int argc, char **argv) {
                 h_rhs.data()
             );
 
-            max_rel_res = std::max(max_rel_res, rel_res);
-
             // printf("subdomain %d on GPU %d relative residual = %.15e\n",
             //        global_sub, g.device, rel_res);
+
+            max_rel_res = std::max(max_rel_res, rel_res);
         }
     }
 
     printf("max relative residual = %.15e\n", max_rel_res);
-
-    for (auto &g : gpu_solves) {
-        destroy_gpu_local_cudss(g);
-    }
 
     for (auto &g : gpu_solves) {
         free_gpu_local(g);
