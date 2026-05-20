@@ -259,6 +259,10 @@ int main(int argc, char **argv) {
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
+    if (device_count != nranks) {
+        printf("WARNING: want exactly one GPU per MPI rank, but you have %d MPI ranks and %d GPUs\n", nranks, device_count);
+    }
+
     const int device = rank % device_count;
     CHECK_CUDA(cudaSetDevice(device));
 
