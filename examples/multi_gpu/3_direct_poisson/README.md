@@ -10,11 +10,18 @@
 3. CuSparse CSR direct solver
     - can we use triang solve to matrix operations to compute S_{Gam,Gam}^i for each partition? or is this tricky because we have to do it in two matrix steps and store intermediate matrix?
 
+
 Other multi-GPU direct solvers?
 4. CuSolver?
 5. Trilinos?
 6. Hypre?
 7. SuperLU_dist?
+
+
+Description of scripts:
+1_1_cudss_root: CuDSS multi-GPU with matrix created only on root GPU
+1_2_cudss_mg: CuDSS multi-GPU and single-CPU with inter-GPU copy of matrix (inter-GPU copy of matrix and vectors actually not that bad)
+1_3_cudss_mgmn: CuDSS with multi-GPU and multi-CPU (remains fully distributed with assigned rows), no inter-GPU copy of matrix
 
 Big ideas:
 - how does BSR vs CSR methods compare
