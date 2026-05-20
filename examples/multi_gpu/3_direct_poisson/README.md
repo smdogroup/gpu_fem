@@ -18,10 +18,10 @@ Other multi-GPU direct solvers?
 7. SuperLU_dist?
 
 
-Description of scripts:
-1_1_cudss_root: CuDSS multi-GPU with matrix created only on root GPU
-1_2_cudss_mg: CuDSS multi-GPU and single-CPU with inter-GPU copy of matrix (inter-GPU copy of matrix and vectors actually not that bad)
-1_3_cudss_mgmn: CuDSS with multi-GPU and multi-CPU (remains fully distributed with assigned rows), no inter-GPU copy of matrix
+Description of scripts for direct solvers:
+1_1_cudss_mg: CuDSS multi-GPU and single-CPU with inter-GPU copy of matrix (inter-GPU copy of matrix and vectors actually not that bad) [uses CSR matrices]
+1_2_cudss_mgmn: CuDSS with multi-GPU and multi-CPU (remains fully distributed with assigned rows), no inter-GPU copy of matrix [uses CSR matrices]
+2_cusparse_bsr.cu: CuSparse LU solve with BSR matrices and full LU pattern
 
 Big ideas:
 - how does BSR vs CSR methods compare
