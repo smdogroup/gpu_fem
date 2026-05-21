@@ -88,12 +88,12 @@ From single-GPU fetiDP
 - [x] addVecIEVtoI
 - [x] addVecIEtoI
 - [x] addVecIEVtoVc
-- [x] addVecLamtoIE
+- [x] addVecLamtoIE => changed to GamtoIE though for BDDC
 - [x] addVecIEtoIEV
 - [x] addVecItoIEV
 - [x] addVecItoIE
 - [x] addVecVctoIEV
-- [x] addVecIEtoLam
+- [x] addVecIEtoLam => changed to IEtoGam though for BDDC
 - [x] zeroInteriorIE
 - [x] addGlobalSoln
 - [ ] carefully figure out, double check, and think about for each addVec / other methods where ghost node reductions should be done / not
@@ -102,9 +102,14 @@ From single-GPU fetiDP
     - [ ] add ctx->sync() in other places also?
 <!-- - [ ] sparseMatVec -->
 <!-- * sparseTransposeMatVec unused -->
-- [ ] solveSubdomainIE
-- [ ] solveSubdomainI
-- [ ] solveCoarse
+- [ ] create_direct_solvers
+    * do this instead of set_inner_solvers
+    * called during constructor
+    * makes subdomainIE, subdomainI and S_VV coarse solvers with CuDSS
+- [x] solveSubdomainIE
+- [x] solveSubdomainI
+- [x] solveCoarse
+<!-- - [ ] create_Svv_mat -->
 - [ ] _compute_jump_operators
 - [ ] find_block_index
 utils
@@ -114,36 +119,36 @@ utils
 
 For nonlinear + adjoint
 * ignore set_global_rhs
-- [ ] set_IEV_linear_rhs
-- [ ] set_IEV_adjoint_rhs
-- [ ] set_IEV_residual
+<!-- - [ ] set_IEV_linear_rhs -->
+<!-- - [ ] set_IEV_adjoint_rhs -->
+- [x] set_IEV_residual
 
 
 From single-GPU BDDC
-- [ ] new versions of: getLambdaSize(), set_IEV_residual, get_lam_rhs, update_after_assembly, mat_vec, solve, get_global_soln
-- [ ] zeroIEinIEV
-- [ ] zeroIinIEV
-- [ ] addVecIEVtoGam
-- [ ] addVecGamtoIEV
-- [ ] addVecGamtoIE
-- [ ] addVecIEtoGam
+- [x] overwrite the methods for BDDC (not FETI-DP): getLambdaSize(), set_IEV_residual, get_lam_rhs, update_after_assembly, mat_vec, solve, get_global_soln
+<!-- - [ ] zeroIEinIEV
+<!-- - [ ] zeroIinIEV --> -->
+- [x] addVecIEVtoGam
+- [x] addVecGamtoIEV
+- [x] addVecGamtoIE
+- [x] addVecIEtoGam
 
+- [ ] TODO : either make a way to make GPUvecs without a partition (like for V, IE, I vecs) OR make DeviceVec<T>* arrays for them across multi-GPU (and adjust method args)
+    - [ ] maybe an alternate constructor
+- [ ] 
 
 For multi-GPU CuDSS
 * no need for perm/iperm maps since CuDSS does reordering internally
 * no need for AMD reordering / compute LU pattern from our code (just do nofill pattern) cause again CuDSS does that stuff now.
-- [ ] new class for CuDSS Subdomain parallel multi-GPU direct solves
-    - [ ] threads, etc.
-- [ ] new class for CuDSSMG solves (multi-GPU schur complement) for S_VV
-    - [ ] BSRtoCSR copy maps on each GPU
-    - [ ] inter-GPU copy of CSR and add on root (cause some repeated nodes for S_VV)
-    - [ ] inter-GPU copy of the rhs and soln also? (ghost + inter-GPU)
-    - [ ] full sparsity pattern of S_VV on root GPU
-- [ ] something to make the kmat_I, kmat_IE CuDSS subdomain parallel solvers
-- [ ] something to make the S_VV CuDSSMG solver
-- [ ] factorIEsubdomains
-- [ ] factorIsubdomains
-- [ ] factorCoarseVertex
+- [x] new class for CuDSS Subdomain parallel multi-GPU direct solves
+    - [x] threads, etc.
+- [x] new class for CuDSSMG solves (multi-GPU schur complement) for S_VV
+    - [x] BSRtoCSR copy maps on each GPU
+    - [x] inter-GPU copy of CSR and add on root (cause some repeated nodes for S_VV)
+    - [x] inter-GPU copy of the rhs and soln also? (ghost + inter-GPU)
+    - [x] full sparsity pattern of S_VV on root GPU
+- [x] something to make the kmat_I, kmat_IE CuDSS subdomain parallel solvers
+- [x] something to make the S_VV CuDSSMG solver
 
 
 Wrapper classes:
