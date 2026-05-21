@@ -144,6 +144,7 @@ class GPUbsrmat {
     }
 
     void mult(T alpha, GPUvec<T, Partitioner> *x, T beta, GPUvec<T, Partitioner> *y) {
+        // alpha * A * x + beta * y => y
         x->expandToLocal();
 
         for (int g = 0; g < ngpus; g++) {

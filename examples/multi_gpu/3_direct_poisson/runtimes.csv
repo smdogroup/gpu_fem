@@ -4,6 +4,6 @@ ngpus,nx,N,solver,factor_sec,tri_sec,total_sec
 1,1024,6291456,1_2_cudss_mgmn,0.240,0.033,0.273
 4,1024,6291456,1_2_cudss_mgmn,0.506,0.044,0.548
 1,512,6291456,1_3_cudss_subdomain,0.190,0.031,0.221
-4,512,6291456,1_3_cudss_subdomain,
+4,512,6291456,1_3_cudss_subdomain,0.087,0.013,0.100
 1,1024,6291456,2_cusparse_bsr,
 4,1024,6291456,2_cusparse_bsr,
