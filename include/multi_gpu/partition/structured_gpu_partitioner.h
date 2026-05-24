@@ -12,6 +12,7 @@ enum NodeType { INTERIOR = 0, INTERFACE = 1 };
 
 class StructuredGPUPartitioner {
    public:
+    // constructor with fixed nodes_per_elem
     StructuredGPUPartitioner(int ngpus_, int num_nodes_, int num_elements_, int nodes_per_elem_,
                              int *h_elem_conn_, int num_components_, int *h_elem_components_,
                              bool debug_ = false)
@@ -19,29 +20,41 @@ class StructuredGPUPartitioner {
           num_nodes(num_nodes_),
           num_elements(num_elements_),
           nodes_per_elem(nodes_per_elem_),
+          num_components(num_components_),
+          h_elem_ptr(nullptr),
           h_elem_conn(h_elem_conn_),
+          h_elem_components(h_elem_components_),
           debug(debug_) {
-        // printf("temp\n");
-        // printf("h_elem_conn[%d]: ", num_elements);
-        // printVec<int>(4 * num_elements, h_elem_conn);
-
-        // printf("split element connectivity\n");
         split_elem_connectivity();
-        // printf("assign owned nodes\n");
         assign_owned_nodes();
-        // printf("build_owned_node_lists\n");
         build_owned_node_lists();
-        // printf("build_local_node_maps\n");
         build_local_node_maps();
-        // printf("build_local_ghost_flags\n");
         build_local_ghost_flags();
-        // printf("build_ghost_node_maps\n");
         build_ghost_node_maps();
-        // printf("build_owned_local_maps\n");
         build_owned_local_maps();
-        // printf("move_maps_to_device\n");
         if (!debug) move_maps_to_device();
     }
+
+    // constructor with variable nodes_per_elem
+    // StructuredGPUPartitioner(int ngpus_, int num_nodes_, int num_elements_, int *h_elem_ptr_,
+    //                          int *h_elem_conn_, int num_components_, int *h_elem_components_,
+    //                          bool debug_ = false)
+    //     : ngpus(ngpus_),
+    //       num_nodes(num_nodes_),
+    //       num_elements(num_elements_),
+    //       nodes_per_elem(-1),
+    //       h_elem_ptr(h_elem_ptr_),
+    //       h_elem_conn(h_elem_conn_),
+    //       debug(debug_) {
+    //     split_elem_connectivity();
+    //     assign_owned_nodes();
+    //     build_owned_node_lists();
+    //     build_local_node_maps();
+    //     build_local_ghost_flags();
+    //     build_ghost_node_maps();
+    //     build_owned_local_maps();
+    //     if (!debug) move_maps_to_device();
+    // }
 
     void free() {
         for (int g = 0; g < ngpus; g++) {
@@ -55,6 +68,10 @@ class StructuredGPUPartitioner {
             if (h_local_nodes && h_local_nodes[g]) delete[] h_local_nodes[g];
             if (h_owned_to_local_map && h_owned_to_local_map[g]) delete[] h_owned_to_local_map[g];
             if (h_is_local_ghost && h_is_local_ghost[g]) delete[] h_is_local_ghost[g];
+            if (d_local_elem_ptr && d_local_elem_ptr[g]) cudaFree(d_local_elem_ptr[g]);
+            if (h_local_elem_ptr && h_local_elem_ptr[g]) delete[] h_local_elem_ptr[g];
+            if (h_local_to_owned_map && h_local_to_owned_map[g]) delete[] h_local_to_owned_map[g];
+            if (d_local_to_owned_map && d_local_to_owned_map[g]) cudaFree(d_local_to_owned_map[g]);
         }
 
         int npairs = ngpus * ngpus;
@@ -95,6 +112,10 @@ class StructuredGPUPartitioner {
         delete[] h_owned_to_local_map;
         delete[] d_owned_to_local_map;
         delete[] h_is_local_ghost;
+        delete[] h_local_elem_ptr;
+        delete[] d_local_elem_ptr;
+        delete[] h_local_to_owned_map;
+        delete[] d_local_to_owned_map;
     }
 
     int pair_index(int dst, int src) const { return ngpus * dst + src; }
@@ -110,8 +131,18 @@ class StructuredGPUPartitioner {
     int getNumLocalNodes(const int g) { return local_nnodes[g]; }
     int *getOwnedNodesPtr(const int g) { return h_owned_nodes[g]; }
     int *getLocalNodesPtr(const int g) { return h_local_nodes[g]; }
+    int *getLocalElemConnPtr(const int g) { return h_local_elem_conn[g]; }
+    int *getLocalElemPtrPtr(const int g) {
+        return h_local_elem_ptr ? h_local_elem_ptr[g] : nullptr;
+    }
+    int *getDeviceLocalElemConnPtr(const int g) { return d_local_elem_conn[g]; }
+    int *getDeviceLocalElemPtrPtr(const int g) {
+        return d_local_elem_ptr ? d_local_elem_ptr[g] : nullptr;
+    }
+    bool usesVariableElemConn() const { return variable_elem_conn(); }
 
-    void setElementComponents(const int *h_elem_comp, int *h_loc_elem_comp, int *d_loc_elem_comp) {
+    void setElementComponents(const int *h_elem_comp, int **h_loc_elem_comp,
+                              int **d_loc_elem_comp) {
         // printf("get loc elem components\n");
         for (int g = 0; g < ngpus; g++) {
             int local_nelems = getLocalNumElements(g);
@@ -123,7 +154,7 @@ class StructuredGPUPartitioner {
             }
 
             CHECK_CUDA(cudaSetDevice(g));
-            CHECK_CUDA(cudaMalloc(&d_loc_elem_comp[g], local_nelems * sizeof(int)));
+            CHECK_CUDA(cudaMalloc((void **)&d_loc_elem_comp[g], local_nelems * sizeof(int)));
             CHECK_CUDA(cudaMemcpy(d_loc_elem_comp[g], h_loc_elem_comp[g],
                                   local_nelems * sizeof(int), cudaMemcpyHostToDevice));
         }
@@ -136,30 +167,56 @@ class StructuredGPUPartitioner {
         local_nelems = new int[ngpus];
         h_local_elem_conn = new int *[ngpus];
         d_local_elem_conn = new int *[ngpus];
+        h_local_elem_ptr = new int *[ngpus];
+        d_local_elem_ptr = new int *[ngpus];
 
-        // printf("h_elem_conn[%d]: ", num_elements);
-        // printVec<int>(num_elements * 4, h_elem_conn);
+        h_elem_assigned_gpu = new int[num_elements];
+
+        std::memset(h_local_elem_conn, 0, ngpus * sizeof(int *));
+        std::memset(d_local_elem_conn, 0, ngpus * sizeof(int *));
+        std::memset(h_local_elem_ptr, 0, ngpus * sizeof(int *));
+        std::memset(d_local_elem_ptr, 0, ngpus * sizeof(int *));
+        std::fill(h_elem_assigned_gpu, h_elem_assigned_gpu + num_elements, -1);
 
         for (int g = 0; g < ngpus; g++) {
             start_elem[g] = num_elements * g / ngpus;
             end_elem[g] = num_elements * (g + 1) / ngpus;
             local_nelems[g] = end_elem[g] - start_elem[g];
 
-            int local_conn_size = local_nelems[g] * nodes_per_elem;
-            int global_conn_offset = start_elem[g] * nodes_per_elem;
+            for (int e = start_elem[g]; e < end_elem[g]; e++) {
+                h_elem_assigned_gpu[e] = g;
+            }
+
+            int conn_begin = elem_begin(start_elem[g]);
+            int conn_end = elem_end(end_elem[g] - 1);
+            int local_conn_size = conn_end - conn_begin;
 
             h_local_elem_conn[g] = new int[local_conn_size];
-            std::memcpy(h_local_elem_conn[g], &h_elem_conn[global_conn_offset],
+            std::memcpy(h_local_elem_conn[g], &h_elem_conn[conn_begin],
                         local_conn_size * sizeof(int));
 
-            // printf("GPU[%d] - h_local_elem_conn[%d]: ", g, local_nelems[g]);
-            // printVec<int>(local_nelems[g] * 4, h_local_elem_conn[g]);
+            if (variable_elem_conn()) {
+                h_local_elem_ptr[g] = new int[local_nelems[g] + 1];
+                h_local_elem_ptr[g][0] = 0;
+                for (int le = 0; le < local_nelems[g]; le++) {
+                    int e = start_elem[g] + le;
+                    h_local_elem_ptr[g][le + 1] = h_elem_ptr[e + 1] - conn_begin;
+                }
+            }
 
             if (!debug) {
                 CHECK_CUDA(cudaSetDevice(g));
                 CHECK_CUDA(cudaMalloc(&d_local_elem_conn[g], local_conn_size * sizeof(int)));
                 CHECK_CUDA(cudaMemcpy(d_local_elem_conn[g], h_local_elem_conn[g],
                                       local_conn_size * sizeof(int), cudaMemcpyHostToDevice));
+
+                if (variable_elem_conn()) {
+                    CHECK_CUDA(
+                        cudaMalloc(&d_local_elem_ptr[g], (local_nelems[g] + 1) * sizeof(int)));
+                    CHECK_CUDA(cudaMemcpy(d_local_elem_ptr[g], h_local_elem_ptr[g],
+                                          (local_nelems[g] + 1) * sizeof(int),
+                                          cudaMemcpyHostToDevice));
+                }
             }
         }
     }
@@ -170,9 +227,9 @@ class StructuredGPUPartitioner {
         int ne_nnz = 0;
 
         for (int e = 0; e < num_elements; e++) {
-            int *elem_nodes = &h_elem_conn[nodes_per_elem * e];
-            for (int i = 0; i < nodes_per_elem; i++) {
-                h_ne_cts[elem_nodes[i]]++;
+            for (int jp = elem_begin(e); jp < elem_end(e); jp++) {
+                int node = h_elem_conn[jp];
+                h_ne_cts[node]++;
                 ne_nnz++;
             }
         }
@@ -185,9 +242,8 @@ class StructuredGPUPartitioner {
         std::memset(h_ne_cts, 0, num_nodes * sizeof(int));
 
         for (int e = 0; e < num_elements; e++) {
-            int *elem_nodes = &h_elem_conn[nodes_per_elem * e];
-            for (int i = 0; i < nodes_per_elem; i++) {
-                int node = elem_nodes[i];
+            for (int jp = elem_begin(e); jp < elem_end(e); jp++) {
+                int node = h_elem_conn[jp];
                 int offset = h_ne_ptr[node] + h_ne_cts[node]++;
                 h_ne_elems[offset] = e;
             }
@@ -218,10 +274,6 @@ class StructuredGPUPartitioner {
             for (int ep = h_ne_ptr[n]; ep < h_ne_ptr[n + 1]; ep++)
                 node_gpus.insert(find_owned_gpu_from_elem(h_ne_elems[ep]));
 
-            // std::vector<int> node_gpus_vec(node_gpus.begin(), node_gpus.end());
-            // printf("node %d, node-gpus: ", n);
-            // printVec<int>(node_gpus_vec.size(), node_gpus_vec.data());
-
             int best_gpu = -1, best_ct = INT_MAX;
             for (int g : node_gpus) {
                 if (owned_node_cts[g] < best_ct) {
@@ -233,12 +285,6 @@ class StructuredGPUPartitioner {
             h_node_gpu_ind[n] = best_gpu;
             owned_node_cts[best_gpu]++;
         }
-
-        // debug printout
-        // printf("h_node_gpu_ind: ");
-        // printVec<int>(num_nodes, h_node_gpu_ind);
-        // printf("owned_node_cts: ");
-        // printVec<int>(ngpus, owned_node_cts);
 
         delete[] h_ne_cts;
         delete[] h_ne_ptr;
@@ -286,10 +332,15 @@ class StructuredGPUPartitioner {
 
         for (int g = 0; g < ngpus; g++) {
             std::unordered_set<int> node_set;
-            int *conn = h_local_elem_conn[g];
-            int conn_size = local_nelems[g] * nodes_per_elem;
 
-            for (int i = 0; i < conn_size; i++) node_set.insert(conn[i]);
+            int conn_size;
+            if (variable_elem_conn()) {
+                conn_size = h_local_elem_ptr[g][local_nelems[g]];
+            } else {
+                conn_size = local_nelems[g] * nodes_per_elem;
+            }
+
+            for (int i = 0; i < conn_size; i++) node_set.insert(h_local_elem_conn[g][i]);
 
             std::vector<int> nodes(node_set.begin(), node_set.end());
             std::sort(nodes.begin(), nodes.end());
@@ -299,9 +350,6 @@ class StructuredGPUPartitioner {
             h_local_nodes[g] = new int[local_nnodes[g]];
 
             for (int i = 0; i < local_nnodes[g]; i++) h_local_nodes[g][i] = nodes[i];
-
-            // printf("local nodes on GPU[%d]\n", g);
-            // printVec<int>(local_nnodes[g], h_local_nodes[g]);
         }
     }
 
@@ -344,7 +392,7 @@ class StructuredGPUPartitioner {
         }
 
         // global node -> local index on each GPU, -1 if not local
-        int **global_to_local = new int *[ngpus];
+        global_to_local = new int *[ngpus];
         for (int g = 0; g < ngpus; g++) {
             global_to_local[g] = new int[num_nodes];
             std::fill(global_to_local[g], global_to_local[g] + num_nodes, -1);
@@ -374,11 +422,6 @@ class StructuredGPUPartitioner {
                 }
             }
         }
-
-        for (int g = 0; g < ngpus; g++) {
-            delete[] global_to_local[g];
-        }
-        delete[] global_to_local;
     }
 
     void build_owned_local_maps() {
@@ -399,17 +442,9 @@ class StructuredGPUPartitioner {
 
             std::fill(h_local_to_owned_map[g], h_local_to_owned_map[g] + local_nnodes[g], -1);
 
-            int *global_to_local = new int[num_nodes];
-            std::memset(global_to_local, -1, num_nodes * sizeof(int));
-
-            for (int i = 0; i < local_nnodes[g]; i++) {
-                int node = h_local_nodes[g][i];
-                global_to_local[node] = i;
-            }
-
             for (int i = 0; i < owned_nnodes[g]; i++) {
                 int node = h_owned_nodes[g][i];
-                int local = global_to_local[node];
+                int local = global_to_local[g][node];
 
                 h_owned_to_local_map[g][i] = local;
 
@@ -417,8 +452,6 @@ class StructuredGPUPartitioner {
                     h_local_to_owned_map[g][local] = i;
                 }
             }
-
-            delete[] global_to_local;
         }
     }
     void build_ghost_node_maps() {
@@ -534,10 +567,25 @@ class StructuredGPUPartitioner {
     }
 
    public:
-    int ngpus, num_nodes, num_elements, nodes_per_elem;
+    int ngpus, num_nodes, num_elements;  //, nodes_per_elem;
     int *h_elem_conn = nullptr;
     bool debug;
 
+    // add members
+    int nodes_per_elem = -1;    // fixed mode if > 0
+    int *h_elem_ptr = nullptr;  // variable mode CSR rowp
+    int **h_local_elem_ptr = nullptr;
+    int **d_local_elem_ptr = nullptr;
+    bool variable_elem_conn() const { return h_elem_ptr != nullptr || nodes_per_elem <= 0; }
+    int elem_begin(int e) const {
+        return variable_elem_conn() ? h_elem_ptr[e] : e * nodes_per_elem;
+    }
+    int elem_end(int e) const {
+        return variable_elem_conn() ? h_elem_ptr[e + 1] : (e + 1) * nodes_per_elem;
+    }
+    int elem_nnodes(int e) const { return elem_end(e) - elem_begin(e); }
+
+    int **global_to_local = nullptr;
     int *start_elem = nullptr;
     int *end_elem = nullptr;
     int *local_nelems = nullptr;
@@ -546,6 +594,8 @@ class StructuredGPUPartitioner {
 
     int *h_node_gpu_ind = nullptr;
     int **d_node_gpu_ind = nullptr;
+    int num_components;
+    int *h_elem_components = nullptr;
 
     int *owned_nnodes = nullptr;
     int *owned_N = nullptr;
@@ -569,4 +619,6 @@ class StructuredGPUPartitioner {
     int **d_dstred_map = nullptr;
 
     bool **h_is_local_ghost = nullptr;
+    int **h_loc_elem_components = nullptr;
+    int *h_elem_assigned_gpu = nullptr;
 };

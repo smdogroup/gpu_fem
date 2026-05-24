@@ -222,5 +222,5 @@ int main(int argc, char *argv[]) {
     T *h_soln = new T[N];
     memset(h_soln, 0, N * sizeof(T));
     soln->getValuesToHost(h_soln);
-    printToVTK_v2<T, Assembler>(*assembler, h_soln, "./out/plate_kry_lin.vtk");
+    printToVTK_v2<T, Assembler>(*assembler, h_soln, "./out/cyl_mgpu.vtk");
 };

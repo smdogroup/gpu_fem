@@ -8,7 +8,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "_iev.h"
+#include "domdec/subdomains/_iev.h"
 
 template <typename T>
 class TacsComponentIEVSplitting {
@@ -16,6 +16,7 @@ class TacsComponentIEVSplitting {
     int num_elements = 0;
     int num_nodes = 0;
     int nodes_per_elem = 0;
+    int MAX_NUM_VERTEX_PER_SUBDOMAIN = 6;  // update this?
 
     const int *elem_conn = nullptr;        // size num_elements * nodes_per_elem
     const T *xpts = nullptr;               // size num_nodes * 3

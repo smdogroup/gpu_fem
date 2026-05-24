@@ -7,8 +7,8 @@
 #include <thread>
 #include <vector>
 
-#include "MultiGPUContext.h"
 #include "cuda_utils.h"
+#include "utils/multigpu_context.h"
 
 #define CHECK_CUDSS(x)                                                       \
     do {                                                                     \

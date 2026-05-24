@@ -646,6 +646,9 @@ class GPUvec {
         sync();
     }
 
+    T **getOwnedDoublePtr() { return d_vals_owned; }
+    T **getLocalDoublePtr() { return d_vals_local; }
+
     T *getPtr(int g) { return d_vals_owned[g]; }
     T *getLocalPtr(int g) { return d_vals_local[g]; }
     T *getRedPtr(int dst, int src) { return d_vals_red[pair_index(dst, src)]; }

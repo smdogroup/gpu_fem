@@ -54,7 +54,7 @@ From single-GPU fetiDP
             - [x] local: Vc_node_imap, Svv_rowp, Svv_nnzb, Svv_cols, Svv_rows, d_Svv_vals
             - [ ] prob also need global pattern of Svv later for CuDSSMG
     from setup_coarse_matrix_sparsity()
-        - [ ] user sets: MAX_NUM_VERTEX_PER_SUBDOMAIN (on constructor maybe or from splitting)
+        - [x] user sets: MAX_NUM_VERTEX_PER_SUBDOMAIN (on constructor maybe or from splitting)
         new method: build_Svv_maps()
             - [x] Svv_copy_nnzb, Svv_IEV_copyBlocks, Svv_Vc_copyBlocks
             - [x] d_Svv_IEV_copyBlocks, d_Svv_Vc_copyBlocks
@@ -102,7 +102,7 @@ From single-GPU fetiDP
     - [ ] add ctx->sync() in other places also?
 <!-- - [ ] sparseMatVec -->
 <!-- * sparseTransposeMatVec unused -->
-- [ ] create_direct_solvers
+- [x] create_direct_solvers
     * do this instead of set_inner_solvers
     * called during constructor
     * makes subdomainIE, subdomainI and S_VV coarse solvers with CuDSS
@@ -114,8 +114,14 @@ From single-GPU fetiDP
 - [ ] find_block_index
 utils
 - [ ] allocate_workspace (is this same as allocate_vecs now?)
-- [ ] clear_host_data
-- [ ] clear_structured_host_data
+    - [x] make SubdomainPartitioner class 
+    - [x] make part_IE, part_I partitions.. then vecs for these
+    - [x] make S_VV partition somehow? then vecs for these
+- [x] clear_host_data
+<!-- - [ ] clear_structured_host_data -->
+- [ ] make kernels for:
+    - [ ] add_multigpu_residual
+    - [ ] add_multigpu_fext
 
 For nonlinear + adjoint
 * ignore set_global_rhs

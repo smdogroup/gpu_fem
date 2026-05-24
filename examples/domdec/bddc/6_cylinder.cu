@@ -505,8 +505,8 @@ int main(int argc, char **argv) {
     printToVTK<Assembler, HostVec<T>>(assembler, h_soln, "out/cylinder_bddc.vtk");
 
     // compare to direct solver (the solution)
-    bool compare_direct = true;
-    // bool compare_direct = false;
+    // bool compare_direct = true;
+    bool compare_direct = false;
     if (compare_direct) {
         // and need it globally too..
         auto loads = assembler.createVarsVec();

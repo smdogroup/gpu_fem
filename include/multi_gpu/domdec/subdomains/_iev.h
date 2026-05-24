@@ -1,3 +1,3 @@
 #pragma once
 
-enum NodeClass { INTERIOR = 0, DIRICHLET_EDGE = 1, EDGE = 2, VERTEX = 3 };
+enum IEVNodeClass { IEV_INTERIOR = 0, IEV_DIRICHLET_EDGE = 1, IEV_EDGE = 2, IEV_VERTEX = 3 };

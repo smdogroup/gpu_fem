@@ -10,13 +10,16 @@
 #include "cuda_utils.h"
 #include "direct/cudss_mg_v2.h"
 #include "direct/cudss_subdomain.h"
+#include "domdec/subdomains/_iev.h"
 #include "element/shell/_shell.cuh"
 #include "matvec/gpumat.h"
 #include "matvec/gpuvec.h"
+#include "partition/subdomain_partitioner.h"
 #include "utils/multigpu_context.h"
 
 template <typename T, class Assembler_, class Partition, class IEVSplit>
 class MultiGPUBDDC_LUSolver {
+   public:
     using Assembler = Assembler_;
     using Director = typename Assembler::Director;
     using Basis = typename Assembler::Basis;
@@ -25,8 +28,10 @@ class MultiGPUBDDC_LUSolver {
     using Data = typename Phys::Data;
     using Quadrature = typename Basis::Quadrature;
 
-    using VEC = GPUvec<T, PARTITION>;
-    using MAT = GPUbsrmat<T, PARTITION>;
+    using Vec = GPUvec<T, Partition>;
+    using SDPartition = SubdomainGPUPartitioner<Partition>;
+    using SDVec = GPUvec<T, SDPartition>;
+    using Mat = GPUbsrmat<T, Partition>;
 
     static constexpr int32_t nodes_per_elem = Basis::num_nodes;
     static constexpr int32_t vars_per_node = Phys::vars_per_node;
@@ -35,12 +40,17 @@ class MultiGPUBDDC_LUSolver {
     static constexpr int32_t num_quad_pts = Quadrature::num_quad_pts;
 
     MultiGPUBDDC_LUSolver(MultiGPUContext *ctx_, Partition *part_, Assembler *assembler_, Mat *mat_,
-                          const IEVSplit &split_) ctx(ctx_),
-        part(part_), mat(mat_), cublasHandles(ctx_->cublasHandles),
-        cusparseHandles(ctx_->cusparseHandles), streams(ctx_->streams) {
+                          IEVSplit *split_)
+        : ctx(ctx_),
+          part(part_),
+          mat(mat_),
+          cublasHandles(ctx_->cublasHandles),
+          cusparseHandles(ctx_->cusparseHandles),
+          streams(ctx_->streams),
+          split(split_) {
         ngpus = ctx->ngpus;
-        num_elements = assembler.get_num_elements();
-        num_nodes = assembler.get_num_nodes();
+        num_elements = assembler->get_num_elements();
+        num_nodes = assembler->get_num_nodes();
         N = num_nodes * vars_per_node;
 
         block_dim = mat->getBlockDim();
@@ -49,8 +59,9 @@ class MultiGPUBDDC_LUSolver {
         d_xpts = assembler->getDeviceXpts();
         d_vars = assembler->getDeviceVars();
         d_loc_elem_components = assembler->getDeviceElemComponents();
-        d_compData = assembler->getDeviceCompData();
+        d_loc_comp_data = assembler->getDeviceCompData();
         assembler->getLocalDeviceBCs(n_owned_bcs, n_local_bcs, d_owned_bcs, d_local_bcs);
+        MAX_NUM_VERTEX_PER_SUBDOMAIN = split_->MAX_NUM_VERTEX_PER_SUBDOMAIN;
 
         // setup on construction (sparsity patterns, maps, etc.)
         import_splitting();
@@ -61,6 +72,7 @@ class MultiGPUBDDC_LUSolver {
         build_Svv_sparsity();
         build_Svv_maps();
         build_iev_bcs();
+        compute_reduced_partitions();
         allocate_vectors();
         create_cudss_solvers();
     }
@@ -68,7 +80,7 @@ class MultiGPUBDDC_LUSolver {
     void free() {
         // TBD
     }
-    int getLambdaSize() const { return ngam * block_dim; }
+    SDVec *createGamVec() { return new SDVec(ctx, part_gam, block_dim); }
     void set_print(bool print) {}
     void set_rel_tol(T rtol) {}
     void set_abs_tol(T atol) {}
@@ -78,6 +90,7 @@ class MultiGPUBDDC_LUSolver {
     int *get_IEV_conn(int gpu) { return d_IEV_elem_conn[gpu]; }
     T *get_IEV_xpts(int gpu) { return this->d_IEV_xpts[gpu]; }
     T *get_IEV_vars(int gpu) { return this->d_IEV_vars[gpu]; }
+    SDPartition *get_part_gam() { return part_gam; }
 
     void update_after_assembly(Vec *vars) {
         vars->copyTo(d_vars);
@@ -91,44 +104,39 @@ class MultiGPUBDDC_LUSolver {
     template <int elems_per_block = 8>
     void set_IEV_residual(T lambdaE, T lambdaI, Vec *vars) {
         // compute res_IEV(u_IEV) = lambdaE * fext_IEV - lambdaI * fint_IEV
-        addVec_globaltoIEV(1.0, xpts, 0.0, d_xpts_IEV, 3);
-        addVec_globaltoIEV(1.0, vars, 0.0, d_vars_IEV, block_dim);
+        addVec_globalToIEV(1.0, d_xpts, 0.0, d_IEV_xpts, 3);
+        addVec_globalToIEV(1.0, d_vars, 0.0, d_IEV_vars, block_dim);
         fint_IEV->zeroAll();
-        d_xpts_IEV->expandToLocal();
-        d_vars_IEV->expandToLocal();
+        d_IEV_xpts->expandToLocal();
+        d_IEV_vars->expandToLocal();
 
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
 
             int *loc_elem_comps = d_loc_elem_components[g];
-            int *loc_elem_conn_ptr = mat_IEV->getLocalElemConn(g);
+            int *loc_elem_conn_ptr = kmat_IEV->getLocalElemConn(g);
 
-            T *loc_xpts_ptr = d_xpts_IEV->getLocalPtr(g);
-            T *loc_vars_ptr = d_vars_IEV->getLocalPtr(g);
+            T *loc_xpts_ptr = d_IEV_xpts->getLocalPtr(g);
+            T *loc_vars_ptr = d_IEV_vars->getLocalPtr(g);
             Data *loc_comp_data_ptr = d_loc_comp_data[g];
             T *loc_fint_IEV = fint_IEV->getLocalPtr(g);
 
             dim3 block(num_quad_pts, elems_per_block);
             dim3 grid(this->num_elements);
-            k_add_multigpu_residual_fast<T, elems_per_block, ElemGroup>
+            k_add_multigpu_residual_fast<T, elems_per_block, Assembler>
                 <<<grid, block, 0, streams[g]>>>(IEV_nnodes[g], local_nelems[g], loc_elem_comps,
-                                                 loc_elem_conn_ptr, loc_xpts_ptr, loc_vars_ptr,
-                                                 loc_comp_data_ptr, loc_fint_IEV);
+                                                 loc_elem_conn_ptr, loc_elem_conn_ptr, loc_xpts_ptr,
+                                                 loc_vars_ptr, loc_comp_data_ptr, loc_fint_IEV);
         }
 
-        this->fint_IEV.apply_bcs(this->d_IEV_bcs);
-
-        T a = -lambdaI;
-        CHECK_CUBLAS(cublasDscal(this->cublasHandle, this->block_dim * this->IEV_nnodes, &a,
-                                 this->fint_IEV.getPtr(), 1));
-
-        this->fint_IEV.copyValuesTo(this->res_IEV);
-        a = lambdaE;
-        CHECK_CUBLAS(cublasDaxpy(this->cublasHandle, this->block_dim * this->IEV_nnodes, &a,
-                                 this->fext_IEV.getPtr(), 1, this->res_IEV.getPtr(), 1));
+        this->fint_IEV->apply_bcs(n_IEV_owned_bcs, d_IEV_owned_bcs, n_IEV_local_bcs,
+                                  d_IEV_local_bcs);
+        this->fint_IEV->scale(-lambdaI);
+        this->fint_IEV->copyTo(this->res_IEV);
+        res_IEV->axpy(lambdaE, fext_IEV);
     }
 
-    void get_lam_rhs(Vec *gam_rhs) {
+    void get_lam_rhs(SDVec *gam_rhs) {
         // gets rhs of interface BDDC system
         gam_rhs->zeroAll();
 
@@ -145,7 +153,7 @@ class MultiGPUBDDC_LUSolver {
         addVecIEVtoGam(1.0, f_IEV, 0.0, gam_rhs);
     }
 
-    void mat_vec(Vec *gam_in, Vec *gam_out) {
+    void mat_vec(SDVec *gam_in, SDVec *gam_out) {
         // gets K_{Gam,Gam}*x_{Gam} internal residual of interface BDDC system
         gam_out->zeroAll();
 
@@ -163,13 +171,13 @@ class MultiGPUBDDC_LUSolver {
         addVecIEVtoGam(1.0, f_IEV, 0.0, gam_out);
     }
 
-    bool solve(Vec *gam_rhs, Vec *gam, bool check_conv = false) {
+    bool solve(SDVec *gam_rhs, SDVec *gam, bool check_conv = false) {
         // gets preconditioner solve for interface BDDC system M_{gam}^{-1} * y_{Gam}
 
         // get coarse vertex (V) loads for later
         constexpr bool SCALED = true;
-        addVecGamtoIEV<SCALED>(gam_rhs, f_IEV, 1.0, 0.0);
-        addVecIEVtoVc<SCALED>(f_IEV, f_V, 1.0, 0.0);
+        addVecGamtoIEV<SCALED>(1.0, gam_rhs, 0.0, f_IEV);
+        addVecIEVtoVc<SCALED>(1.0, f_IEV, 0.0, f_V);
 
         // get IE load rhs with f_I = 0 and f_E neq 0 (only edge forces)
         addVecIEVtoIE(1.0, f_IEV, 0.0, f_IE);
@@ -180,9 +188,9 @@ class MultiGPUBDDC_LUSolver {
         solveSubdomainIE(f_IE, u_IE);
 
         // adjust coarse vertex (V) loads from IE solution
-        addVecIEtoIEV(1.0, u_IE, 0.0, u_IEV, 1.0, 0.0);
+        addVecIEtoIEV(1.0, u_IE, 0.0, u_IEV);
         kmat_IEV->mult(-1.0, u_IEV, 0.0, f_IEV);
-        addVecIEVtoVc(f_IEV, f_V, 1.0, 1.0);
+        addVecIEVtoVc(1.0, f_IEV, 1.0, f_V);
 
         // solve coarse vertex (V) problem using Schur complement system
         solveCoarse(f_V, u_V);
@@ -205,14 +213,14 @@ class MultiGPUBDDC_LUSolver {
         return false;
     }
 
-    void get_global_soln(Vec *gam_soln, Vec *soln) {
+    void get_global_soln(SDVec *gam_soln, Vec *soln) {
         // recover global solution from interface DOF
         soln->zeroAll();
 
         // add E and V values from interface (gam) to IEV soln and coarse vertex (V) soln
         addVecGamtoIEV(1.0, gam_soln, 0.0, u_IEV);
         const bool SCALED = true;
-        addVecIEVtoVc<SCALED>(1.0, u_IEV, 0.0, u_V, 1.0, 0.0);
+        addVecIEVtoVc<SCALED>(1.0, u_IEV, 0.0, u_V);
 
         // E + V already solved, so what remains is to solve the I nodes of each subdomain
         // compute the updated IEV then I residual (or remaining forces)
@@ -234,6 +242,45 @@ class MultiGPUBDDC_LUSolver {
         addGlobalSoln(u_IE, u_V, soln);
     }
 
+    template <class LoadMagnitude>
+    void add_subdomain_fext(const LoadMagnitude &load, T load_mag, T x_inplane_frac = 0.0) {
+        fext_IEV->zeroAll();
+        const int elems_per_block = 8;
+
+        for (int g = 0; g < ngpus; g++) {
+            CHECK_CUDA(cudaSetDevice(g));
+
+            int loc_num_nodes = d_IEV_xpts->getExpandedNodes(g);
+            int loc_nelems = part->getLocalNumElements(g);
+
+            // can't use Vec objects here since not same number of nodes?
+            // or I could create it from IEV_elem_conn partitioners? we'll see
+            T *loc_xpts_ptr = d_IEV_xpts->getLocalPtr(g);
+            T *load_fext_ptr = fext_IEV->getLocalPtr(g);
+            int *loc_elem_comps = d_loc_elem_components[g];
+            Data *loc_comp_data_ptr = d_loc_comp_data[g];
+
+            // local element connectivity, used for both rows and columns
+            int *loc_elem_conn_ptr = kmat_IEV->getLocalElemConn(g);
+            // int *loc_elem_ind_map = kmat_IEV->getLocalElemIndMap(g);
+            // T *loc_mat_vals = kmat_IEV->getLocalVals(g);
+
+            dim3 block(num_quad_pts, elems_per_block);
+            dim3 grid(loc_nelems);
+
+            k_add_multigpu_fext_fast<T, elems_per_block, Assembler, LoadMagnitude>
+                <<<grid, block, 0, streams[g]>>>(
+                    loc_nelems, load, loc_elem_comps, loc_elem_conn_ptr, loc_elem_conn_ptr,
+                    loc_xpts_ptr, loc_comp_data_ptr, load_mag, load_fext_ptr, x_inplane_frac);
+
+            CHECK_CUDA(cudaGetLastError());
+        }
+        ctx->sync();
+
+        fext_IEV->apply_bcs(n_IEV_owned_bcs, d_IEV_owned_bcs, n_IEV_local_bcs, d_IEV_local_bcs);
+        fext_IEV->copyTo(res_IEV);
+    }
+
    private:
     static int *copy_vec(const std::vector<int> &v) {
         if (v.empty()) return nullptr;
@@ -245,24 +292,24 @@ class MultiGPUBDDC_LUSolver {
 
     void import_splitting() {
         // sgpu = single GPU
-        sgpu_num_subdomains = split.num_subdomains;
+        sgpu_num_subdomains = split->num_subdomains;
 
         // Original/single-GPU splitting copied directly from split
-        sgpu_I_nnodes = split.I_nnodes;
-        sgpu_IE_nnodes = split.IE_nnodes;
-        sgpu_IEV_nnodes = split.IEV_nnodes;
-        sgpu_Vc_nnodes = split.Vc_nnodes;
-        sgpu_V_nnodes = split.V_nnodes;
-        sgpu_lam_nnodes = split.lam_nnodes;
+        sgpu_I_nnodes = split->I_nnodes;
+        sgpu_IE_nnodes = split->IE_nnodes;
+        sgpu_IEV_nnodes = split->IEV_nnodes;
+        sgpu_Vc_nnodes = split->Vc_nnodes;
+        sgpu_V_nnodes = split->V_nnodes;
+        sgpu_lam_nnodes = split->lam_nnodes;
 
-        sgpu_elem_sd_ind = copy_vec(split.elem_sd_ind);
-        sgpu_node_class_ind = copy_vec(split.node_class_ind);
-        sgpu_node_nsd = copy_vec(split.node_nsd);
+        sgpu_elem_sd_ind = copy_vec(split->elem_sd_ind);
+        sgpu_node_class_ind = copy_vec(split->node_class_ind);
+        sgpu_node_nsd = copy_vec(split->node_nsd);
 
-        sgpu_IEV_sd_ptr = copy_vec(split.IEV_sd_ptr);
-        sgpu_IEV_sd_ind = copy_vec(split.IEV_sd_ind);
-        sgpu_IEV_nodes = copy_vec(split.IEV_nodes);
-        sgpu_IEV_elem_conn = copy_vec(split.IEV_elem_conn);
+        sgpu_IEV_sd_ptr = copy_vec(split->IEV_sd_ptr);
+        sgpu_IEV_sd_ind = copy_vec(split->IEV_sd_ind);
+        sgpu_IEV_nodes = copy_vec(split->IEV_nodes);
+        sgpu_IEV_elem_conn = copy_vec(split->IEV_elem_conn);
 
         // d_sgpu_IEV_elem_conn =
         //     HostVec<int>(num_elements * nodes_per_elem, sgpu_IEV_elem_conn).createDeviceVec();
@@ -274,9 +321,9 @@ class MultiGPUBDDC_LUSolver {
 
         create_multigpu_splitting();
 
-        d_xpts_IEV = new Vec(ctx, part_IEV, block_dim);
-        d_vars_IEV = new Vec(ctx, part_IEV, block_dim);
-        mat_IEV = new Mat(ctx, part_IEV, block_dim);
+        d_IEV_xpts = new Vec(ctx, part_IEV, block_dim);
+        d_IEV_vars = new Vec(ctx, part_IEV, block_dim);
+        // mat_IEV = new Mat(ctx, part_IEV, block_dim);
     }
 
     void create_multigpu_splitting() {
@@ -335,18 +382,27 @@ class MultiGPUBDDC_LUSolver {
             num_subdomains[g] = subdomains.size();
         }
         sd_cts = new int[ngpus];
-        memset(sd_cts, 0, ngpus * sizeof(int));
-        red_subdomains = new int[ngpus];
+        std::memset(sd_cts, 0, ngpus * sizeof(int));
+
+        red_subdomains = new int *[ngpus];
+        std::memset(red_subdomains, 0, ngpus * sizeof(int *));
+
         for (int g = 0; g < ngpus; g++) {
-            red_subdomains[g] = new int[num_subdomains[g]];
             std::unordered_set<int> subdomains;
+
             for (int ered = 0; ered < local_nelems[g]; ered++) {
                 int s = elem_sd_ind[g][ered];
                 subdomains.insert(s);
             }
+
             std::vector<int> sd_vec(subdomains.begin(), subdomains.end());
-            for (int sred = 0; sred < sd_vec.size(); sred++) {
-                red_subdomains[g][sred] = s;
+            std::sort(sd_vec.begin(), sd_vec.end());
+
+            sd_cts[g] = static_cast<int>(sd_vec.size());
+            red_subdomains[g] = new int[sd_cts[g]];
+
+            for (int sred = 0; sred < sd_cts[g]; sred++) {
+                red_subdomains[g][sred] = sd_vec[sred];
             }
         }
 
@@ -373,12 +429,13 @@ class MultiGPUBDDC_LUSolver {
             for (int l = 0; l < local_nnodes[g]; l++) {
                 int n = part->h_local_nodes[g][l];
                 int node_class = sgpu_node_class_ind[n];
+                int nsd = sgpu_node_nsd[n];
                 node_class_ind[g][l] = node_class;
-                if (node_class == INTERIOR) {
+                if (node_class == IEV_INTERIOR) {
                     I_nnodes[g] += 1;
                     IE_nnodes[g] += 1;
                     IEV_nnodes[g] += 1;
-                } else if (node_class == EDGE) {
+                } else if (node_class == IEV_EDGE) {
                     lam_nnodes[g] += 1;
                     IE_nnodes[g] += nsd;
                     IEV_nnodes[g] += nsd;
@@ -398,9 +455,11 @@ class MultiGPUBDDC_LUSolver {
         // so just fill out these two arrays on each local GPU
         IEV_nodes = new int *[ngpus];
         IEV_loc_to_glob = new int *[ngpus];
+        // IEV_glob_to_loc = new int *[ngpus];
         for (int g = 0; g < ngpus; g++) {
             IEV_nodes[g] = new int[IEV_nnodes[g]];
             IEV_loc_to_glob[g] = new int[IEV_nnodes[g]];
+            // IEV_glob_to_loc[g] = new int[sgpu_IEV_nnodes];
         }
         int *IEV_cts = new int[ngpus];
         memset(IEV_cts, 0, ngpus * sizeof(int));
@@ -409,9 +468,21 @@ class MultiGPUBDDC_LUSolver {
             for (int iev = sgpu_IEV_sd_ptr[s]; iev < sgpu_IEV_sd_ptr[s + 1]; iev++) {
                 int n = sgpu_IEV_nodes[iev];
                 int iev_red = IEV_cts[gpu]++;
-                int n_red = part->global_to_local[g][n];
-                IEV_nodes[g][iev_red] = n_red;
-                IEV_loc_to_glob[g][iev_red] = iev;
+                int n_red = part->global_to_local[gpu][n];
+                IEV_nodes[gpu][iev_red] = n_red;
+                IEV_loc_to_glob[gpu][iev_red] = iev;
+                // IEV_glob_to_loc[gpu][iev] = iev_red;
+            }
+        }
+
+        // fill out IEV_sd_ptr
+        IEV_sd_ptr = new int *[ngpus];
+        for (int g = 0; g < ngpus; g++) {
+            memset(IEV_sd_ptr[g], 0, (num_subdomains[g] + 1) * sizeof(int));
+            for (int sred = 0; sred < num_subdomains[g]; sred++) {
+                int s = red_subdomains[g][sred];
+                int d_iev = sgpu_IEV_sd_ptr[s + 1] - sgpu_IEV_sd_ptr[s];
+                IEV_sd_ptr[g][sred + 1] = IEV_sd_ptr[g][sred] + d_iev;
             }
         }
 
@@ -448,8 +519,9 @@ class MultiGPUBDDC_LUSolver {
         // move IEV_elem_conn to device
         d_IEV_elem_conn = new int *[ngpus];
         for (int g = 0; g < ngpus; g++) {
-            d_IEV_elem_conn[g] =
-                HostVec<int>(local_nelems[g] * nodes_per_elem, IEV_elem_conn[g]).createDeviceVec();
+            d_IEV_elem_conn[g] = HostVec<int>(local_nelems[g] * nodes_per_elem, IEV_elem_conn[g])
+                                     .createDeviceVec()
+                                     .getPtr();
         }
     }
     void build_IE_I_V_maps() {
@@ -478,9 +550,9 @@ class MultiGPUBDDC_LUSolver {
             IE_general_edge[g] = new bool[IE_nnodes[g]];
 
             d_IE_interior[g] =
-                HostVec<int>(IE_nnodes[g], IE_interior[g]).createDeviceVec().getPtr();
+                HostVec<bool>(IE_nnodes[g], IE_interior[g]).createDeviceVec().getPtr();
             d_IE_general_edge[g] =
-                HostVec<int>(IE_nnodes[g], IE_general_edge[g]).createDeviceVec().getPtr();
+                HostVec<bool>(IE_nnodes[g], IE_general_edge[g]).createDeviceVec().getPtr();
             d_IE_nodes[g] = HostVec<int>(IE_nnodes[g], IE_nodes[g]).createDeviceVec().getPtr();
             d_IEVtoIE_imap[g] =
                 HostVec<int>(IE_nnodes[g], IEVtoIE_imap[g]).createDeviceVec().getPtr();
@@ -494,17 +566,19 @@ class MultiGPUBDDC_LUSolver {
             int IE_ind = 0;
             int I_ind = 0;
 
-            for (int iev = 0; iev < IEV_nnodes; iev++) {
+            for (int iev = 0; iev < IEV_nnodes[g]; iev++) {
                 int gnode = IEV_nodes[g][iev];
                 int cls = node_class_ind[g][gnode];
+                int node_class = node_class_ind[g][iev];
 
-                bool is_I = (cls == INTERIOR || cls == DIRICHLET_EDGE);
-                bool is_IE = is_I || cls == EDGE;
+                bool is_I = (cls == IEV_INTERIOR || cls == IEV_DIRICHLET_EDGE);
+                bool is_IE = is_I || cls == IEV_EDGE;
 
                 if (is_IE) {
-                    IE_interior[g][IE_ind] = node_class == INTERIOR || node_class == DIRICHLET_EDGE;
+                    IE_interior[g][IE_ind] =
+                        node_class == IEV_INTERIOR || node_class == IEV_DIRICHLET_EDGE;
                     IE_general_edge[g][IE_ind] =
-                        node_class == INTERIOR || node_class == DIRICHLET_EDGE;
+                        node_class == IEV_INTERIOR || node_class == IEV_DIRICHLET_EDGE;
                     IE_nodes[g][IE_ind] = gnode;
                     IEVtoIE_map[g][iev] = IE_ind;
                     IEVtoIE_imap[g][IE_ind] = iev;
@@ -541,7 +615,7 @@ class MultiGPUBDDC_LUSolver {
 
             for (int iev = 0; iev < IEV_nnodes[g]; iev++) {
                 int gnode = IEV_nodes[g][iev];
-                if (node_class_ind[g][gnode] == VERTEX) {
+                if (node_class_ind[g][gnode] == IEV_VERTEX) {
                     Vc_set.insert(gnode);
                 }
             }
@@ -556,15 +630,15 @@ class MultiGPUBDDC_LUSolver {
 
             std::vector<int> Vc_inodes(num_nodes, -1);
             for (int i = 0; i < (int)Vc_vec.size(); i++) {
-                Vc_inodes[g][Vc_vec[i]] = i;
+                Vc_inodes[Vc_vec[i]] = i;
             }
 
             int V_ind = 0;
             for (int iev = 0; iev < IEV_nnodes[g]; iev++) {
                 int gnode = IEV_nodes[g][iev];
-                if (node_class_ind[g][gnode] == VERTEX) {
+                if (node_class_ind[g][gnode] == IEV_VERTEX) {
                     IEVtoV_imap[g][V_ind] = iev;
-                    VctoV_imap[g][V_ind] = Vc_inodes[g][gnode];
+                    VctoV_imap[g][V_ind] = Vc_inodes[gnode];
                     V_ind++;
                 }
             }
@@ -578,13 +652,13 @@ class MultiGPUBDDC_LUSolver {
 
             int e = 0;
             for (int inode = 0; inode < part->local_nnodes[g]; inode++) {
-                if (node_class_ind[g][inode] == EDGE) {
-                    if (e < n_edge) gam_nodes[g][e++] = inode;
+                if (node_class_ind[g][inode] == IEV_EDGE) {
+                    if (e < n_edge[g]) gam_nodes[g][e++] = inode;
                 }
             }
 
             for (int i = 0; i < Vc_nnodes[g]; i++) {
-                gam_nodes[g][n_edge + i] = Vc_nodes[g][i];
+                gam_nodes[g][n_edge[g] + i] = Vc_nodes[g][i];
             }
 
             d_Vc_nodes[g] = HostVec<int>(Vc_nnodes[g], Vc_nodes[g]).createDeviceVec().getPtr();
@@ -593,7 +667,7 @@ class MultiGPUBDDC_LUSolver {
 
     void build_IEV_sparsity() {
         // build IEV kmat and then extract host matrix pointers out of it
-        kmat_IEV = Mat(ctx, part_IEV, block_dim);
+        kmat_IEV = new Mat(ctx, part_IEV, block_dim);
         d_IEV_vals = new DeviceVec<T>[ngpus];
         IEV_rowp = new int *[ngpus];
         IEV_cols = new int *[ngpus];
@@ -638,11 +712,11 @@ class MultiGPUBDDC_LUSolver {
 
             int IE_row = 0;
             int I_row = 0;
-            for (int row = 0; row < IEV_nnodes; row++) {
+            for (int row = 0; row < IEV_nnodes[g]; row++) {
                 int gnode_row = IEV_nodes[g][row];
                 int class_row = node_class_ind[g][gnode_row];
-                bool typeI_row = (class_row == INTERIOR || class_row == DIRICHLET_EDGE);
-                bool typeIE_row = (typeI_row || class_row == EDGE);
+                bool typeI_row = (class_row == IEV_INTERIOR || class_row == IEV_DIRICHLET_EDGE);
+                bool typeIE_row = (typeI_row || class_row == IEV_EDGE);
 
                 if (typeI_row) I_rowp[g][I_row + 1] = I_rowp[g][I_row];
                 if (typeIE_row) IE_rowp[g][IE_row + 1] = IE_rowp[g][IE_row];
@@ -651,8 +725,8 @@ class MultiGPUBDDC_LUSolver {
                     int col = IEV_cols[g][jp];
                     int gnode_col = IEV_nodes[g][col];
                     int class_col = node_class_ind[g][gnode_col];
-                    bool typeI_col = (class_col == INTERIOR || class_col == DIRICHLET_EDGE);
-                    bool typeIE_col = (typeI_col || class_col == EDGE);
+                    bool typeI_col = (class_col == IEV_INTERIOR || class_col == IEV_DIRICHLET_EDGE);
+                    bool typeIE_col = (typeI_col || class_col == IEV_EDGE);
 
                     if (typeI_row && typeI_col) I_rowp[g][I_row + 1]++;
                     if (typeIE_row && typeIE_col) IE_rowp[g][IE_row + 1]++;
@@ -704,7 +778,7 @@ class MultiGPUBDDC_LUSolver {
             // also there are no permutations anymore (since CuDSS does reordering)
             for (int i = 0; i < IE_nnodes[g]; i++) {
                 for (int jp = IE_rowp[g][i]; jp < IE_rowp[g][i + 1]; jp++) {
-                    int j = IE_cols[jp];
+                    int j = IE_cols[g][jp];
                     // find equivalent nz block of IEV rowp
                     int i_IEV = IEVtoIE_imap[g][i];
                     int j_IEV = IEVtoIE_imap[g][j];
@@ -747,7 +821,7 @@ class MultiGPUBDDC_LUSolver {
             // also there are no permutations anymore (since CuDSS does reordering)
             for (int i = 0; i < I_nnodes[g]; i++) {
                 for (int jp = I_rowp[g][i]; jp < I_rowp[g][i + 1]; jp++) {
-                    int j = I_cols[jp];
+                    int j = I_cols[g][jp];
                     // find equivalent nz block of IEV rowp
                     int i_IEV = IEVtoI_imap[g][i];
                     int j_IEV = IEVtoI_imap[g][j];
@@ -798,6 +872,7 @@ class MultiGPUBDDC_LUSolver {
                 for (int ielem = 0; ielem < local_nelems[g]; ielem++) {
                     // TODO : need to somehow get this in local node numbers? (cause loc_elem_conn
                     // isn't state yet)
+                    int *loc_elem_conn = kmat_IEV->getLocalElemConn(g);
                     int *local_nodes = &loc_elem_conn[nodes_per_elem * ielem];
                     int j_subdomain = elem_sd_ind[g][ielem];
                     if (i_subdomain != j_subdomain) continue;
@@ -805,8 +880,8 @@ class MultiGPUBDDC_LUSolver {
                     for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
                         int gnode = local_nodes[lnode];
                         int node_class = node_class_ind[g][gnode];
-                        if (node_class == VERTEX) {
-                            int vnode = Vc_node_imap[gnode];
+                        if (node_class == IEV_VERTEX) {
+                            int vnode = Vc_node_imap[g][gnode];
                             if (vnode >= 0) {
                                 sd_Vc_nodeset.insert(vnode);
                             }
@@ -837,16 +912,16 @@ class MultiGPUBDDC_LUSolver {
             for (int i = 0; i < Vc_nnodes[g]; i++) {
                 Svv_rowp[g][i + 1] = Svv_rowp[g][i] + Svv_rowcts[i];
             }
-            Svv_nnzb[g] = Svv_row[g] p[Vc_nnodes];
+            Svv_nnzb[g] = Svv_rowp[g][Vc_nnodes[g]];
 
             // fill cols
             Svv_cols[g] = new int[Svv_nnzb[g]];
             memset(Svv_cols[g], 0, Svv_nnzb[g] * sizeof(int));
 
-            for (int i = 0; i < Vc_nnodes; i++) {
-                int jp = Svv_rowp[i];
+            for (int i = 0; i < Vc_nnodes[g]; i++) {
+                int jp = Svv_rowp[g][i];
                 for (int j : Svv_adj[i]) {
-                    Svv_cols[jp++] = j;
+                    Svv_cols[g][jp++] = j;
                 }
 
                 // optional but recommended: sort each row
@@ -875,14 +950,14 @@ class MultiGPUBDDC_LUSolver {
             for (int IEV_row = 0; IEV_row < IEV_nnodes[g]; IEV_row++) {
                 int glob_row = IEV_nodes[g][IEV_row];
                 int row_class = node_class_ind[g][glob_row];
-                if (row_class != VERTEX) continue;
+                if (row_class != IEV_VERTEX) continue;
                 int Vc_row = Vc_node_imap[g][glob_row];
 
                 for (int jp = IEV_rowp[g][IEV_row]; jp < IEV_rowp[g][IEV_row + 1]; jp++) {
                     int IEV_col = IEV_cols[g][jp];
                     int glob_col = IEV_nodes[g][IEV_col];
                     int col_class = node_class_ind[g][glob_col];
-                    if (col_class == VERTEX) {
+                    if (col_class == IEV_VERTEX) {
                         int Vc_col = Vc_node_imap[g][glob_col];
                         for (int kp = Svv_rowp[g][Vc_row]; kp < Svv_rowp[g][Vc_row + 1]; kp++) {
                             int k = Svv_cols[g][kp];
@@ -909,11 +984,11 @@ class MultiGPUBDDC_LUSolver {
         d_IEVtoSVV_blocks = new int **[ngpus];
 
         for (int g = 0; g < ngpus; g++) {
-            IEVset_nnzb[g] = new int[MAX_NUM_VERTEX_PER_SUBDOMAN];
-            IEVtoSVV_nnzb[g] = new int[MAX_NUM_VERTEX_PER_SUBDOMAN];
-            d_IEVset_blocks[g] = new int *[MAX_NUM_VERTEX_PER_SUBDOMAN];
-            d_IEVout_blocks[g] = new int *[MAX_NUM_VERTEX_PER_SUBDOMAN];
-            d_IEVtoSVV_blocks[g] = new int *[MAX_NUM_VERTEX_PER_SUBDOMAN];
+            IEVset_nnzb[g] = new int[MAX_NUM_VERTEX_PER_SUBDOMAIN];
+            IEVtoSVV_nnzb[g] = new int[MAX_NUM_VERTEX_PER_SUBDOMAIN];
+            d_IEVset_blocks[g] = new int *[MAX_NUM_VERTEX_PER_SUBDOMAIN];
+            d_IEVout_blocks[g] = new int *[MAX_NUM_VERTEX_PER_SUBDOMAIN];
+            d_IEVtoSVV_blocks[g] = new int *[MAX_NUM_VERTEX_PER_SUBDOMAIN];
 
             // CONSTRUCT coarse Schur complement mat-invmat-mat maps
             for (int k = 0; k < MAX_NUM_VERTEX_PER_SUBDOMAIN; k++) {
@@ -928,18 +1003,18 @@ class MultiGPUBDDC_LUSolver {
             std::vector<int> IEVout_blocks_host[MAX_NUM_VERTEX_PER_SUBDOMAIN];
             std::vector<int> IEVtoSVV_blocks_host[MAX_NUM_VERTEX_PER_SUBDOMAIN];
 
-            for (int isd = 0; isd < num_subdomains; isd++) {
+            for (int isd = 0; isd < num_subdomains[g]; isd++) {
                 std::vector<int> sd_iev_vertex_blocks;
                 std::vector<int> sd_vc_nodes;
 
-                for (int jp = IEV_sd_ptr[isd]; jp < IEV_sd_ptr[isd + 1]; jp++) {
-                    int gnode = IEV_nodes[jp];
-                    if (node_class_ind[gnode] == VERTEX) {
+                for (int jp = IEV_sd_ptr[g][isd]; jp < IEV_sd_ptr[g][isd + 1]; jp++) {
+                    int gnode = IEV_nodes[g][jp];
+                    if (node_class_ind[g][gnode] == IEV_VERTEX) {
                         sd_iev_vertex_blocks.push_back(jp);
 
                         int vc_node = -1;
-                        for (int j = 0; j < Vc_nnodes; j++) {
-                            if (Vc_nodes[j] == gnode) {
+                        for (int j = 0; j < Vc_nnodes[g]; j++) {
+                            if (Vc_nodes[g][j] == gnode) {
                                 vc_node = j;
                                 break;
                             }
@@ -967,7 +1042,7 @@ class MultiGPUBDDC_LUSolver {
                 for (int k = 0; k < nsv; k++) {
                     const int iev_block = sd_iev_vertex_blocks[k];
                     const int vc_row = sd_vc_nodes[k];
-                    const int vc_row_perm = SVV_iperm[vc_row];
+                    // const int vc_row_perm = SVV_iperm[vc_row];
 
                     IEVset_blocks_host[k].push_back(iev_block);
 
@@ -976,9 +1051,9 @@ class MultiGPUBDDC_LUSolver {
                         const int vc_col = sd_vc_nodes[kk];
 
                         int svv_block = -1;
-                        for (int jp = Svv_rowp[vc_row_perm]; jp < Svv_rowp[vc_row_perm + 1]; jp++) {
-                            int m_perm = Svv_cols[jp];
-                            int m = SVV_perm[m_perm];
+                        for (int jp = Svv_rowp[g][vc_row]; jp < Svv_rowp[g][vc_row + 1]; jp++) {
+                            int m = Svv_cols[g][jp];
+                            // int m = SVV_perm[m_perm];
                             if (m == vc_col) {
                                 svv_block = jp;
                                 break;
@@ -1004,7 +1079,7 @@ class MultiGPUBDDC_LUSolver {
                 IEVset_nnzb[g][k] = static_cast<int>(IEVset_blocks_host[k].size());
                 IEVtoSVV_nnzb[g][k] = static_cast<int>(IEVtoSVV_blocks_host[k].size());
 
-                if ((int)IEVout_blocks_host[k].size() != IEVtoSVV_nnzb[k]) {
+                if ((int)IEVout_blocks_host[k].size() != IEVtoSVV_nnzb[g][k]) {
                     printf("ERROR: slot %d mismatch: IEVout size %d != IEVtoSVV size %d\n", k,
                            (int)IEVout_blocks_host[k].size(), IEVtoSVV_nnzb[k]);
                     exit(-1);
@@ -1033,8 +1108,8 @@ class MultiGPUBDDC_LUSolver {
     }
     void build_iev_bcs() {
         assembler->getLocalDeviceBCs(n_owned_bcs, n_local_bcs, d_owned_bcs, d_local_bcs);
-        n_iev_owned_bcs = new int[ngpus];
-        n_iev_local_bcs = new int[ngpus];
+        n_IEV_owned_bcs = new int[ngpus];
+        n_IEV_local_bcs = new int[ngpus];
         d_IEV_owned_bcs = new int *[ngpus];
         d_IEV_local_bcs = new int *[ngpus];
         for (int g = 0; g < ngpus; g++) {
@@ -1084,6 +1159,17 @@ class MultiGPUBDDC_LUSolver {
         }
     }
 
+    void compute_reduced_partitions() {
+        // TBD : do these ones need diff partitioner not part_IEV?
+        // or they need to be double pointers? prob double pointers..
+
+        // build reduced connectivities for each first..
+        part_IE = new SDPartition(ngpus, num_nodes, IE_nnodes, IE_nodes, IEV_nodes, part_IEV);
+        part_I = new SDPartition(ngpus, num_nodes, I_nnodes, I_nodes, IEV_nodes, part_IEV);
+        part_V = new SDPartition(ngpus, num_nodes, Vc_nnodes, Vc_nodes, IEV_nodes, part_IEV);
+        part_gam = new SDPartition(ngpus, num_nodes, ngam, gam_nodes, IEV_nodes, part_IEV);
+    }
+
     void allocate_vectors() {
         d_IEV_xpts = new Vec(ctx, part_IEV, block_dim);
         d_IEV_vars = new Vec(ctx, part_IEV, block_dim);
@@ -1094,39 +1180,27 @@ class MultiGPUBDDC_LUSolver {
         u_IEV = new Vec(ctx, part_IEV, block_dim);
         temp_IEV = new Vec(ctx, part_IEV, block_dim);
 
-        // TBD : do these ones need diff partitioner not part_IEV?
-        // or they need to be double pointers? prob double pointers..
-
-        f_IE = new T *[ngpus];
-        u_IE = new T *[ngpus];
-        f_I = new T *[ngpus];
-        u_I = new T *[ngpus];
-        f_V = new T *[ngpus];
-        u_V = new T *[ngpus];
-        temp_lam = new T *[ngpus];
-        temp_lam2 = new T *[ngpus];
-        d_coarse_vars = new T *[ngpus];
-        for (int g = 0; g < ngpus; g++) {
-            f_IE[g] = DeviceVec<T>(block_dim * IE_nnodes[g]);
-            u_IE[g] = DeviceVec<T>(block_dim * IE_nnodes[g]);
-            f_I[g] = DeviceVec<T>(block_dim * I_nnodes[g]);
-            u_I[g] = DeviceVec<T>(block_dim * I_nnodes[g]);
-            f_V[g] = DeviceVec<T>(block_dim * Vc_nnodes[g]);
-            u_V[g] = DeviceVec<T>(block_dim * Vc_nnodes[g]);
-            temp_lam[g] = DeviceVec<T>(block_dim * lam_nnodes[g]);
-            temp_lam2[g] = DeviceVec<T>(block_dim * lam_nnodes[g]);
-            d_coarse_vars[g] = DeviceVec<T>(block_dim * Vc_nnodes[g]);
-        }
+        f_IE = new SDVec(ctx, part_IE, block_dim);
+        u_IE = new SDVec(ctx, part_IE, block_dim);
+        f_I = new SDVec(ctx, part_I, block_dim);
+        u_I = new SDVec(ctx, part_I, block_dim);
+        f_V = new SDVec(ctx, part_V, block_dim);
+        u_V = new SDVec(ctx, part_V, block_dim);
+        temp_lam = new SDVec(ctx, part_gam, block_dim);
+        temp_lam2 = new SDVec(ctx, part_gam, block_dim);
+        d_coarse_vars = new SDVec(ctx, part_V, block_dim);
     }
 
     void clear_host_data() {}
 
     void assemble_subdomains() {
-        addVec_globalToIEV(1.0, d_xpts, 0.0, d_xpts_IEV, 3);
-        addVec_globalToIEV(1.0, d_vars, 0.0, d_vars_IEV, block_dim);
+        addVec_globalToIEV(1.0, d_xpts, 0.0, d_IEV_xpts, 3);
+        addVec_globalToIEV(1.0, d_vars, 0.0, d_IEV_vars, block_dim);
 
         kmat_IEV->zeroValues();
         add_IEV_jacobian();
+        // fext_IEV->zeroValues();
+        // add_subdomain_fext();
 
         // TODO : something like this here.. but for each GPU matrix..
         apply_IEV_bcs();
@@ -1141,10 +1215,11 @@ class MultiGPUBDDC_LUSolver {
     }
 
     void add_IEV_jacobian() {
-        int cols_per_elem = 24;  // for 1st order element
+        const int cols_per_elem = 24;  // for 1st order element
+        const int elems_per_block = 1;
 
-        d_xpts_IEV->expandToLocal();
-        d_vars_IEV->expandToLocal();
+        d_IEV_xpts->expandToLocal();
+        d_IEV_vars->expandToLocal();
 
         dim3 block(num_quad_pts, cols_per_elem, elems_per_block);
         int elem_cols_per_block = cols_per_elem * elems_per_block;
@@ -1152,75 +1227,33 @@ class MultiGPUBDDC_LUSolver {
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
 
-            int loc_num_nodes = d_xpts_IEV->getExpandedNodes(g);
+            int loc_num_nodes = d_IEV_xpts->getExpandedNodes(g);
             int loc_nelems = part->getLocalNumElements(g);
 
             // can't use Vec objects here since not same number of nodes?
             // or I could create it from IEV_elem_conn partitioners? we'll see
-            T *loc_xpts_ptr = d_xpts_IEV->getLocalPtr(g);
-            T *loc_vars_ptr = d_vars_IEV->getLocalPtr(g);
+            T *loc_xpts_ptr = d_IEV_xpts->getLocalPtr(g);
+            T *loc_vars_ptr = d_IEV_vars->getLocalPtr(g);
             int *loc_elem_comps = d_loc_elem_components[g];
             Data *loc_comp_data_ptr = d_loc_comp_data[g];
 
             // local element connectivity, used for both rows and columns
-            int *loc_elem_conn_ptr = mat_IEV->getLocalElemConn(g);
-            int *loc_elem_ind_map = mat_IEV->getLocalElemIndMap(g);
-            T *loc_mat_vals = mat_IEV->getLocalVals(g);
+            int *loc_elem_conn_ptr = kmat_IEV->getLocalElemConn(g);
+            int *loc_elem_ind_map = kmat_IEV->getLocalElemIndMap(g);
+            T *loc_mat_vals = kmat_IEV->getLocalVals(g);
 
             int nblocks =
                 (loc_nelems * cols_per_elem + elem_cols_per_block - 1) / elem_cols_per_block;
 
-            dim3 grid(nblocks);
+            dim3 grid(nblocks), block(32);
 
-            k_add_multigpu_jacobian_fast<T, elems_per_block, ElemGroup>
+            k_add_multigpu_jacobian_fast<T, elems_per_block, Assembler>
                 <<<grid, block, 0, streams[g]>>>(
                     loc_num_nodes, loc_nelems, cols_per_elem, loc_elem_comps, loc_elem_conn_ptr,
                     loc_xpts_ptr, loc_vars_ptr, loc_comp_data_ptr, loc_elem_ind_map, loc_mat_vals);
 
             CHECK_CUDA(cudaGetLastError());
         }
-    }
-
-    template <class LoadMagnitude>
-    void add_subdomain_fext(const LoadMagnitude &load, T load_mag, T x_inplane_frac = 0.0) {
-        fext_IEV->zeroAll();
-        int elems_per_block = 8;
-        dim3 block(num_quad_pts, elems_per_block);
-        dim3 grid(num_elements);
-
-        for (int g = 0; g < ngpus; g++) {
-            CHECK_CUDA(cudaSetDevice(g));
-
-            int loc_num_nodes = d_xpts_IEV->getExpandedNodes(g);
-            int loc_nelems = part->getLocalNumElements(g);
-
-            // can't use Vec objects here since not same number of nodes?
-            // or I could create it from IEV_elem_conn partitioners? we'll see
-            T *loc_xpts_ptr = d_xpts_IEV->getLocalPtr(g);
-            T *load_fext_ptr = fext_IEV->getLocalPtr(g);
-            int *loc_elem_comps = d_loc_elem_components[g];
-            Data *loc_comp_data_ptr = d_loc_comp_data[g];
-
-            // local element connectivity, used for both rows and columns
-            int *loc_elem_conn_ptr = mat_IEV->getLocalElemConn(g);
-            int *loc_elem_ind_map = mat_IEV->getLocalElemIndMap(g);
-            T *loc_mat_vals = mat_IEV->getLocalVals(g);
-
-            int nblocks =
-                (loc_nelems * cols_per_elem + elem_cols_per_block - 1) / elem_cols_per_block;
-
-            dim3 grid(nblocks);
-
-            k_add_multigpu_fext_fast<T, elems_per_block, ElemGroup><<<grid, block, 0, streams[g]>>>(
-                loc_nelems, load, loc_elem_comps, loc_elem_conn_ptr, loc_xpts_ptr,
-                loc_comp_data_ptr, load_mag, load_fext_ptr, x_inplane_frac);
-
-            CHECK_CUDA(cudaGetLastError());
-        }
-        ctx->sync();
-
-        fext_IEV->apply_bcs(n_IEV_owned_bcs, d_IEV_owned_bcs, n_IEV_local_bcs, d_IEV_local_bcs);
-        fext_IEV->copyTo(res_IEV);
     }
 
     void assemble_coarse_problem() {
@@ -1301,13 +1334,13 @@ class MultiGPUBDDC_LUSolver {
 
     void create_cudss_solvers() {
         // build Svv as a GPUbsrmat
-        build_Svv_gpumat();
+        // build_Svv_gpumat();
 
-        subdomain_IE_solver = new CudssSubdomainBsrSolve<T, Partition>(
-            ctx, nnodes, block_dim, IE_rowp, IE_cols, IE_nnzb, d_IE_vals);
+        subdomain_IE_solver = new CudssSubdomainBsrSolve<T>(ctx, num_nodes, block_dim, IE_rowp,
+                                                            IE_cols, IE_nnzb, d_IE_vals);
 
-        subdomain_I_solver = new CudssSubdomainBsrSolve<T, Partition>(
-            ctx, nnodes, block_dim, I_rowp, I_cols, I_nnzb, d_I_vals);
+        subdomain_I_solver = new CudssSubdomainBsrSolve<T>(ctx, num_nodes, block_dim, I_rowp,
+                                                           I_cols, I_nnzb, d_I_vals);
 
         // optional: alternate constructors to build an Svv_mat despite not having elem conn?
         // Svv_part = new LightPartitioner(ctx, sgpu_Vc_nnodes, Vc_nodes);
@@ -1322,11 +1355,16 @@ class MultiGPUBDDC_LUSolver {
     //     // TODO : how to best do this? alternate constructor?
     // }
 
-    void solveSubdomainIE(Vec *rhs_in, Vec *sol_out) {
-        subdomain_IE_solver->solve(rhs_in, sol_out);
+    void solveSubdomainIE(SDVec *rhs_in, SDVec *sol_out) {
+        subdomain_IE_solver->solve(rhs_in->getLocalDoublePtr(), sol_out->getLocalDoublePtr());
     }
-    void solveSubdomainI(Vec *rhs_in, Vec *sol_out) { subdomain_I_solver->solve(rhs_in, sol_out); }
-    void solveCoarse(Vec *rhs_in, Vec *sol_out) { Svv_solver->solve(rhs_in, sol_out); }
+    void solveSubdomainI(SDVec *rhs_in, SDVec *sol_out) {
+        subdomain_I_solver->solve(rhs_in->getLocalDoublePtr(), sol_out->getLocalDoublePtr());
+    }
+    void solveCoarse(SDVec *rhs_in, SDVec *sol_out) {
+        // TODO : prob shouldn't be using double pointers  here.. TBD
+        Svv_solver->solve(rhs_in->getLocalDoublePtr(), sol_out->getLocalDoublePtr());
+    }
 
     void setVec_IEVtoV_vals(Vec *vec_IEV, int irow, T val) {
         for (int g = 0; g < ngpus; g++) {
@@ -1345,7 +1383,7 @@ class MultiGPUBDDC_LUSolver {
         }
     }
 
-    void addMat_IEVtoV_vals(const int icol, Vec *hvec) {
+    void addMat_IEVtoV_vals(const int icol, SDVec *hvec) {
         // helps assembly of S_VV schur complement matrix on each local GPU partition
 
         for (int g = 0; g < ngpus; g++) {
@@ -1366,12 +1404,6 @@ class MultiGPUBDDC_LUSolver {
             CHECK_CUDA(cudaGetLastError());
         }
     }
-
-    void zeroInteriorIE(Vec *x) {}
-    template <bool SCALED = false>
-    void addVecIEVtoGam(T alpha, const Vec *vec_IEV, T beta, Vec *vec_gam) {}
-    template <bool SCALED = false>
-    void addVecGamtoIEV(T alpha, const Vec *vec_gam, T beta, Vec *vec_IEV) {}
 
     template <bool scaled = false>
     void addVec_globalToIEV(T a, Vec *x_global, T b, Vec *y_iev, int vars_per_node_in) {
@@ -1409,7 +1441,7 @@ class MultiGPUBDDC_LUSolver {
         addVecVctoIEV(1.0, u_V, 1.0, y_iev, vars_per_node_in);
     }
 
-    void addVecIEVtoIE(T a, const Vec *x, T b, Vec *y) {
+    void addVecIEVtoIE(T a, Vec *x, T b, SDVec *y) {
         y->scale(b);
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
@@ -1424,7 +1456,7 @@ class MultiGPUBDDC_LUSolver {
         }
     }
 
-    void addVecIEVtoI(T a, const Vec *x, T b, Vec *y) {
+    void addVecIEVtoI(T a, Vec *x, T b, SDVec *y) {
         y->scale(b);
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
@@ -1439,13 +1471,13 @@ class MultiGPUBDDC_LUSolver {
         }
     }
 
-    void addVecIEtoI(T a, const Vec *x, T b, Vec *y) {
+    void addVecIEtoI(T a, SDVec *x, T b, SDVec *y) {
         addVecIEtoIEV(x, temp_IEV, a, 0.0);
         addVecIEVtoI(temp_IEV, y, 1.0, b);
     }
 
     template <bool scaled = false>
-    void addVecIEVtoVc(T a, const Vec *x, T b, Vec *y) {
+    void addVecIEVtoVc(T a, Vec *x, T b, SDVec *y) {
         y->scale(b);
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
@@ -1467,7 +1499,7 @@ class MultiGPUBDDC_LUSolver {
         }
     }
 
-    void addVecGamtoIE(T a, const Vec *gam, T b, Vec *vec_IE) {
+    void addVecGamtoIE(T a, SDVec *gam, T b, SDVec *vec_IE) {
         vec_IE->scale(b);
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
@@ -1482,7 +1514,7 @@ class MultiGPUBDDC_LUSolver {
         }
     }
 
-    void addVecIEtoIEV(T a, const Vec *x, T b, Vec *y, int vars_per_node = -1) {
+    void addVecIEtoIEV(T a, SDVec *x, T b, Vec *y, int vars_per_node = -1) {
         y->scale(b);
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
@@ -1497,27 +1529,26 @@ class MultiGPUBDDC_LUSolver {
             CHECK_CUDA(cudaGetLastError());
         }
     }
-    void addVecItoIEV(T a, const Vec *x, T b, Vec *y) {
+    void addVecItoIEV(T a, SDVec *x, T b, Vec *y) {
         y->scale(b);
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
             T *loc_x = x->getLocalPtr(g);
             T *loc_y = y->getLocalPtr(g);
 
-            if (vars_per_node == -1) vars_per_node = block_dim;
-            int nvals = I_nnodes[g] * vars_per_node;
+            int nvals = I_nnodes[g] * block_dim;
             dim3 block(32), grid((nvals + 31) / 32);
             k_addVecSmallerIn<T><<<grid, block, 0, streams[g]>>>(I_nnodes[g], vars_per_node,
                                                                  d_IEVtoI_imap[g], loc_x, loc_y, a);
             CHECK_CUDA(cudaGetLastError());
         }
     }
-    void addVecItoIE(T a, const Vec *x, T b, Vec *y) {
+    void addVecItoIE(T a, SDVec *x, T b, SDVec *y) {
         addVecItoIEV(a, x, 0.0, temp_IEV);
         addVecIEVtoIE(1.0, temp_IEV, b, y);
     }
     template <bool scaled = false>
-    void addVecVctoIEV(T a, const Vec *x, T b, Vec *y, int vars_per_node = -1) {
+    void addVecVctoIEV(T a, SDVec *x, T b, Vec *y, int vars_per_node = -1) {
         x->copyTo(temp_V);
         y->scale(b);
         for (int g = 0; g < ngpus; g++) {
@@ -1542,7 +1573,7 @@ class MultiGPUBDDC_LUSolver {
             CHECK_CUDA(cudaGetLastError());
         }
     }
-    void addVecIEtoGam(T a, const Vec *vec_IE, T b, Vec *gam) {
+    void addVecIEtoGam(T a, SDVec *vec_IE, T b, SDVec *gam) {
         gam->scale(b);
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
@@ -1556,9 +1587,9 @@ class MultiGPUBDDC_LUSolver {
             CHECK_CUDA(cudaGetLastError());
         }
     }
-    void zeroInteriorIE(Vec *x) {
+    void zeroInteriorIE(SDVec *x) {
         // TODO : need this?
-        x->expandFromLocal();
+        x->expandToLocal();
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
             T *loc_x = x->getLocalPtr(g);
@@ -1572,7 +1603,7 @@ class MultiGPUBDDC_LUSolver {
         // TODO : need this?
         x->reduceFromLocal();
     }
-    void addGlobalSoln(const Vec *u_IE, const Vec *u_V, Vec *soln) {
+    void addGlobalSoln(SDVec *u_IE, SDVec *u_V, Vec *soln) {
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
             T *loc_uIE = u_IE->getLocalPtr(g);
@@ -1594,7 +1625,7 @@ class MultiGPUBDDC_LUSolver {
     }
 
     template <bool SCALED = false>
-    void addVecIEVtoGam(T alpha, const Vec *vec_IEV, T beta, Vec *vec_gam) {
+    void addVecIEVtoGam(T alpha, Vec *vec_IEV, T beta, SDVec *vec_gam) {
         vec_gam->scale(beta);
 
         // add IEV to E part of Gam first (then V later)
@@ -1604,7 +1635,7 @@ class MultiGPUBDDC_LUSolver {
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
             int edge_size = lam_nnodes[g] * block_dim;
-            T *loc_temp_lam = temp_lam[g].getPtr();  // DeviceVec<T> array
+            T *loc_temp_lam = temp_lam->getPtr(g);  // DeviceVec<T> array
             if constexpr (SCALED) {
                 dim3 block(32), grid((edge_size + 31) / 32);
                 k_subdomain_normalize_vec_inout<T><<<grid, block, 0, streams[g]>>>(
@@ -1624,9 +1655,10 @@ class MultiGPUBDDC_LUSolver {
 
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
-            T *loc_temp_V = temp_V[g].getPtr();  // DeviceVec<T> array
+            T *loc_temp_V = temp_V->getLocalPtr(g);  // DeviceVec<T> array
             T *loc_vec_gam = vec_gam->getLocalPtr(g);
-            a = 1.0;
+            T a = 1.0;
+            int edge_size = lam_nnodes[g] * block_dim;
             int V_size = Vc_nnodes[g] * block_dim;
             CHECK_CUBLAS(cublasDaxpy(cublasHandles[g], V_size, &a, loc_temp_V, 1,
                                      &loc_vec_gam[edge_size], 1));
@@ -1639,20 +1671,15 @@ class MultiGPUBDDC_LUSolver {
     }
 
     template <bool SCALED = false>
-    void addVecGamtoIEV(T alpha, const Vec *vec_gam, T beta, Vec *vec_IEV) {
+    void addVecGamtoIEV(T alpha, SDVec *vec_gam, T beta, Vec *vec_IEV) {
         vec_IEV->scale(beta);
-        for (int g = 0; g < ngpus; g++) {
-            CHECK_CUDA(cudaSetDevice(g));
-            // zero DeviceVec<T> arrays
-            temp_lam[g].zeroValues();
-            temp_V[g].zeroValues();
-            CHECK_CUDA(cudaGetLastError());
-        }
+        temp_lam->zeroAll();
+        temp_V->zeroAll();
 
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
             int edge_size = lam_nnodes[g] * block_dim;
-            T *loc_temp_lam = temp_lam[g];
+            T *loc_temp_lam = temp_lam->getLocalPtr(g);
 
             T a = alpha;
             T *loc_vec_gam = vec_gam->getLocalPtr(g);
@@ -1674,9 +1701,10 @@ class MultiGPUBDDC_LUSolver {
 
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
-            T *loc_temp_V = temp_V[g];
+            T *loc_temp_V = temp_V->getLocalPtr(g);
             T *loc_vec_gam = vec_gam->getLocalPtr(g);
-            a = 1.0;
+            T a = 1.0;
+            int edge_size = lam_nnodes[g] * block_dim;
             int V_size = Vc_nnodes[g] * block_dim;
             CHECK_CUBLAS(cublasDaxpy(cublasHandles[g], V_size, &a, &loc_vec_gam[edge_size], 1,
                                      loc_temp_V, 1));
@@ -1689,39 +1717,190 @@ class MultiGPUBDDC_LUSolver {
     }
 
    private:
-    int num_elements, num_nodes, N, block_dim, block_dim2;
+    MultiGPUContext *ctx = nullptr;
+
+    int num_elements = 0;
+    int num_nodes = 0;
+    int N = 0;
+    int block_dim = 0;
+    int block_dim2 = 0;
+    int ngpus = 0;
+    int MAX_NUM_VERTEX_PER_SUBDOMAIN = 0;
 
     Assembler *assembler = nullptr;
     Mat *mat = nullptr;
+    Mat *kmat_IEV = nullptr;
     Partition *part = nullptr;
     Partition *part_IEV = nullptr;
-    int MAX_NUM_VERTEX_PER_SUBDOMAIN;
+    SDPartition *part_IE = nullptr;
+    SDPartition *part_I = nullptr;
+    SDPartition *part_V = nullptr;
+    SDPartition *part_gam = nullptr;
 
     cublasHandle_t *cublasHandles = nullptr;
     cusparseHandle_t *cusparseHandles = nullptr;
     cudaStream_t *streams = nullptr;
 
-    Vec *d_xpts, *d_vars;
-    int **d_loc_elem_components;
-    int *n_owned_bcs, *n_local_bcs;
-    int **d_owned_bcs, **d_local_bcs;
-    Data **d_loc_comp_data;
+    Vec *d_xpts = nullptr;
+    Vec *d_vars = nullptr;
+    Vec *d_IEV_xpts = nullptr;
+    Vec *d_IEV_vars = nullptr;
 
-    // single GPU subdomains
-    int sgpu_num_subdomains;
-    int sgpu_I_nnodes, sgpu_IE_nnodes, sgpu_IEV_nnodes, sgpu_Vc_nnodes, sgpu_V_nnodes,
-        sgpu_lam_nnodes;
-    int *sgpu_elem_sd_ind, *sgpu_node_class_ind, *sgpu_node_nsd;
-    int *sgpu_IEV_sd_ptr, *sgpu_IEV_sd_ind, *sgpu_IEV_nodes, *sgpu_IEV_elem_conn;
+    int **d_loc_elem_components = nullptr;
+    Data **d_loc_comp_data = nullptr;
 
-    // multi GPU subdomains
-    int ngpus;
-    int *subdomain_gpu_ind;
-    int *num_subdomains;
-    int *I_nnodes, *IE_nnodes, *IEV_nnodes, *Vc_nnodes, *V_nnodes, *lam_nnodes;
-    int **elem_sd_ind, **node_class_ind, **node_nsd;
-    int **IEV_nodes, **IEV_elem_conn;
+    int *n_owned_bcs = nullptr;
+    int *n_local_bcs = nullptr;
+    int **d_owned_bcs = nullptr;
+    int **d_local_bcs = nullptr;
 
-    Vec *d_xpts_IEV, *d_vars_IEV;
-    Mat *mat_IEV;
+    int sgpu_num_subdomains = 0;
+    int sgpu_I_nnodes = 0;
+    int sgpu_IE_nnodes = 0;
+    int sgpu_IEV_nnodes = 0;
+    int sgpu_Vc_nnodes = 0;
+    int sgpu_V_nnodes = 0;
+    int sgpu_lam_nnodes = 0;
+
+    int *sgpu_elem_sd_ind = nullptr;
+    int *sgpu_node_class_ind = nullptr;
+    int *sgpu_node_nsd = nullptr;
+    int *sgpu_IEV_sd_ptr = nullptr;
+    int *sgpu_IEV_sd_ind = nullptr;
+    int *sgpu_IEV_nodes = nullptr;
+    int *sgpu_IEV_elem_conn = nullptr;
+
+    int *subdomain_gpu_ind = nullptr;
+    int *num_subdomains = nullptr;
+    int *local_nnodes = nullptr;
+    int *local_nelems = nullptr;
+    int *sd_cts = nullptr;
+    int *elem_glob_to_loc = nullptr;
+
+    int **glob_loc_elem_map = nullptr;
+    int **red_subdomains = nullptr;
+    int **elem_sd_ind = nullptr;
+    int **node_class_ind = nullptr;
+    int **node_nsd = nullptr;
+
+    int *I_nnodes = nullptr;
+    int *IE_nnodes = nullptr;
+    int *IEV_nnodes = nullptr;
+    int *Vc_nnodes = nullptr;
+    int *V_nnodes = nullptr;
+    int *lam_nnodes = nullptr;
+    int *n_edge = nullptr;
+    int *ngam = nullptr;
+
+    int **IEV_nodes = nullptr;
+    int **IEV_elem_conn = nullptr;
+    int **IEV_loc_to_glob = nullptr;
+    int **elem_loc_to_glob = nullptr;
+    int **d_IEV_elem_conn = nullptr;
+    int **IEV_sd_ptr = nullptr;
+
+    int **IE_nodes = nullptr;
+    int **I_nodes = nullptr;
+    int **Vc_nodes = nullptr;
+    int **Vc_inodes = nullptr;
+    int **gam_nodes = nullptr;
+
+    int **IEVtoIE_map = nullptr;
+    int **IEVtoIE_imap = nullptr;
+    int **IEVtoI_map = nullptr;
+    int **IEVtoI_imap = nullptr;
+    int **IEVtoV_imap = nullptr;
+    int **VctoV_imap = nullptr;
+
+    bool **IE_interior = nullptr;
+    bool **IE_general_edge = nullptr;
+    bool **d_IE_interior = nullptr;
+    bool **d_IE_general_edge = nullptr;
+
+    int **d_IE_nodes = nullptr;
+    int **d_Vc_nodes = nullptr;
+    int **d_IEVtoIE_imap = nullptr;
+    int **d_IEVtoI_imap = nullptr;
+    int **d_IEVtoV_imap = nullptr;
+    int **d_VctoV_imap = nullptr;
+
+    int **d_IE_nsd = nullptr;
+    int **d_edge_nsd = nullptr;
+    int **d_vertex_nsd = nullptr;
+    int **d_IE_to_lam_map = nullptr;
+
+    DeviceVec<T> *d_IEV_vals = nullptr;
+    DeviceVec<T> *d_IE_vals = nullptr;
+    DeviceVec<T> *d_I_vals = nullptr;
+    DeviceVec<T> *d_Svv_vals = nullptr;
+
+    int **IEV_rowp = nullptr;
+    int **IEV_cols = nullptr;
+    int *IEV_nnzb = nullptr;
+    int **IEV_rows = nullptr;
+
+    int **IE_rowp = nullptr;
+    int **IE_cols = nullptr;
+    int *IE_nnzb = nullptr;
+    int **IE_rows = nullptr;
+
+    int **I_rowp = nullptr;
+    int **I_cols = nullptr;
+    int *I_nnzb = nullptr;
+    int **I_rows = nullptr;
+
+    int **kmat_IEnofill_map = nullptr;
+    int **kmat_IEtoIEV_map = nullptr;
+    int **d_kmat_IEnofill_map = nullptr;
+    int **d_kmat_IEtoIEV_map = nullptr;
+
+    int **kmat_Inofill_map = nullptr;
+    int **kmat_ItoIEV_map = nullptr;
+    int **d_kmat_Inofill_map = nullptr;
+    int **d_kmat_ItoIEV_map = nullptr;
+
+    int **Vc_node_imap = nullptr;
+    int **Svv_rowp = nullptr;
+    int **Svv_cols = nullptr;
+    int *Svv_nnzb = nullptr;
+    int **Svv_rows = nullptr;
+
+    int *Svv_copy_nnzb = nullptr;
+    int **d_Svv_IEV_copyBlocks = nullptr;
+    int **d_Svv_Vc_copyBlocks = nullptr;
+
+    int **IEVset_nnzb = nullptr;
+    int **IEVtoSVV_nnzb = nullptr;
+    int ***d_IEVset_blocks = nullptr;
+    int ***d_IEVout_blocks = nullptr;
+    int ***d_IEVtoSVV_blocks = nullptr;
+
+    int *n_IEV_owned_bcs = nullptr;
+    int *n_IEV_local_bcs = nullptr;
+    int **d_IEV_owned_bcs = nullptr;
+    int **d_IEV_local_bcs = nullptr;
+
+    Vec *fext_IEV = nullptr;
+    Vec *fint_IEV = nullptr;
+    Vec *res_IEV = nullptr;
+    Vec *f_IEV = nullptr;
+    Vec *u_IEV = nullptr;
+    Vec *temp_IEV = nullptr;
+
+    IEVSplit *split = nullptr;
+    SDVec *temp_IE = nullptr;
+    SDVec *temp_V = nullptr;
+    SDVec *f_IE = nullptr;
+    SDVec *u_IE = nullptr;
+    SDVec *f_I = nullptr;
+    SDVec *u_I = nullptr;
+    SDVec *f_V = nullptr;
+    SDVec *u_V = nullptr;
+    SDVec *temp_lam = nullptr;
+    SDVec *temp_lam2 = nullptr;
+    SDVec *d_coarse_vars = nullptr;
+
+    CudssSubdomainBsrSolve<T> *subdomain_IE_solver = nullptr;
+    CudssSubdomainBsrSolve<T> *subdomain_I_solver = nullptr;
+    CudssMgBSRSolverV2<T> *Svv_solver = nullptr;
 };

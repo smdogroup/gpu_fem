@@ -8,7 +8,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "iev.h"
+#include "domdec/subdomains/_iev.h"
 
 class UnstructuredIEVSplitting {
    public:
@@ -16,6 +16,7 @@ class UnstructuredIEVSplitting {
     int num_nodes = 0;
     int nodes_per_elem = 0;
     int target_sd_size = 16;
+    int MAX_NUM_VERTEX_PER_SUBDOMAIN = 20;  // update this?
 
     const int *elem_conn = nullptr;
 

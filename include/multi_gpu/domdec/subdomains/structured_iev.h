@@ -7,13 +7,14 @@
 #include <unordered_set>
 #include <vector>
 
-#include "_iev.h"
+#include "domdec/subdomains/_iev.h"
 
 class StructuredIEVSplitting {
    public:
     int num_elements = 0;
     int num_nodes = 0;
     int nodes_per_elem = 0;
+    int MAX_NUM_VERTEX_PER_SUBDOMAIN = 4;
 
     int nxe = 0, nye = 0;
     int nxs = 0, nys = 0;
@@ -102,7 +103,7 @@ class StructuredIEVSplitting {
    private:
     void setup_subdomains(int nxe_, int nye_, int nxs_, int nys_, int order_,
                           bool close_hoop_ = false, bool track_dirichlet_ = false) {
-        clear();
+        // clear();
 
         nxe = nxe_;
         nye = nye_;
@@ -197,7 +198,7 @@ class StructuredIEVSplitting {
     }
 
     void classify_nodes() {
-        node_class_ind.assign(num_nodes, INTERIOR);
+        node_class_ind.assign(num_nodes, IEV_INTERIOR);
         node_nsd.assign(num_nodes, 0);
 
         nnodes_interior = 0;
@@ -230,7 +231,7 @@ class StructuredIEVSplitting {
             bool on_bndry = on_x || on_y;
 
             if (nsd < 2) {
-                node_class_ind[inode] = INTERIOR;
+                node_class_ind[inode] = IEV_INTERIOR;
                 nnodes_interior++;
 
                 I_nnodes += 1;
@@ -238,14 +239,14 @@ class StructuredIEVSplitting {
                 IEV_nnodes += 1;
             } else if (nsd == 2) {
                 if (on_bndry && track_dirichlet) {
-                    node_class_ind[inode] = DIRICHLET_EDGE;
+                    node_class_ind[inode] = IEV_DIRICHLET_EDGE;
                     nnodes_dirichlet_edge++;
 
                     I_nnodes += nsd;
                     IE_nnodes += nsd;
                     IEV_nnodes += nsd;
                 } else {
-                    node_class_ind[inode] = EDGE;
+                    node_class_ind[inode] = IEV_EDGE;
                     nnodes_edge++;
 
                     IE_nnodes += nsd;
@@ -253,7 +254,7 @@ class StructuredIEVSplitting {
                     lam_nnodes += 1;
                 }
             } else {
-                node_class_ind[inode] = VERTEX;
+                node_class_ind[inode] = IEV_VERTEX;
                 nnodes_vertex++;
 
                 Vc_nnodes += 1;
