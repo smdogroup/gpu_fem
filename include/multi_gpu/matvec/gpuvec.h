@@ -204,25 +204,25 @@ class GPUvec {
         ctx->sync();
     }
 
-    void zeroAll() {
-        zero();
-        zeroLocal();
+    void zeroAll(bool can_sync = true) {
+        zero(can_sync);
+        zeroLocal(can_sync);
     }
 
-    void zero() {
+    void zero(bool can_sync = true) {
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(debug ? 0 : g));
             CHECK_CUDA(cudaMemsetAsync(d_vals_owned[g], 0, owned_N[g] * sizeof(T), streams[g]));
         }
-        sync();
+        if (can_sync) sync();
     }
 
-    void zeroLocal() {
+    void zeroLocal(bool can_sync = true) {
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(debug ? 0 : g));
             CHECK_CUDA(cudaMemsetAsync(d_vals_local[g], 0, local_N[g] * sizeof(T), streams[g]));
         }
-        sync();
+        if (can_sync) sync();
     }
 
     void copyTo(GPUvec<T, Partitioner> *y) {

@@ -221,8 +221,8 @@ class MultiGPUUnstructuredProlongation {
     }
 
     void prolongate(Vec *coarse_in, Vec *fine_out) {
+        fine_out->zeroAll(false);
         coarse_in->expandToLocal();
-        fine_out->zeroAll();
 
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
@@ -246,8 +246,8 @@ class MultiGPUUnstructuredProlongation {
     }
 
     void restrict_vec(Vec *fine_in, Vec *coarse_out) {
+        coarse_out->zeroAll(false);
         fine_in->expandToLocal();
-        coarse_out->zeroAll();
 
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
