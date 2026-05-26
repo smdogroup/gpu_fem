@@ -55,7 +55,8 @@ int main(int argc, char *argv[]) {
     MPI_Init(&argc, &argv);
     MPI_Comm comm = MPI_COMM_WORLD;
 
-    int level = 2;
+    // int level = 2;
+    int level = 3;
     double SR = 300;
 
     if (argc > 1) {
