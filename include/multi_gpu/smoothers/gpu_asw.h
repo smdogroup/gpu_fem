@@ -35,8 +35,8 @@ class MultiGPUElementASW {
         size4 = nodes_per_elem * nodes_per_elem;
         n = nodes_per_elem * block_dim;
 
-        bool loc_print = true;
-        // bool loc_print = false;
+        // bool loc_print = true;
+        bool loc_print = false;
 
         if (loc_print) printf("ASW - allocate_arrays\n");
         allocate_arrays();
