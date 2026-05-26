@@ -696,18 +696,55 @@ class TacsComponentGPUPartitioner {
         }
     }
 
+    // void build_local_ghost_flags() {
+    //     h_is_local_ghost = new bool *[ngpus];
+    //     std::memset(h_is_local_ghost, 0, ngpus * sizeof(bool *));
+
+    //     for (int g = 0; g < ngpus; g++) {
+    //         h_is_local_ghost[g] = new bool[local_nnodes[g]];
+    //         std::fill(h_is_local_ghost[g], h_is_local_ghost[g] + local_nnodes[g], false);
+    //     }
+
+    //     int **global_to_local = new int *[ngpus];
+
+    //     for (int g = 0; g < ngpus; g++) {
+    //         global_to_local[g] = new int[num_nodes];
+    //         std::fill(global_to_local[g], global_to_local[g] + num_nodes, -1);
+
+    //         for (int loc = 0; loc < local_nnodes[g]; loc++) {
+    //             int node = h_local_nodes[g][loc];
+    //             global_to_local[g][node] = loc;
+    //         }
+    //     }
+
+    //     for (int dst = 0; dst < ngpus; dst++) {
+    //         for (int dst_loc = 0; dst_loc < local_nnodes[dst]; dst_loc++) {
+    //             int node = h_local_nodes[dst][dst_loc];
+    //             int src = h_node_gpu_ind[node];
+
+    //             if (src < 0 || src >= ngpus || src == dst) continue;
+
+    //             h_is_local_ghost[dst][dst_loc] = true;
+
+    //             int src_loc = global_to_local[src][node];
+    //             if (src_loc >= 0) h_is_local_ghost[src][src_loc] = true;
+    //         }
+    //     }
+
+    //     for (int g = 0; g < ngpus; g++) delete[] global_to_local[g];
+    //     delete[] global_to_local;
+    // }
+
     void build_local_ghost_flags() {
         h_is_local_ghost = new bool *[ngpus];
         std::memset(h_is_local_ghost, 0, ngpus * sizeof(bool *));
 
-        for (int g = 0; g < ngpus; g++) {
-            h_is_local_ghost[g] = new bool[local_nnodes[g]];
-            std::fill(h_is_local_ghost[g], h_is_local_ghost[g] + local_nnodes[g], false);
-        }
-
         int **global_to_local = new int *[ngpus];
 
         for (int g = 0; g < ngpus; g++) {
+            h_is_local_ghost[g] = new bool[local_nnodes[g]];
+            std::fill(h_is_local_ghost[g], h_is_local_ghost[g] + local_nnodes[g], false);
+
             global_to_local[g] = new int[num_nodes];
             std::fill(global_to_local[g], global_to_local[g] + num_nodes, -1);
 
@@ -717,21 +754,26 @@ class TacsComponentGPUPartitioner {
             }
         }
 
-        for (int dst = 0; dst < ngpus; dst++) {
-            for (int dst_loc = 0; dst_loc < local_nnodes[dst]; dst_loc++) {
-                int node = h_local_nodes[dst][dst_loc];
-                int src = h_node_gpu_ind[node];
+        for (int node = 0; node < num_nodes; node++) {
+            int count = 0;
 
-                if (src < 0 || src >= ngpus || src == dst) continue;
+            for (int g = 0; g < ngpus; g++) {
+                if (global_to_local[g][node] >= 0) count++;
+            }
 
-                h_is_local_ghost[dst][dst_loc] = true;
+            if (count <= 1) continue;
 
-                int src_loc = global_to_local[src][node];
-                if (src_loc >= 0) h_is_local_ghost[src][src_loc] = true;
+            for (int g = 0; g < ngpus; g++) {
+                int loc = global_to_local[g][node];
+                if (loc >= 0) {
+                    h_is_local_ghost[g][loc] = true;
+                }
             }
         }
 
-        for (int g = 0; g < ngpus; g++) delete[] global_to_local[g];
+        for (int g = 0; g < ngpus; g++) {
+            delete[] global_to_local[g];
+        }
         delete[] global_to_local;
     }
 
