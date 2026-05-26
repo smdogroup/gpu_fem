@@ -558,89 +558,6 @@ class TacsComponentGPUPartitioner {
         delete[] comp_gpu;
     }
 
-    // void assign_owned_nodes() {
-    //     int *h_ne_cts = new int[num_nodes];
-    //     std::memset(h_ne_cts, 0, num_nodes * sizeof(int));
-
-    //     int ne_nnz = 0;
-    //     for (int e = 0; e < num_elements; e++) {
-    //         for (int a = 0; a < nodes_per_elem; a++) {
-    //             int node = h_elem_conn[e * nodes_per_elem + a];
-    //             h_ne_cts[node]++;
-    //             ne_nnz++;
-    //         }
-    //     }
-
-    //     int *h_ne_ptr = new int[num_nodes + 1];
-    //     h_ne_ptr[0] = 0;
-    //     for (int n = 0; n < num_nodes; n++) h_ne_ptr[n + 1] = h_ne_ptr[n] + h_ne_cts[n];
-
-    //     int *h_ne_elems = new int[ne_nnz];
-    //     std::memset(h_ne_cts, 0, num_nodes * sizeof(int));
-
-    //     for (int e = 0; e < num_elements; e++) {
-    //         for (int a = 0; a < nodes_per_elem; a++) {
-    //             int node = h_elem_conn[e * nodes_per_elem + a];
-    //             int off = h_ne_ptr[node] + h_ne_cts[node]++;
-    //             h_ne_elems[off] = e;
-    //         }
-    //     }
-
-    //     h_node_gpu_ind = new int[num_nodes];
-    //     int *owned_node_cts = new int[ngpus];
-    //     std::memset(owned_node_cts, 0, ngpus * sizeof(int));
-
-    //     for (int n = 0; n < num_nodes; n++) {
-    //         std::unordered_set<int> node_gpus;
-
-    //         for (int ep = h_ne_ptr[n]; ep < h_ne_ptr[n + 1]; ep++) {
-    //             int g = find_owned_gpu_from_elem(h_ne_elems[ep]);
-    //             if (g >= 0) node_gpus.insert(g);
-    //         }
-
-    //         if (node_gpus.empty()) {
-    //             h_node_gpu_ind[n] = 0;
-    //             owned_node_cts[0]++;
-    //         } else if (node_gpus.size() == 1) {
-    //             int g = *node_gpus.begin();
-    //             h_node_gpu_ind[n] = g;
-    //             owned_node_cts[g]++;
-    //         } else {
-    //             h_node_gpu_ind[n] = -1;
-    //         }
-    //     }
-
-    //     for (int n = 0; n < num_nodes; n++) {
-    //         if (h_node_gpu_ind[n] != -1) continue;
-
-    //         std::unordered_set<int> node_gpus;
-    //         for (int ep = h_ne_ptr[n]; ep < h_ne_ptr[n + 1]; ep++) {
-    //             int g = find_owned_gpu_from_elem(h_ne_elems[ep]);
-    //             if (g >= 0) node_gpus.insert(g);
-    //         }
-
-    //         int best_gpu = -1;
-    //         int best_ct = INT_MAX;
-
-    //         for (int g : node_gpus) {
-    //             if (owned_node_cts[g] < best_ct) {
-    //                 best_ct = owned_node_cts[g];
-    //                 best_gpu = g;
-    //             }
-    //         }
-
-    //         if (best_gpu < 0) best_gpu = 0;
-
-    //         h_node_gpu_ind[n] = best_gpu;
-    //         owned_node_cts[best_gpu]++;
-    //     }
-
-    //     delete[] h_ne_cts;
-    //     delete[] h_ne_ptr;
-    //     delete[] h_ne_elems;
-    //     delete[] owned_node_cts;
-    // }
-
     void assign_owned_nodes() {
         int *h_ne_cts = new int[num_nodes];
         std::memset(h_ne_cts, 0, num_nodes * sizeof(int));
@@ -656,9 +573,7 @@ class TacsComponentGPUPartitioner {
 
         int *h_ne_ptr = new int[num_nodes + 1];
         h_ne_ptr[0] = 0;
-        for (int n = 0; n < num_nodes; n++) {
-            h_ne_ptr[n + 1] = h_ne_ptr[n] + h_ne_cts[n];
-        }
+        for (int n = 0; n < num_nodes; n++) h_ne_ptr[n + 1] = h_ne_ptr[n] + h_ne_cts[n];
 
         int *h_ne_elems = new int[ne_nnz];
         std::memset(h_ne_cts, 0, num_nodes * sizeof(int));
@@ -672,11 +587,8 @@ class TacsComponentGPUPartitioner {
         }
 
         h_node_gpu_ind = new int[num_nodes];
-
         int *owned_node_cts = new int[ngpus];
-        int *owned_interface_node_cts = new int[ngpus];
         std::memset(owned_node_cts, 0, ngpus * sizeof(int));
-        std::memset(owned_interface_node_cts, 0, ngpus * sizeof(int));
 
         for (int n = 0; n < num_nodes; n++) {
             std::unordered_set<int> node_gpus;
@@ -694,7 +606,6 @@ class TacsComponentGPUPartitioner {
                 h_node_gpu_ind[n] = g;
                 owned_node_cts[g]++;
             } else {
-                // true interface node; assign later using interface balance
                 h_node_gpu_ind[n] = -1;
             }
         }
@@ -709,15 +620,11 @@ class TacsComponentGPUPartitioner {
             }
 
             int best_gpu = -1;
-            int best_interface_ct = INT_MAX;
-            int best_total_ct = INT_MAX;
+            int best_ct = INT_MAX;
 
             for (int g : node_gpus) {
-                if (owned_interface_node_cts[g] < best_interface_ct ||
-                    (owned_interface_node_cts[g] == best_interface_ct &&
-                     owned_node_cts[g] < best_total_ct)) {
-                    best_interface_ct = owned_interface_node_cts[g];
-                    best_total_ct = owned_node_cts[g];
+                if (owned_node_cts[g] < best_ct) {
+                    best_ct = owned_node_cts[g];
                     best_gpu = g;
                 }
             }
@@ -725,22 +632,115 @@ class TacsComponentGPUPartitioner {
             if (best_gpu < 0) best_gpu = 0;
 
             h_node_gpu_ind[n] = best_gpu;
-            owned_interface_node_cts[best_gpu]++;
             owned_node_cts[best_gpu]++;
         }
-
-        printf("[PART assign_owned_nodes] owned interface nodes by GPU:");
-        for (int g = 0; g < ngpus; g++) {
-            printf(" %d", owned_interface_node_cts[g]);
-        }
-        printf("\n");
 
         delete[] h_ne_cts;
         delete[] h_ne_ptr;
         delete[] h_ne_elems;
         delete[] owned_node_cts;
-        delete[] owned_interface_node_cts;
     }
+
+    // void assign_owned_nodes() {
+    //     int *h_ne_cts = new int[num_nodes];
+    //     std::memset(h_ne_cts, 0, num_nodes * sizeof(int));
+
+    //     int ne_nnz = 0;
+    //     for (int e = 0; e < num_elements; e++) {
+    //         for (int a = 0; a < nodes_per_elem; a++) {
+    //             int node = h_elem_conn[e * nodes_per_elem + a];
+    //             h_ne_cts[node]++;
+    //             ne_nnz++;
+    //         }
+    //     }
+
+    //     int *h_ne_ptr = new int[num_nodes + 1];
+    //     h_ne_ptr[0] = 0;
+    //     for (int n = 0; n < num_nodes; n++) {
+    //         h_ne_ptr[n + 1] = h_ne_ptr[n] + h_ne_cts[n];
+    //     }
+
+    //     int *h_ne_elems = new int[ne_nnz];
+    //     std::memset(h_ne_cts, 0, num_nodes * sizeof(int));
+
+    //     for (int e = 0; e < num_elements; e++) {
+    //         for (int a = 0; a < nodes_per_elem; a++) {
+    //             int node = h_elem_conn[e * nodes_per_elem + a];
+    //             int off = h_ne_ptr[node] + h_ne_cts[node]++;
+    //             h_ne_elems[off] = e;
+    //         }
+    //     }
+
+    //     h_node_gpu_ind = new int[num_nodes];
+
+    //     int *owned_node_cts = new int[ngpus];
+    //     int *owned_interface_node_cts = new int[ngpus];
+    //     std::memset(owned_node_cts, 0, ngpus * sizeof(int));
+    //     std::memset(owned_interface_node_cts, 0, ngpus * sizeof(int));
+
+    //     for (int n = 0; n < num_nodes; n++) {
+    //         std::unordered_set<int> node_gpus;
+
+    //         for (int ep = h_ne_ptr[n]; ep < h_ne_ptr[n + 1]; ep++) {
+    //             int g = find_owned_gpu_from_elem(h_ne_elems[ep]);
+    //             if (g >= 0) node_gpus.insert(g);
+    //         }
+
+    //         if (node_gpus.empty()) {
+    //             h_node_gpu_ind[n] = 0;
+    //             owned_node_cts[0]++;
+    //         } else if (node_gpus.size() == 1) {
+    //             int g = *node_gpus.begin();
+    //             h_node_gpu_ind[n] = g;
+    //             owned_node_cts[g]++;
+    //         } else {
+    //             // true interface node; assign later using interface balance
+    //             h_node_gpu_ind[n] = -1;
+    //         }
+    //     }
+
+    //     for (int n = 0; n < num_nodes; n++) {
+    //         if (h_node_gpu_ind[n] != -1) continue;
+
+    //         std::unordered_set<int> node_gpus;
+    //         for (int ep = h_ne_ptr[n]; ep < h_ne_ptr[n + 1]; ep++) {
+    //             int g = find_owned_gpu_from_elem(h_ne_elems[ep]);
+    //             if (g >= 0) node_gpus.insert(g);
+    //         }
+
+    //         int best_gpu = -1;
+    //         int best_interface_ct = INT_MAX;
+    //         int best_total_ct = INT_MAX;
+
+    //         for (int g : node_gpus) {
+    //             if (owned_interface_node_cts[g] < best_interface_ct ||
+    //                 (owned_interface_node_cts[g] == best_interface_ct &&
+    //                  owned_node_cts[g] < best_total_ct)) {
+    //                 best_interface_ct = owned_interface_node_cts[g];
+    //                 best_total_ct = owned_node_cts[g];
+    //                 best_gpu = g;
+    //             }
+    //         }
+
+    //         if (best_gpu < 0) best_gpu = 0;
+
+    //         h_node_gpu_ind[n] = best_gpu;
+    //         owned_interface_node_cts[best_gpu]++;
+    //         owned_node_cts[best_gpu]++;
+    //     }
+
+    //     printf("[PART assign_owned_nodes] owned interface nodes by GPU:");
+    //     for (int g = 0; g < ngpus; g++) {
+    //         printf(" %d", owned_interface_node_cts[g]);
+    //     }
+    //     printf("\n");
+
+    //     delete[] h_ne_cts;
+    //     delete[] h_ne_ptr;
+    //     delete[] h_ne_elems;
+    //     delete[] owned_node_cts;
+    //     delete[] owned_interface_node_cts;
+    // }
 
     void build_owned_node_lists() {
         owned_nnodes = new int[ngpus];
