@@ -233,19 +233,108 @@ class GPUElementAssembler {
     //     sync();
     // }
 
+    void check_cuda_stage(const char *stage, int g = -1, bool clear = true) const {
+        cudaError_t err = clear ? cudaGetLastError() : cudaPeekAtLastError();
+        if (err != cudaSuccess) {
+            printf("[GPUElementAssembler CUDA ERROR] %s GPU[%d] dev=%d : %s\n", stage, g,
+                   g >= 0 ? g : -1, cudaGetErrorString(err));
+            exit(1);
+        }
+    }
+
+    void check_all_cuda_stage(const char *stage, bool clear = true) const {
+        for (int g = 0; g < ngpus; g++) {
+            CHECK_CUDA(cudaSetDevice(g));
+            check_cuda_stage(stage, g, clear);
+        }
+    }
+
+    // template <int elems_per_block = 1>
+    // void add_jacobian(Mat *mat) {
+    //     mat->zeroValues();
+    //     d_xpts->expandToLocal();
+    //     d_vars->expandToLocal();
+
+    //     int cols_per_elem = 24;  // for 1st order element
+
+    //     dim3 block(num_quad_pts, cols_per_elem, elems_per_block);
+    //     int elem_cols_per_block = cols_per_elem * elems_per_block;
+
+    //     for (int g = 0; g < ngpus; g++) {
+    //         CHECK_CUDA(cudaSetDevice(g));
+
+    //         int loc_num_nodes = d_xpts->getExpandedNodes(g);
+    //         int loc_nelems = part->getLocalNumElements(g);
+
+    //         T *loc_xpts_ptr = d_xpts->getLocalPtr(g);
+    //         T *loc_vars_ptr = d_vars->getLocalPtr(g);
+    //         int *loc_elem_comps = d_loc_elem_components[g];
+    //         Data *loc_comp_data_ptr = d_loc_comp_data[g];
+
+    //         // local element connectivity, used for both rows and columns
+    //         int *loc_elem_conn_ptr = mat->getLocalElemConn(g);
+    //         int *loc_elem_ind_map = mat->getLocalElemIndMap(g);
+    //         T *loc_mat_vals = mat->getLocalVals(g);
+
+    //         int nblocks =
+    //             (loc_nelems * cols_per_elem + elem_cols_per_block - 1) / elem_cols_per_block;
+
+    //         dim3 grid(nblocks);
+
+    //         k_add_multigpu_jacobian_fast<T, elems_per_block, ElemGroup>
+    //             <<<grid, block, 0, streams[g]>>>(
+    //                 loc_num_nodes, loc_nelems, cols_per_elem, loc_elem_comps, loc_elem_conn_ptr,
+    //                 loc_xpts_ptr, loc_vars_ptr, loc_comp_data_ptr, loc_elem_ind_map,
+    //                 loc_mat_vals);
+
+    //         CHECK_CUDA(cudaGetLastError());
+    //     }
+
+    //     ctx->sync();
+    // }
+
     template <int elems_per_block = 1>
     void add_jacobian(Mat *mat) {
+        printf("\n========== add_jacobian START ==========\n");
+        printf("[add_jacobian] elems_per_block=%d num_quad_pts=%d vars_per_node=%d\n",
+               elems_per_block, num_quad_pts, vars_per_node);
+
+        check_all_cuda_stage("add_jacobian entry", true);
+
+        printf("[add_jacobian] mat->zeroValues()\n");
         mat->zeroValues();
+        check_all_cuda_stage("after mat->zeroValues", true);
+
+        printf("[add_jacobian] d_xpts->expandToLocal()\n");
         d_xpts->expandToLocal();
+        check_all_cuda_stage("after d_xpts->expandToLocal", true);
+
+        printf("[add_jacobian] d_vars->expandToLocal()\n");
         d_vars->expandToLocal();
+        check_all_cuda_stage("after d_vars->expandToLocal", true);
 
-        int cols_per_elem = 24;  // for 1st order element
-
+        int cols_per_elem = 24;
         dim3 block(num_quad_pts, cols_per_elem, elems_per_block);
         int elem_cols_per_block = cols_per_elem * elems_per_block;
 
+        printf("[add_jacobian] block=(%u,%u,%u) elem_cols_per_block=%d\n", block.x, block.y,
+               block.z, elem_cols_per_block);
+
+        if (block.x == 0 || block.y == 0 || block.z == 0) {
+            printf("[add_jacobian] ERROR invalid block dims (%u,%u,%u)\n", block.x, block.y,
+                   block.z);
+            exit(1);
+        }
+
+        if (block.x * block.y * block.z > 1024) {
+            printf("[add_jacobian] ERROR too many threads/block = %u\n",
+                   block.x * block.y * block.z);
+            exit(1);
+        }
+
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
+            check_cuda_stage("before add_jacobian per-GPU setup", g, true);
 
             int loc_num_nodes = d_xpts->getExpandedNodes(g);
             int loc_nelems = part->getLocalNumElements(g);
@@ -255,7 +344,6 @@ class GPUElementAssembler {
             int *loc_elem_comps = d_loc_elem_components[g];
             Data *loc_comp_data_ptr = d_loc_comp_data[g];
 
-            // local element connectivity, used for both rows and columns
             int *loc_elem_conn_ptr = mat->getLocalElemConn(g);
             int *loc_elem_ind_map = mat->getLocalElemIndMap(g);
             T *loc_mat_vals = mat->getLocalVals(g);
@@ -265,15 +353,54 @@ class GPUElementAssembler {
 
             dim3 grid(nblocks);
 
+            printf("[add_jacobian] GPU[%d] loc_num_nodes=%d loc_nelems=%d nblocks=%d\n", g,
+                   loc_num_nodes, loc_nelems, nblocks);
+            printf(
+                "[add_jacobian] GPU[%d] ptrs xpts=%p vars=%p elem_comps=%p comp_data=%p "
+                "elem_conn=%p elem_ind_map=%p mat_vals=%p stream=%p\n",
+                g, (void *)loc_xpts_ptr, (void *)loc_vars_ptr, (void *)loc_elem_comps,
+                (void *)loc_comp_data_ptr, (void *)loc_elem_conn_ptr, (void *)loc_elem_ind_map,
+                (void *)loc_mat_vals, (void *)streams[g]);
+
+            if (loc_nelems <= 0) {
+                printf("[add_jacobian] GPU[%d] loc_nelems <= 0, skipping kernel\n", g);
+                continue;
+            }
+
+            if (nblocks <= 0) {
+                printf("[add_jacobian] ERROR GPU[%d] nblocks=%d with loc_nelems=%d\n", g, nblocks,
+                       loc_nelems);
+                exit(1);
+            }
+
+            if (!loc_xpts_ptr || !loc_vars_ptr || !loc_elem_comps || !loc_comp_data_ptr ||
+                !loc_elem_conn_ptr || !loc_elem_ind_map || !loc_mat_vals) {
+                printf("[add_jacobian] ERROR GPU[%d] null pointer before kernel\n", g);
+                exit(1);
+            }
+
+            printf("[add_jacobian] GPU[%d] launch grid=(%u,%u,%u) block=(%u,%u,%u)\n", g, grid.x,
+                   grid.y, grid.z, block.x, block.y, block.z);
+
             k_add_multigpu_jacobian_fast<T, elems_per_block, ElemGroup>
                 <<<grid, block, 0, streams[g]>>>(
                     loc_num_nodes, loc_nelems, cols_per_elem, loc_elem_comps, loc_elem_conn_ptr,
                     loc_xpts_ptr, loc_vars_ptr, loc_comp_data_ptr, loc_elem_ind_map, loc_mat_vals);
 
-            CHECK_CUDA(cudaGetLastError());
+            CHECK_CUDA(cudaPeekAtLastError());
+            printf("[add_jacobian] GPU[%d] launch accepted\n", g);
+
+            CHECK_CUDA(cudaStreamSynchronize(streams[g]));
+            check_cuda_stage("after add_jacobian kernel stream sync", g, true);
+
+            printf("[add_jacobian] GPU[%d] kernel completed cleanly\n", g);
         }
 
+        printf("[add_jacobian] ctx->sync()\n");
         ctx->sync();
+        check_all_cuda_stage("after add_jacobian ctx sync", true);
+
+        printf("========== add_jacobian DONE ==========\n\n");
     }
 
     // util functions
