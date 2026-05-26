@@ -35,23 +35,23 @@ class MultiGPUElementASW {
         size4 = nodes_per_elem * nodes_per_elem;
         n = nodes_per_elem * block_dim;
 
-        if (debug) printf("ASW - allocate_arrays\n");
+        printf("ASW - allocate_arrays\n");
         allocate_arrays();
-        if (debug) printf("ASW - build_maps\n");
+        printf("ASW - build_maps\n");
         build_maps();
-        if (debug) printf("ASW - build_ghost_maps\n");
+        printf("ASW - build_ghost_maps\n");
         // build_ghost_maps(true);
         build_ghost_maps();
-        if (debug) printf("ASW - allocate_batched_memory\n");
+        printf("ASW - allocate_batched_memory\n");
         allocate_batched_memory();
-        if (debug) printf("ASW - allocate_ghost_batched_memory\n");
+        printf("ASW - allocate_ghost_batched_memory\n");
         allocate_ghost_batched_memory();
 
-        if (debug) printf("ASW - move_maps_to_device\n");
+        printf("ASW - move_maps_to_device\n");
         move_maps_to_device();
-        if (debug) printf("ASW - move_ghost_maps_to_device\n");
+        printf("ASW - move_ghost_maps_to_device\n");
         move_ghost_maps_to_device();
-        if (debug) printf("ASW - done with constructor\n");
+        printf("ASW - done with constructor\n");
 
         temp = new GPUvec<T, Partitioner>(ctx, part, block_dim);
         defect = new GPUvec<T, Partitioner>(ctx, part, block_dim);
