@@ -56,6 +56,45 @@ class MultiGPUUnstructuredProlongation {
         assemble_matrices();
     }
 
+    // void construct_nz_pattern() {
+    //     fine_xpts->expandToLocal();
+    //     crs_xpts->expandToLocal();
+
+    //     d_n2e_ptr = new int *[ngpus];
+    //     d_n2e_elems = new int *[ngpus];
+    //     d_n2e_xis = new T *[ngpus];
+    //     P_bsr_data = new BsrData[ngpus];
+    //     PT_bsr_data = new BsrData[ngpus];
+
+    //     d_P_vals = new DeviceVec<T>[ngpus];
+    //     d_PT_vals = new DeviceVec<T>[ngpus];
+
+    //     for (int g = 0; g < ngpus; g++) {
+    //         CHECK_CUDA(cudaSetDevice(g));
+
+    //         int *h_fine_loc_elem_conn = fine_mat->getHostLocalElemConn(g);
+    //         int *h_crs_loc_elem_conn = coarse_mat->getHostLocalElemConn(g);
+
+    //         int fine_loc_nnodes = fine_xpts->getExpandedNodes(g);
+    //         int crs_loc_nnodes = crs_xpts->getExpandedNodes(g);
+
+    //         T *h_fine_loc_xpts = fine_xpts->getLocalVecOnHost(g);
+    //         T *h_crs_loc_xpts = crs_xpts->getLocalVecOnHost(g);
+
+    //         int fine_nelems = fine_part->getLocalNumElements(g);
+    //         int coarse_nelems = coarse_part->getLocalNumElements(g);
+
+    //         int *h_fine_elem_comp = fine_assembler->getLocalElemComponents(g);
+    //         int *h_crs_elem_comp = crs_assembler->getLocalElemComponents(g);
+
+    //         init_unstructured_grid_maps<T, Basis, true, true>(
+    //             block_dim, h_fine_loc_xpts, h_crs_loc_xpts, fine_loc_nnodes, crs_loc_nnodes,
+    //             h_fine_loc_elem_conn, h_crs_loc_elem_conn, fine_nelems, coarse_nelems,
+    //             h_fine_elem_comp, h_crs_elem_comp, d_n2e_ptr[g], d_n2e_elems[g], d_n2e_xis[g],
+    //             P_bsr_data[g], PT_bsr_data[g], d_P_vals[g], d_PT_vals[g], ELEM_MAX);
+    //     }
+    // }
+
     void construct_nz_pattern() {
         fine_xpts->expandToLocal();
         crs_xpts->expandToLocal();
@@ -63,6 +102,8 @@ class MultiGPUUnstructuredProlongation {
         d_n2e_ptr = new int *[ngpus];
         d_n2e_elems = new int *[ngpus];
         d_n2e_xis = new T *[ngpus];
+        d_fine_num_attached_elems = new int *[ngpus];
+
         P_bsr_data = new BsrData[ngpus];
         PT_bsr_data = new BsrData[ngpus];
 
@@ -93,6 +134,51 @@ class MultiGPUUnstructuredProlongation {
                 h_fine_elem_comp, h_crs_elem_comp, d_n2e_ptr[g], d_n2e_elems[g], d_n2e_xis[g],
                 P_bsr_data[g], PT_bsr_data[g], d_P_vals[g], d_PT_vals[g], ELEM_MAX);
         }
+
+        std::vector<int> global_num_attached(fine_part->num_nodes, 0);
+
+        for (int g = 0; g < ngpus; g++) {
+            CHECK_CUDA(cudaSetDevice(g));
+
+            int fine_loc_nnodes = fine_xpts->getExpandedNodes(g);
+            int *h_n2e_ptr = new int[fine_loc_nnodes + 1];
+
+            CHECK_CUDA(cudaMemcpy(h_n2e_ptr, d_n2e_ptr[g], (fine_loc_nnodes + 1) * sizeof(int),
+                                  cudaMemcpyDeviceToHost));
+
+            for (int loc = 0; loc < fine_loc_nnodes; loc++) {
+                int global_node = fine_part->h_local_nodes[g][loc];
+                int local_count = h_n2e_ptr[loc + 1] - h_n2e_ptr[loc];
+                global_num_attached[global_node] += local_count;
+            }
+
+            delete[] h_n2e_ptr;
+        }
+
+        for (int g = 0; g < ngpus; g++) {
+            CHECK_CUDA(cudaSetDevice(g));
+
+            int fine_loc_nnodes = fine_xpts->getExpandedNodes(g);
+            int *h_local_num_attached = new int[fine_loc_nnodes];
+
+            for (int loc = 0; loc < fine_loc_nnodes; loc++) {
+                int global_node = fine_part->h_local_nodes[g][loc];
+                h_local_num_attached[loc] = global_num_attached[global_node];
+
+                if (h_local_num_attached[loc] <= 0) {
+                    h_local_num_attached[loc] = 1;
+                }
+            }
+
+            CHECK_CUDA(
+                cudaMalloc((void **)&d_fine_num_attached_elems[g], fine_loc_nnodes * sizeof(int)));
+            CHECK_CUDA(cudaMemcpy(d_fine_num_attached_elems[g], h_local_num_attached,
+                                  fine_loc_nnodes * sizeof(int), cudaMemcpyHostToDevice));
+
+            delete[] h_local_num_attached;
+        }
+
+        ctx->sync();
     }
 
     void assemble_matrices() {
@@ -117,16 +203,17 @@ class MultiGPUUnstructuredProlongation {
 
             k_prolong_mat_assembly<T, Basis, is_bsr><<<grid, block, 0, streams[g]>>>(
                 d_coarse_iperm, d_crs_loc_elem_conn, d_n2e_ptr[g], d_n2e_elems[g], d_n2e_xis[g],
-                fine_loc_nnodes, d_fine_iperm, P_bsr_data[g].rowp, P_bsr_data[g].cols, block_dim,
-                d_P_vals[g].getPtr());
+                d_fine_num_attached_elems[g], fine_loc_nnodes, d_fine_iperm, P_bsr_data[g].rowp,
+                P_bsr_data[g].cols, block_dim, d_P_vals[g].getPtr());
 
             CHECK_CUDA(cudaGetLastError());
             CHECK_CUDA(cudaStreamSynchronize(streams[g]));
 
             k_restrict_mat_assembly<T, Basis, is_bsr><<<grid, block, 0, streams[g]>>>(
                 d_coarse_iperm, d_crs_loc_elem_conn, d_n2e_ptr[g], d_n2e_elems[g], d_n2e_xis[g],
-                fine_loc_nnodes, d_fine_iperm, PT_bsr_data[g].rowp, PT_bsr_data[g].cols, block_dim,
-                d_PT_vals[g].getPtr(), d_coarse_weights[g].getPtr());
+                d_fine_num_attached_elems[g], fine_loc_nnodes, d_fine_iperm, PT_bsr_data[g].rowp,
+                PT_bsr_data[g].cols, block_dim, d_PT_vals[g].getPtr(),
+                d_coarse_weights[g].getPtr());
 
             CHECK_CUDA(cudaGetLastError());
             CHECK_CUDA(cudaStreamSynchronize(streams[g]));
@@ -263,4 +350,5 @@ class MultiGPUUnstructuredProlongation {
     T **d_n2e_xis = nullptr;
 
     int ELEM_MAX = 10;
+    int **d_fine_num_attached_elems = nullptr;
 };

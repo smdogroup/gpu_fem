@@ -4,14 +4,15 @@
 
 template <typename T, class Basis, bool is_bsr>
 __global__ static void k_prolong_mat_assembly(const int *d_coarse_iperm, const int *coarse_elem_conn, const int *node2elem_ptr, const int *node2elem_elems, 
-    const T *node2elem_xis, const int nnodes_fine, const int *d_fine_iperm, int *d_rowp, int *d_cols, int block_dim, T *d_vals) {
+    const T *node2elem_xis, const int *fine_num_attached_elems, const int nnodes_fine, const int *d_fine_iperm, int *d_rowp, int *d_cols, int block_dim, T *d_vals) {
 
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int fine_node = tid;
     if (fine_node >= nnodes_fine) return;
 
     int perm_fine_node = d_fine_iperm[fine_node]; // for writing into perm fine soln
-    int num_attached_elems = node2elem_ptr[fine_node + 1] - node2elem_ptr[fine_node];
+    // int num_attached_elems = node2elem_ptr[fine_node + 1] - node2elem_ptr[fine_node];
+    int num_attached_elems = fine_num_attached_elems[fine_node];
     int block_dim2 = block_dim * block_dim;
     
     // attached element loop
@@ -69,7 +70,7 @@ __global__ static void k_prolong_mat_assembly(const int *d_coarse_iperm, const i
 
 template <typename T, class Basis, bool is_bsr>
 __global__ static void k_restrict_mat_assembly(const int *d_coarse_iperm, const int *coarse_elem_conn, const int *node2elem_ptr, const int *node2elem_elems, 
-    const T *node2elem_xis, const int nnodes_fine, const int *d_fine_iperm, int *d_rowp, int *d_cols, int block_dim, T *d_vals, T *d_coarse_weights) {
+    const T *node2elem_xis, const int *fine_num_attached_elems, const int nnodes_fine, const int *d_fine_iperm, int *d_rowp, int *d_cols, int block_dim, T *d_vals, T *d_coarse_weights) {
 
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int fine_node = tid;
@@ -77,7 +78,8 @@ __global__ static void k_restrict_mat_assembly(const int *d_coarse_iperm, const 
     if (fine_node >= nnodes_fine) return;
 
     int perm_fine_node = d_fine_iperm[fine_node]; // for writing into perm fine soln
-    int num_attached_elems = node2elem_ptr[fine_node + 1] - node2elem_ptr[fine_node];
+    // int num_attached_elems = node2elem_ptr[fine_node + 1] - node2elem_ptr[fine_node];
+    int num_attached_elems = fine_num_attached_elems[fine_node];
 
     for (int jp = node2elem_ptr[fine_node]; jp < node2elem_ptr[fine_node + 1]; jp++) {
         int ielem_c = node2elem_elems[jp];
