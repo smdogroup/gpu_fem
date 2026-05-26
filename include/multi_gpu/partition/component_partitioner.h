@@ -1019,16 +1019,14 @@ class TacsComponentGPUPartitioner {
         h_is_local_ghost = new bool *[ngpus];
         std::memset(h_is_local_ghost, 0, ngpus * sizeof(bool *));
 
+        int **global_to_local = new int *[ngpus];
+
         for (int g = 0; g < ngpus; g++) {
             h_is_local_ghost[g] = local_nnodes[g] > 0 ? new bool[local_nnodes[g]] : nullptr;
             if (local_nnodes[g] > 0) {
                 std::fill(h_is_local_ghost[g], h_is_local_ghost[g] + local_nnodes[g], false);
             }
-        }
 
-        int **global_to_local = new int *[ngpus];
-
-        for (int g = 0; g < ngpus; g++) {
             global_to_local[g] = new int[num_nodes];
             std::fill(global_to_local[g], global_to_local[g] + num_nodes, -1);
 
@@ -1038,45 +1036,38 @@ class TacsComponentGPUPartitioner {
             }
         }
 
-        int total_ghost_flags = 0;
-        int total_owner_interface_flags = 0;
+        int total_flags = 0;
 
-        for (int dst = 0; dst < ngpus; dst++) {
-            int dst_ghost_flags = 0;
-
-            for (int dst_loc = 0; dst_loc < local_nnodes[dst]; dst_loc++) {
-                int node = h_local_nodes[dst][dst_loc];
-                int src = h_node_gpu_ind[node];
-
-                if (src < 0 || src >= ngpus || src == dst) continue;
-
-                h_is_local_ghost[dst][dst_loc] = true;
-                dst_ghost_flags++;
-                total_ghost_flags++;
-
-                int src_loc = global_to_local[src][node];
-                if (src_loc >= 0) {
-                    if (!h_is_local_ghost[src][src_loc]) {
-                        total_owner_interface_flags++;
-                    }
-                    h_is_local_ghost[src][src_loc] = true;
-                } else {
-                    printf(
-                        "[PART build_local_ghost_flags] WARNING owner src=%d does not have node=%d "
-                        "local\n",
-                        src, node);
-                }
+        for (int node = 0; node < num_nodes; node++) {
+            int count = 0;
+            for (int g = 0; g < ngpus; g++) {
+                if (global_to_local[g][node] >= 0) count++;
             }
 
-            printf("[PART build_local_ghost_flags] GPU[%d] dst ghost flags=%d\n", dst,
-                   dst_ghost_flags);
+            if (count <= 1) continue;
+
+            for (int g = 0; g < ngpus; g++) {
+                int loc = global_to_local[g][node];
+                if (loc >= 0) {
+                    h_is_local_ghost[g][loc] = true;
+                    total_flags++;
+                }
+            }
+        }
+
+        for (int g = 0; g < ngpus; g++) {
+            int nghost = 0;
+            for (int loc = 0; loc < local_nnodes[g]; loc++) {
+                if (h_is_local_ghost[g][loc]) nghost++;
+            }
+            printf("[PART build_local_ghost_flags] GPU[%d] interface/local ghost flags=%d / %d\n",
+                   g, nghost, local_nnodes[g]);
         }
 
         for (int g = 0; g < ngpus; g++) delete[] global_to_local[g];
         delete[] global_to_local;
 
-        printf("[PART build_local_ghost_flags] total ghost copies=%d owner-interface-flags=%d\n",
-               total_ghost_flags, total_owner_interface_flags);
+        printf("[PART build_local_ghost_flags] total interface flags=%d\n", total_flags);
         printf("[PART build_local_ghost_flags] DONE\n\n");
     }
 
