@@ -101,37 +101,159 @@ class GPUbsrmat {
         delete[] descrA;
     }
 
+    // void apply_bcs(int *n_owned_bcs, int **d_owned_bcs, int *n_local_bcs, int **d_local_bcs) {
+    //     for (int g = 0; g < ngpus; g++) {
+    //         CHECK_CUDA(cudaSetDevice(g));
+    //         CHECK_CUBLAS(cublasSetStream(cublasHandles[g], streams[g]));
+
+    //         dim3 block(128);
+
+    //         // printf("GPU[%d] - apply row bcs to local-local matrix\n", g);
+    //         if (n_local_bcs[g] > 0) {
+    //             dim3 grid((n_local_bcs[g] + block.x - 1) / block.x);
+
+    //             k_mat_apply_row_bcs<T><<<grid, block, 0, streams[g]>>>(
+    //                 block_dim, loc_mb[g], n_local_bcs[g], d_local_bcs[g], d_loc_rowp[g],
+    //                 d_loc_cols[g], d_loc_vals[g]);
+
+    //             CHECK_CUDA(cudaGetLastError());
+    //         }
+
+    //         // printf("GPU[%d] - apply col bcs to local-local matrix\n", g);
+    //         if (n_local_bcs[g] > 0) {
+    //             dim3 grid((n_local_bcs[g] + block.x - 1) / block.x);
+
+    //             k_mat_apply_col_bcs<T><<<grid, block, 0, streams[g]>>>(
+    //                 block_dim, loc_nb[g], n_local_bcs[g], d_local_bcs[g], d_tr_loc_rowp[g],
+    //                 d_tr_loc_cols[g], d_tr_block_map[g], d_loc_vals[g]);
+
+    //             CHECK_CUDA(cudaGetLastError());
+    //         }
+    //     }
+
+    //     sync();
+    // }
+
     void apply_bcs(int *n_owned_bcs, int **d_owned_bcs, int *n_local_bcs, int **d_local_bcs) {
+        printf("\n========== GPUbsrmat::apply_bcs START ==========\n");
+
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
-            CHECK_CUBLAS(cublasSetStream(cublasHandles[g], streams[g]));
 
-            dim3 block(128);
-
-            // printf("GPU[%d] - apply row bcs to local-local matrix\n", g);
-            if (n_local_bcs[g] > 0) {
-                dim3 grid((n_local_bcs[g] + block.x - 1) / block.x);
-
-                k_mat_apply_row_bcs<T><<<grid, block, 0, streams[g]>>>(
-                    block_dim, loc_mb[g], n_local_bcs[g], d_local_bcs[g], d_loc_rowp[g],
-                    d_loc_cols[g], d_loc_vals[g]);
-
-                CHECK_CUDA(cudaGetLastError());
+            cudaError_t pre_err = cudaGetLastError();
+            if (pre_err != cudaSuccess) {
+                printf("[GPUbsrmat apply_bcs] pre-existing CUDA error GPU[%d]: %s\n", g,
+                       cudaGetErrorString(pre_err));
+                exit(1);
             }
 
-            // printf("GPU[%d] - apply col bcs to local-local matrix\n", g);
-            if (n_local_bcs[g] > 0) {
-                dim3 grid((n_local_bcs[g] + block.x - 1) / block.x);
+            printf("[GPUbsrmat apply_bcs] GPU[%d]\n", g);
+            printf("  n_owned_bcs=%d n_local_bcs=%d\n", n_owned_bcs[g], n_local_bcs[g]);
+            printf("  loc_mb=%d loc_nb=%d loc_nnzb=%d loc_nnz=%d block_dim=%d\n", loc_mb[g],
+                   loc_nb[g], loc_nnzb[g], loc_nnz[g], block_dim);
+            printf(
+                "  ptrs d_local_bcs=%p rowp=%p cols=%p vals=%p tr_rowp=%p tr_cols=%p tr_map=%p "
+                "stream=%p\n",
+                (void *)d_local_bcs[g], (void *)d_loc_rowp[g], (void *)d_loc_cols[g],
+                (void *)d_loc_vals[g], (void *)d_tr_loc_rowp[g], (void *)d_tr_loc_cols[g],
+                (void *)d_tr_block_map[g], (void *)streams[g]);
 
-                k_mat_apply_col_bcs<T><<<grid, block, 0, streams[g]>>>(
-                    block_dim, loc_nb[g], n_local_bcs[g], d_local_bcs[g], d_tr_loc_rowp[g],
-                    d_tr_loc_cols[g], d_tr_block_map[g], d_loc_vals[g]);
+            CHECK_CUBLAS(cublasSetStream(cublasHandles[g], streams[g]));
 
-                CHECK_CUDA(cudaGetLastError());
+            if (n_local_bcs[g] < 0) {
+                printf("[GPUbsrmat apply_bcs] ERROR GPU[%d] n_local_bcs < 0\n", g);
+                exit(1);
+            }
+
+            if (n_local_bcs[g] == 0) {
+                printf("[GPUbsrmat apply_bcs] GPU[%d] no local bcs, skip kernels\n", g);
+                continue;
+            }
+
+            if (!d_local_bcs[g] || !d_loc_rowp[g] || !d_loc_cols[g] || !d_loc_vals[g] ||
+                !d_tr_loc_rowp[g] || !d_tr_loc_cols[g] || !d_tr_block_map[g]) {
+                printf("[GPUbsrmat apply_bcs] ERROR GPU[%d] null pointer before BC kernels\n", g);
+                exit(1);
+            }
+
+            if (loc_mb[g] <= 0 || loc_nb[g] <= 0 || loc_nnzb[g] <= 0 || loc_nnz[g] <= 0) {
+                printf("[GPUbsrmat apply_bcs] ERROR GPU[%d] bad matrix sizes\n", g);
+                exit(1);
+            }
+
+            dim3 block(128);
+            dim3 grid((n_local_bcs[g] + block.x - 1) / block.x);
+
+            if (grid.x == 0) {
+                printf("[GPUbsrmat apply_bcs] ERROR GPU[%d] grid.x == 0\n", g);
+                exit(1);
+            }
+
+            printf("[GPUbsrmat apply_bcs] GPU[%d] launch row BC grid=%u block=%u\n", g, grid.x,
+                   block.x);
+
+            k_mat_apply_row_bcs<T><<<grid, block, 0, streams[g]>>>(
+                block_dim, loc_mb[g], n_local_bcs[g], d_local_bcs[g], d_loc_rowp[g], d_loc_cols[g],
+                d_loc_vals[g]);
+
+            cudaError_t row_launch = cudaPeekAtLastError();
+            if (row_launch != cudaSuccess) {
+                printf("[GPUbsrmat apply_bcs] ROW launch failed GPU[%d]: %s\n", g,
+                       cudaGetErrorString(row_launch));
+                exit(1);
+            }
+
+            CHECK_CUDA(cudaStreamSynchronize(streams[g]));
+
+            cudaError_t row_sync = cudaGetLastError();
+            if (row_sync != cudaSuccess) {
+                printf("[GPUbsrmat apply_bcs] ROW sync failed GPU[%d]: %s\n", g,
+                       cudaGetErrorString(row_sync));
+                exit(1);
+            }
+
+            printf("[GPUbsrmat apply_bcs] GPU[%d] row BC done\n", g);
+
+            printf("[GPUbsrmat apply_bcs] GPU[%d] launch col BC grid=%u block=%u\n", g, grid.x,
+                   block.x);
+
+            k_mat_apply_col_bcs<T><<<grid, block, 0, streams[g]>>>(
+                block_dim, loc_nb[g], n_local_bcs[g], d_local_bcs[g], d_tr_loc_rowp[g],
+                d_tr_loc_cols[g], d_tr_block_map[g], d_loc_vals[g]);
+
+            cudaError_t col_launch = cudaPeekAtLastError();
+            if (col_launch != cudaSuccess) {
+                printf("[GPUbsrmat apply_bcs] COL launch failed GPU[%d]: %s\n", g,
+                       cudaGetErrorString(col_launch));
+                exit(1);
+            }
+
+            CHECK_CUDA(cudaStreamSynchronize(streams[g]));
+
+            cudaError_t col_sync = cudaGetLastError();
+            if (col_sync != cudaSuccess) {
+                printf("[GPUbsrmat apply_bcs] COL sync failed GPU[%d]: %s\n", g,
+                       cudaGetErrorString(col_sync));
+                exit(1);
+            }
+
+            printf("[GPUbsrmat apply_bcs] GPU[%d] col BC done\n", g);
+        }
+
+        printf("[GPUbsrmat apply_bcs] final sync\n");
+        sync();
+
+        for (int g = 0; g < ngpus; g++) {
+            CHECK_CUDA(cudaSetDevice(g));
+            cudaError_t err = cudaGetLastError();
+            if (err != cudaSuccess) {
+                printf("[GPUbsrmat apply_bcs] final stale error GPU[%d]: %s\n", g,
+                       cudaGetErrorString(err));
+                exit(1);
             }
         }
 
-        sync();
+        printf("========== GPUbsrmat::apply_bcs DONE ==========\n\n");
     }
 
     void zeroValues() {
