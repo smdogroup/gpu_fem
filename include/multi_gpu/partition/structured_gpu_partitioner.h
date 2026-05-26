@@ -143,14 +143,13 @@ class StructuredGPUPartitioner {
 
     void setElementComponents(const int *h_elem_comp, int **h_loc_elem_comp,
                               int **d_loc_elem_comp) {
-        // printf("get loc elem components\n");
         for (int g = 0; g < ngpus; g++) {
             int local_nelems = getLocalNumElements(g);
-            h_loc_elem_components[g] = new int[local_nelems];
+            h_loc_elem_comp[g] = new int[local_nelems];
             int start_elem = getStartElem(g);
             for (int le = 0; le < local_nelems; le++) {
                 int e = le + start_elem;
-                h_loc_elem_components[g][le] = h_elem_comp[e];
+                h_loc_elem_comp[g][le] = h_elem_comp[e];
             }
 
             CHECK_CUDA(cudaSetDevice(g));
@@ -619,6 +618,6 @@ class StructuredGPUPartitioner {
     int **d_dstred_map = nullptr;
 
     bool **h_is_local_ghost = nullptr;
-    int **h_loc_elem_components = nullptr;
+    // int **h_loc_elem_components = nullptr;
     int *h_elem_assigned_gpu = nullptr;
 };
