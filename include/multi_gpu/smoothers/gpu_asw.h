@@ -501,8 +501,92 @@ class MultiGPUElementASW {
 
     int pair_index(int dst, int src) const { return ngpus * dst + src; }
 
+    // void build_ghost_maps() {
+    //     // global_to_local[g][global_node] = local node index on GPU g, or -1
+    //     int **global_to_local = new int *[ngpus];
+
+    //     for (int g = 0; g < ngpus; g++) {
+    //         global_to_local[g] = new int[part->num_nodes];
+    //         std::fill(global_to_local[g], global_to_local[g] + part->num_nodes, -1);
+
+    //         for (int loc = 0; loc < part->local_nnodes[g]; loc++) {
+    //             int gnode = part->h_local_nodes[g][loc];
+    //             global_to_local[g][gnode] = loc;
+    //         }
+    //     }
+
+    //     for (int dst = 0; dst < ngpus; dst++) {
+    //         int *dst_conn = A->getHostLocalElemConn(dst);
+
+    //         for (int e = 0; e < batch_size[dst]; e++) {
+    //             for (int ij = 0; ij < size4; ij++) {
+    //                 int i = ij % size2;
+    //                 int j = ij / size2;
+
+    //                 int dst_row_node = dst_conn[e * size2 + i];
+    //                 int dst_col_node = dst_conn[e * size2 + j];
+
+    //                 if (dst_row_node < 0 || dst_col_node < 0) continue;
+
+    //                 int glob_row = part->h_local_nodes[dst][dst_row_node];
+    //                 int glob_col = part->h_local_nodes[dst][dst_col_node];
+
+    //                 bool dst_row_is_ghost = part->h_is_local_ghost[dst][dst_row_node];
+    //                 bool dst_col_is_ghost = part->h_is_local_ghost[dst][dst_col_node];
+
+    //                 // Only destination ghost x ghost blocks
+    //                 if (!dst_row_is_ghost || !dst_col_is_ghost) continue;
+
+    //                 int dst_batch_block = e * size4 + ij;
+
+    //                 for (int src = 0; src < ngpus; src++) {
+    //                     if (src == dst) continue;
+
+    //                     int src_row_node = global_to_local[src][glob_row];
+    //                     int src_col_node = global_to_local[src][glob_col];
+
+    //                     if (src_row_node < 0 || src_col_node < 0) continue;
+
+    //                     int *src_rowp = A->getHostLocalRowp(src);
+    //                     int *src_cols = A->getHostLocalCols(src);
+
+    //                     int jp_found = -1;
+    //                     for (int jp = src_rowp[src_row_node]; jp < src_rowp[src_row_node + 1];
+    //                          jp++) {
+    //                         if (src_cols[jp] == src_col_node) {
+    //                             jp_found = jp;
+    //                             break;
+    //                         }
+    //                     }
+
+    //                     if (jp_found < 0) continue;
+
+    //                     int idx = pair_index(dst, src);
+    //                     h_ghost_asw_blocks[idx].push_back(dst_batch_block);
+    //                     h_ghost_kmat_blocks[idx].push_back(jp_found);
+
+    //                     break;
+    //                 }
+    //             }
+    //         }
+    //     }
+
+    //     for (int dst = 0; dst < ngpus; dst++) {
+    //         for (int src = 0; src < ngpus; src++) {
+    //             if (src == dst) continue;
+
+    //             int idx = pair_index(dst, src);
+    //             ghost_pair_nblocks[idx] = static_cast<int>(h_ghost_asw_blocks[idx].size());
+    //         }
+    //     }
+
+    //     for (int g = 0; g < ngpus; g++) {
+    //         delete[] global_to_local[g];
+    //     }
+    //     delete[] global_to_local;
+    // }
+
     void build_ghost_maps() {
-        // global_to_local[g][global_node] = local node index on GPU g, or -1
         int **global_to_local = new int *[ngpus];
 
         for (int g = 0; g < ngpus; g++) {
@@ -528,45 +612,49 @@ class MultiGPUElementASW {
 
                     if (dst_row_node < 0 || dst_col_node < 0) continue;
 
+                    int dst_batch_block = e * size4 + ij;
+
+                    // If this block already exists in dst local BSR, it was already copied
+                    // by k_copyMatValuesToBatchedContiguous(). Do not double-add it.
+                    if (h_block_inds[dst][dst_batch_block] >= 0) continue;
+
                     int glob_row = part->h_local_nodes[dst][dst_row_node];
                     int glob_col = part->h_local_nodes[dst][dst_col_node];
 
-                    bool dst_row_is_ghost = part->h_is_local_ghost[dst][dst_row_node];
-                    bool dst_col_is_ghost = part->h_is_local_ghost[dst][dst_col_node];
+                    bool dst_row_is_interface = part->h_is_local_ghost[dst][dst_row_node];
+                    bool dst_col_is_interface = part->h_is_local_ghost[dst][dst_col_node];
 
-                    // Only destination ghost x ghost blocks
-                    if (!dst_row_is_ghost || !dst_col_is_ghost) continue;
+                    // Only patch missing interface x interface blocks.
+                    if (!dst_row_is_interface || !dst_col_is_interface) continue;
 
-                    int dst_batch_block = e * size4 + ij;
+                    // Deterministic source: row-owner GPU.
+                    int src = part->h_node_gpu_ind[glob_row];
 
-                    for (int src = 0; src < ngpus; src++) {
-                        if (src == dst) continue;
+                    if (src < 0 || src >= ngpus || src == dst) continue;
 
-                        int src_row_node = global_to_local[src][glob_row];
-                        int src_col_node = global_to_local[src][glob_col];
+                    int src_row_node = global_to_local[src][glob_row];
+                    int src_col_node = global_to_local[src][glob_col];
 
-                        if (src_row_node < 0 || src_col_node < 0) continue;
+                    // If row owner does not contain both nodes locally, it cannot supply this
+                    // block.
+                    if (src_row_node < 0 || src_col_node < 0) continue;
 
-                        int *src_rowp = A->getHostLocalRowp(src);
-                        int *src_cols = A->getHostLocalCols(src);
+                    int *src_rowp = A->getHostLocalRowp(src);
+                    int *src_cols = A->getHostLocalCols(src);
 
-                        int jp_found = -1;
-                        for (int jp = src_rowp[src_row_node]; jp < src_rowp[src_row_node + 1];
-                             jp++) {
-                            if (src_cols[jp] == src_col_node) {
-                                jp_found = jp;
-                                break;
-                            }
+                    int jp_found = -1;
+                    for (int jp = src_rowp[src_row_node]; jp < src_rowp[src_row_node + 1]; jp++) {
+                        if (src_cols[jp] == src_col_node) {
+                            jp_found = jp;
+                            break;
                         }
-
-                        if (jp_found < 0) continue;
-
-                        int idx = pair_index(dst, src);
-                        h_ghost_asw_blocks[idx].push_back(dst_batch_block);
-                        h_ghost_kmat_blocks[idx].push_back(jp_found);
-
-                        break;
                     }
+
+                    if (jp_found < 0) continue;
+
+                    int idx = pair_index(dst, src);
+                    h_ghost_asw_blocks[idx].push_back(dst_batch_block);
+                    h_ghost_kmat_blocks[idx].push_back(jp_found);
                 }
             }
         }
