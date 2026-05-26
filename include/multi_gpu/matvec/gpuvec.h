@@ -580,21 +580,146 @@ class GPUvec {
         sync();
     }
 
+    // void apply_bcs(int *n_owned_bcs, int **d_owned_bcs, int *n_local_bcs, int **d_local_bcs) {
+    //     for (int g = 0; g < ngpus; g++) {
+    //         CHECK_CUDA(cudaSetDevice(debug ? 0 : g));
+    //         CHECK_CUBLAS(cublasSetStream(cublasHandles[g], streams[g]));
+
+    //         dim3 block(32);
+    //         dim3 grid1((n_owned_bcs[g] + 31) / 32);
+    //         k_vec_apply_bcs<T>
+    //             <<<grid1, block, 0, streams[g]>>>(n_owned_bcs[g], d_owned_bcs[g],
+    //             d_vals_owned[g]);
+
+    //         dim3 grid2((n_local_bcs[g] + 31) / 32);
+    //         k_vec_apply_bcs<T>
+    //             <<<grid2, block, 0, streams[g]>>>(n_local_bcs[g], d_local_bcs[g],
+    //             d_vals_local[g]);
+    //     }
+    //     ctx->sync();
+    // }
+
     void apply_bcs(int *n_owned_bcs, int **d_owned_bcs, int *n_local_bcs, int **d_local_bcs) {
+        printf("\n========== GPUvec::apply_bcs START ==========\n");
+
         for (int g = 0; g < ngpus; g++) {
-            CHECK_CUDA(cudaSetDevice(debug ? 0 : g));
+            int dev = debug ? 0 : g;
+            CHECK_CUDA(cudaSetDevice(dev));
+
+            cudaError_t pre_err = cudaGetLastError();
+            if (pre_err != cudaSuccess) {
+                printf("[GPUvec apply_bcs] pre-existing CUDA error GPU[%d] dev=%d: %s\n", g, dev,
+                       cudaGetErrorString(pre_err));
+                exit(1);
+            }
+
             CHECK_CUBLAS(cublasSetStream(cublasHandles[g], streams[g]));
 
-            dim3 block(32);
-            dim3 grid1((n_owned_bcs[g] + 31) / 32);
-            k_vec_apply_bcs<T>
-                <<<grid1, block, 0, streams[g]>>>(n_owned_bcs[g], d_owned_bcs[g], d_vals_owned[g]);
+            printf("[GPUvec apply_bcs] GPU[%d] dev=%d\n", g, dev);
+            printf("  n_owned_bcs=%d n_local_bcs=%d owned_N=%d local_N=%d block_dim=%d\n",
+                   n_owned_bcs[g], n_local_bcs[g], owned_N[g], local_N[g], block_dim);
+            printf(
+                "  ptrs d_owned_bcs=%p d_local_bcs=%p d_vals_owned=%p d_vals_local=%p stream=%p\n",
+                (void *)d_owned_bcs[g], (void *)d_local_bcs[g], (void *)d_vals_owned[g],
+                (void *)d_vals_local[g], (void *)streams[g]);
 
-            dim3 grid2((n_local_bcs[g] + 31) / 32);
-            k_vec_apply_bcs<T>
-                <<<grid2, block, 0, streams[g]>>>(n_local_bcs[g], d_local_bcs[g], d_vals_local[g]);
+            if (n_owned_bcs[g] < 0 || n_local_bcs[g] < 0) {
+                printf("[GPUvec apply_bcs] ERROR negative BC count on GPU[%d]\n", g);
+                exit(1);
+            }
+
+            if (owned_N[g] < 0 || local_N[g] < 0) {
+                printf("[GPUvec apply_bcs] ERROR negative vec size on GPU[%d]\n", g);
+                exit(1);
+            }
+
+            dim3 block(32);
+
+            if (n_owned_bcs[g] > 0) {
+                if (!d_owned_bcs[g] || !d_vals_owned[g]) {
+                    printf("[GPUvec apply_bcs] ERROR null owned BC/value pointer GPU[%d]\n", g);
+                    exit(1);
+                }
+
+                dim3 grid1((n_owned_bcs[g] + block.x - 1) / block.x);
+
+                printf("[GPUvec apply_bcs] GPU[%d] launch owned grid=%u block=%u\n", g, grid1.x,
+                       block.x);
+
+                k_vec_apply_bcs<T><<<grid1, block, 0, streams[g]>>>(n_owned_bcs[g], d_owned_bcs[g],
+                                                                    d_vals_owned[g]);
+
+                cudaError_t launch_err = cudaPeekAtLastError();
+                if (launch_err != cudaSuccess) {
+                    printf("[GPUvec apply_bcs] OWNED launch failed GPU[%d]: %s\n", g,
+                           cudaGetErrorString(launch_err));
+                    exit(1);
+                }
+
+                CHECK_CUDA(cudaStreamSynchronize(streams[g]));
+
+                cudaError_t sync_err = cudaGetLastError();
+                if (sync_err != cudaSuccess) {
+                    printf("[GPUvec apply_bcs] OWNED sync failed GPU[%d]: %s\n", g,
+                           cudaGetErrorString(sync_err));
+                    exit(1);
+                }
+
+                printf("[GPUvec apply_bcs] GPU[%d] owned BC done\n", g);
+            } else {
+                printf("[GPUvec apply_bcs] GPU[%d] no owned BCs, skip owned kernel\n", g);
+            }
+
+            if (n_local_bcs[g] > 0) {
+                if (!d_local_bcs[g] || !d_vals_local[g]) {
+                    printf("[GPUvec apply_bcs] ERROR null local BC/value pointer GPU[%d]\n", g);
+                    exit(1);
+                }
+
+                dim3 grid2((n_local_bcs[g] + block.x - 1) / block.x);
+
+                printf("[GPUvec apply_bcs] GPU[%d] launch local grid=%u block=%u\n", g, grid2.x,
+                       block.x);
+
+                k_vec_apply_bcs<T><<<grid2, block, 0, streams[g]>>>(n_local_bcs[g], d_local_bcs[g],
+                                                                    d_vals_local[g]);
+
+                cudaError_t launch_err = cudaPeekAtLastError();
+                if (launch_err != cudaSuccess) {
+                    printf("[GPUvec apply_bcs] LOCAL launch failed GPU[%d]: %s\n", g,
+                           cudaGetErrorString(launch_err));
+                    exit(1);
+                }
+
+                CHECK_CUDA(cudaStreamSynchronize(streams[g]));
+
+                cudaError_t sync_err = cudaGetLastError();
+                if (sync_err != cudaSuccess) {
+                    printf("[GPUvec apply_bcs] LOCAL sync failed GPU[%d]: %s\n", g,
+                           cudaGetErrorString(sync_err));
+                    exit(1);
+                }
+
+                printf("[GPUvec apply_bcs] GPU[%d] local BC done\n", g);
+            } else {
+                printf("[GPUvec apply_bcs] GPU[%d] no local BCs, skip local kernel\n", g);
+            }
         }
+
+        printf("[GPUvec apply_bcs] ctx sync\n");
         ctx->sync();
+
+        for (int g = 0; g < ngpus; g++) {
+            CHECK_CUDA(cudaSetDevice(debug ? 0 : g));
+            cudaError_t err = cudaGetLastError();
+            if (err != cudaSuccess) {
+                printf("[GPUvec apply_bcs] final stale error GPU[%d]: %s\n", g,
+                       cudaGetErrorString(err));
+                exit(1);
+            }
+        }
+
+        printf("========== GPUvec::apply_bcs DONE ==========\n\n");
     }
 
     T dotProd(GPUvec<T, Partitioner> *y) {

@@ -30,6 +30,27 @@
 #include <string>
 #include <vector>
 
+#define CUDA_CHECK_ALL(ctx, msg)                                                       \
+    do {                                                                               \
+        printf("\n[MAIN CUDA CHECK] %s\n", msg);                                       \
+        for (int _g = 0; _g < (ctx)->ngpus; _g++) {                                    \
+            CHECK_CUDA(cudaSetDevice((ctx)->debug ? 0 : _g));                          \
+            cudaError_t _err = cudaGetLastError();                                     \
+            if (_err != cudaSuccess) {                                                 \
+                printf("[MAIN CUDA ERROR] %s GPU[%d] dev=%d : %s\n", msg, _g,          \
+                       (ctx)->debug ? 0 : _g, cudaGetErrorString(_err));               \
+                exit(1);                                                               \
+            }                                                                          \
+        }                                                                              \
+    } while (0)
+
+#define CUDA_SYNC_CHECK_ALL(ctx, msg)                                                  \
+    do {                                                                               \
+        printf("\n[MAIN CUDA SYNC CHECK] %s\n", msg);                                  \
+        (ctx)->sync();                                                                 \
+        CUDA_CHECK_ALL(ctx, msg);                                                      \
+    } while (0)
+
 void to_lowercase(char *str) {
     for (; *str; ++str) {
         *str = std::tolower(*str);
@@ -127,8 +148,10 @@ int main(int argc, char *argv[]) {
         double thick = 2.0 / SR;
 
         printf("making assembler+GMG for mesh '%s'\n", fname.c_str());
+    CUDA_CHECK_ALL(ctx, "before create assembler");
 
-        auto assembler = Assembler::createFromBDF(ctx, mesh_loader, Data(E, nu, thick));
+    auto assembler = Assembler::createFromBDF(ctx, mesh_loader, Data(E, nu, thick));
+    CUDA_SYNC_CHECK_ALL(ctx, "after create assembler");
 
         int nvars = assembler->get_num_vars();
         int nnodes = assembler->get_num_nodes();
@@ -145,19 +168,50 @@ int main(int argc, char *argv[]) {
 
         auto part = assembler->getPartitioner();
 
+        // auto kmat = new GPUbsrmat<T, Partitioner>(ctx, part, block_dim);
+        // auto rhs = new GPUvec<T, Partitioner>(ctx, part, block_dim);
+        // auto soln = new GPUvec<T, Partitioner>(ctx, part, block_dim);
+        printf("[MAIN] create kmat\n");
         auto kmat = new GPUbsrmat<T, Partitioner>(ctx, part, block_dim);
+        CUDA_SYNC_CHECK_ALL(ctx, "after create kmat");
+
+        printf("[MAIN] create rhs\n");
         auto rhs = new GPUvec<T, Partitioner>(ctx, part, block_dim);
+        CUDA_SYNC_CHECK_ALL(ctx, "after create rhs");
+
+        printf("[MAIN] create soln\n");
         auto soln = new GPUvec<T, Partitioner>(ctx, part, block_dim);
+        CUDA_SYNC_CHECK_ALL(ctx, "after create soln");
 
         int N = assembler->get_num_vars();
 
+        // rhs->setValuesFromHost(my_loads);
+
+        // assembler->add_jacobian(kmat);
+        // assembler->apply_bcs(kmat);
+        // assembler->apply_bcs(rhs);
+
+        // auto test_vec = new GPUvec<T, Partitioner>(ctx, part, block_dim)
+
+        printf("[MAIN] rhs setValuesFromHost\n");
         rhs->setValuesFromHost(my_loads);
+        CUDA_SYNC_CHECK_ALL(ctx, "after rhs setValuesFromHost");
 
+        printf("[MAIN] add_jacobian\n");
         assembler->add_jacobian(kmat);
-        assembler->apply_bcs(kmat);
-        assembler->apply_bcs(rhs);
+        CUDA_SYNC_CHECK_ALL(ctx, "after add_jacobian");
 
+        printf("[MAIN] apply_bcs(kmat)\n");
+        assembler->apply_bcs(kmat);
+        CUDA_SYNC_CHECK_ALL(ctx, "after apply_bcs(kmat)");
+
+        printf("[MAIN] apply_bcs(rhs)\n");
+        assembler->apply_bcs(rhs);
+        CUDA_SYNC_CHECK_ALL(ctx, "after apply_bcs(rhs)");
+
+        printf("[MAIN] create test_vec\n");
         auto test_vec = new GPUvec<T, Partitioner>(ctx, part, block_dim);
+        CUDA_SYNC_CHECK_ALL(ctx, "after create test_vec");;
 
         ctx->sync();
 
@@ -173,8 +227,18 @@ int main(int argc, char *argv[]) {
         T omega = 0.15;
         int nsmooth = 4;
 
+        // auto smoother = new ASW(ctx, part, kmat, omega, nsmooth);
+        // smoother->factor();
+
+        printf("[MAIN] create ASW smoother\n");
+        CUDA_CHECK_ALL(ctx, "before ASW constructor");
         auto smoother = new ASW(ctx, part, kmat, omega, nsmooth);
+        CUDA_SYNC_CHECK_ALL(ctx, "after ASW constructor");
+
+        printf("[MAIN] factor ASW smoother\n");
         smoother->factor();
+        CUDA_SYNC_CHECK_ALL(ctx, "after ASW factor");
+
         smoothers.push_back(smoother);
 
         if (i == lev_min) {
