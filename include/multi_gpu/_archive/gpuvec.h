@@ -586,26 +586,14 @@ class GPUvec {
             CHECK_CUBLAS(cublasSetStream(cublasHandles[g], streams[g]));
 
             dim3 block(32);
+            dim3 grid1((n_owned_bcs[g] + 31) / 32);
+            k_vec_apply_bcs<T>
+                <<<grid1, block, 0, streams[g]>>>(n_owned_bcs[g], d_owned_bcs[g], d_vals_owned[g]);
 
-            if (n_owned_bcs[g] > 0) {
-                dim3 grid1((n_owned_bcs[g] + 31) / 32);
-
-                k_vec_apply_bcs<T><<<grid1, block, 0, streams[g]>>>(n_owned_bcs[g], d_owned_bcs[g],
-                                                                    d_vals_owned[g]);
-
-                CHECK_CUDA(cudaGetLastError());
-            }
-
-            if (n_local_bcs[g] > 0) {
-                dim3 grid2((n_local_bcs[g] + 31) / 32);
-
-                k_vec_apply_bcs<T><<<grid2, block, 0, streams[g]>>>(n_local_bcs[g], d_local_bcs[g],
-                                                                    d_vals_local[g]);
-
-                CHECK_CUDA(cudaGetLastError());
-            }
+            dim3 grid2((n_local_bcs[g] + 31) / 32);
+            k_vec_apply_bcs<T>
+                <<<grid2, block, 0, streams[g]>>>(n_local_bcs[g], d_local_bcs[g], d_vals_local[g]);
         }
-
         ctx->sync();
     }
 

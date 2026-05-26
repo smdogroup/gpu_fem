@@ -108,6 +108,7 @@ class GPUbsrmat {
 
             dim3 block(128);
 
+            // printf("GPU[%d] - apply row bcs to local-local matrix\n", g);
             if (n_local_bcs[g] > 0) {
                 dim3 grid((n_local_bcs[g] + block.x - 1) / block.x);
 
@@ -118,6 +119,7 @@ class GPUbsrmat {
                 CHECK_CUDA(cudaGetLastError());
             }
 
+            // printf("GPU[%d] - apply col bcs to local-local matrix\n", g);
             if (n_local_bcs[g] > 0) {
                 dim3 grid((n_local_bcs[g] + block.x - 1) / block.x);
 
