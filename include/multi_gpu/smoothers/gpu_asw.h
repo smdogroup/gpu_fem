@@ -709,38 +709,147 @@ class MultiGPUElementASW {
         ctx->sync();
     }
 
+    // void allocate_batched_memory() {
+    //     for (int g = 0; g < ngpus; g++) {
+    //         CHECK_CUDA(cudaSetDevice(debug ? 0 : g));
+
+    //         size_t mat_bytes = (size_t)batch_size[g] * n * n * sizeof(T);
+    //         size_t vec_bytes = (size_t)batch_size[g] * n * sizeof(T);
+    //         size_t ptr_bytes = (size_t)batch_size[g] * sizeof(T *);
+
+    //         CHECK_CUDA(cudaMalloc((void **)&d_Adata[g], mat_bytes));
+    //         CHECK_CUDA(cudaMalloc((void **)&d_invAdata[g], mat_bytes));
+    //         CHECK_CUDA(cudaMalloc((void **)&d_Xdata[g], vec_bytes));
+    //         CHECK_CUDA(cudaMalloc((void **)&d_Ydata[g], vec_bytes));
+
+    //         CHECK_CUDA(cudaMalloc((void **)&d_Aarray[g], ptr_bytes));
+    //         CHECK_CUDA(cudaMalloc((void **)&d_invAarray[g], ptr_bytes));
+    //         CHECK_CUDA(cudaMalloc((void **)&d_Xarray[g], ptr_bytes));
+    //         CHECK_CUDA(cudaMalloc((void **)&d_Yarray[g], ptr_bytes));
+
+    //         CHECK_CUDA(
+    //             cudaMalloc((void **)&d_PivotArray[g], (size_t)batch_size[g] * n * sizeof(int)));
+    //         CHECK_CUDA(cudaMalloc((void **)&d_InfoArray[g], (size_t)batch_size[g] *
+    //         sizeof(int)));
+
+    //         dim3 block(128);
+    //         dim3 grid((batch_size[g] + block.x - 1) / block.x);
+
+    //         k_setupBatchedPointers<T><<<grid, block, 0, streams[g]>>>(
+    //             batch_size[g], n, d_Adata[g], d_invAdata[g], d_Xdata[g], d_Ydata[g], d_Aarray[g],
+    //             d_invAarray[g], d_Xarray[g], d_Yarray[g]);
+
+    //         CHECK_CUDA(cudaGetLastError());
+    //     }
+    //     ctx->sync();
+    // }
+
     void allocate_batched_memory() {
+        printf("\n[ASW] allocate_batched_memory START\n");
+        printf("[ASW] ngpus=%d block_dim=%d n=%d debug=%d\n", ngpus, block_dim, n, (int)debug);
+
         for (int g = 0; g < ngpus; g++) {
-            CHECK_CUDA(cudaSetDevice(debug ? 0 : g));
+            int dev = debug ? 0 : g;
+
+            printf("\n[ASW] GPU[%d] dev=%d entering\n", g, dev);
+            printf("[ASW] GPU[%d] batch_size=%d n_batch_blocks=%d n_rhs_blocks=%d\n", g,
+                   batch_size[g], n_batch_blocks[g], n_rhs_blocks[g]);
+
+            CHECK_CUDA(cudaSetDevice(dev));
+
+            cudaError_t pre_err = cudaGetLastError();
+            if (pre_err != cudaSuccess) {
+                printf("[ASW] GPU[%d] pre-existing CUDA error: %s\n", g,
+                       cudaGetErrorString(pre_err));
+            }
 
             size_t mat_bytes = (size_t)batch_size[g] * n * n * sizeof(T);
             size_t vec_bytes = (size_t)batch_size[g] * n * sizeof(T);
             size_t ptr_bytes = (size_t)batch_size[g] * sizeof(T *);
 
+            printf("[ASW] GPU[%d] mat_bytes=%zu vec_bytes=%zu ptr_bytes=%zu\n", g, mat_bytes,
+                   vec_bytes, ptr_bytes);
+
+            size_t free_b = 0, total_b = 0;
+            cudaError_t mem_err = cudaMemGetInfo(&free_b, &total_b);
+            if (mem_err == cudaSuccess) {
+                printf("[ASW] GPU[%d] mem free=%zu total=%zu needed approx=%zu\n", g, free_b,
+                       total_b,
+                       2 * mat_bytes + 2 * vec_bytes + 4 * ptr_bytes +
+                           (size_t)batch_size[g] * n * sizeof(int) +
+                           (size_t)batch_size[g] * sizeof(int));
+            } else {
+                printf("[ASW] GPU[%d] cudaMemGetInfo failed: %s\n", g, cudaGetErrorString(mem_err));
+            }
+
+            if (batch_size[g] <= 0) {
+                printf("[ASW] GPU[%d] WARNING batch_size <= 0, skipping allocation/kernel\n", g);
+                d_Adata[g] = nullptr;
+                d_invAdata[g] = nullptr;
+                d_Xdata[g] = nullptr;
+                d_Ydata[g] = nullptr;
+                d_Aarray[g] = nullptr;
+                d_invAarray[g] = nullptr;
+                d_Xarray[g] = nullptr;
+                d_Yarray[g] = nullptr;
+                d_PivotArray[g] = nullptr;
+                d_InfoArray[g] = nullptr;
+                continue;
+            }
+
+            if (n <= 0) {
+                printf("[ASW] GPU[%d] ERROR n <= 0\n", g);
+                exit(1);
+            }
+
+            printf("[ASW] GPU[%d] malloc d_Adata\n", g);
             CHECK_CUDA(cudaMalloc((void **)&d_Adata[g], mat_bytes));
+            printf("[ASW] GPU[%d] malloc d_invAdata\n", g);
             CHECK_CUDA(cudaMalloc((void **)&d_invAdata[g], mat_bytes));
+            printf("[ASW] GPU[%d] malloc d_Xdata\n", g);
             CHECK_CUDA(cudaMalloc((void **)&d_Xdata[g], vec_bytes));
+            printf("[ASW] GPU[%d] malloc d_Ydata\n", g);
             CHECK_CUDA(cudaMalloc((void **)&d_Ydata[g], vec_bytes));
 
+            printf("[ASW] GPU[%d] malloc pointer arrays\n", g);
             CHECK_CUDA(cudaMalloc((void **)&d_Aarray[g], ptr_bytes));
             CHECK_CUDA(cudaMalloc((void **)&d_invAarray[g], ptr_bytes));
             CHECK_CUDA(cudaMalloc((void **)&d_Xarray[g], ptr_bytes));
             CHECK_CUDA(cudaMalloc((void **)&d_Yarray[g], ptr_bytes));
 
+            printf("[ASW] GPU[%d] malloc pivot/info\n", g);
             CHECK_CUDA(
                 cudaMalloc((void **)&d_PivotArray[g], (size_t)batch_size[g] * n * sizeof(int)));
             CHECK_CUDA(cudaMalloc((void **)&d_InfoArray[g], (size_t)batch_size[g] * sizeof(int)));
 
+            printf("[ASW] GPU[%d] ptrs Adata=%p invAdata=%p Xdata=%p Ydata=%p\n", g,
+                   (void *)d_Adata[g], (void *)d_invAdata[g], (void *)d_Xdata[g],
+                   (void *)d_Ydata[g]);
+            printf("[ASW] GPU[%d] ptr arrays Aarray=%p invAarray=%p Xarray=%p Yarray=%p\n", g,
+                   (void *)d_Aarray[g], (void *)d_invAarray[g], (void *)d_Xarray[g],
+                   (void *)d_Yarray[g]);
+
             dim3 block(128);
             dim3 grid((batch_size[g] + block.x - 1) / block.x);
+
+            printf("[ASW] GPU[%d] launch k_setupBatchedPointers grid=%u block=%u stream=%p\n", g,
+                   grid.x, block.x, (void *)streams[g]);
 
             k_setupBatchedPointers<T><<<grid, block, 0, streams[g]>>>(
                 batch_size[g], n, d_Adata[g], d_invAdata[g], d_Xdata[g], d_Ydata[g], d_Aarray[g],
                 d_invAarray[g], d_Xarray[g], d_Yarray[g]);
 
             CHECK_CUDA(cudaGetLastError());
+
+            printf("[ASW] GPU[%d] synchronize after setup kernel\n", g);
+            CHECK_CUDA(cudaStreamSynchronize(streams[g]));
+
+            printf("[ASW] GPU[%d] done\n", g);
         }
+
+        printf("[ASW] ctx sync\n");
         ctx->sync();
+        printf("[ASW] allocate_batched_memory DONE\n\n");
     }
 
     void allocate_ghost_batched_memory() {
