@@ -87,7 +87,7 @@ class GPUvec {
 
     int pair_index(int dst, int src) const { return ngpus * dst + src; }
 
-    void printValuesOnHost() {
+    void printValuesOnHost(int max_node = 20) {
         // prints owned values only from each GPU
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
@@ -96,9 +96,15 @@ class GPUvec {
             printf("h_vec(nnodes=%d) on GPU[%d]\n", owned_nnodes, g);
             for (int i = 0; i < owned_nnodes; i++) {
                 int global_node = part->h_owned_nodes[g][i];
+                if (global_node >= max_node) continue;
                 T *h_block = &h_vals_owned[block_dim * i];
-                printf("GPU[%d]-node[%d]: ", g, global_node);
-                printVec<T>(block_dim, h_block);
+                // printf("GPU[%d]-node[%d]: ", g, global_node);
+                printf("node[%d]: ", global_node);
+                for (int j = 0; j < block_dim; j++) {
+                    printf("%.8e ", h_block[j]);
+                }
+                printf("\n");
+                // printVec<T>(block_dim, h_block);
             }
         }
 

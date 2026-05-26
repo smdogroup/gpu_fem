@@ -406,6 +406,18 @@ class DeviceVec : public BaseVec<T> {
         }
     }
 
+    __HOST__ T norm() {
+        HostVec<T> h_vec = createHostVec();
+        T *h = h_vec.getPtr();
+
+        T nrm2 = 0.0;
+        for (int i = 0; i < this->N; i++) {
+            nrm2 += h[i] * h[i];
+        }
+
+        return sqrt(nrm2);
+    }
+
     void free() {
         if (is_free) return;
         is_free = true;  // now it's freed

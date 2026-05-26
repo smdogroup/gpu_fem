@@ -12,11 +12,12 @@ class MultigridTwoLevelSolver : public BaseSolver {
 
     MultigridTwoLevelSolver(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
                             GRID *fine_grid, GRID *coarse_grid, BaseSolver *coarse_solver_,
-                            SolverOptions options, bool is_coarse_direct_ = false)
+                            SolverOptions options, bool is_coarse_direct_ = false, int level_ = 0)
         : fine_grid(fine_grid),
           coarse_grid(coarse_grid),
           coarse_solver(coarse_solver_),
           is_coarse_direct(is_coarse_direct_),
+          level(level_),
           options(options) {
         cycle = "V";  // default cycle type
     }
@@ -35,83 +36,180 @@ class MultigridTwoLevelSolver : public BaseSolver {
     }
 
     bool solve(DeviceVec<T> rhs, DeviceVec<T> soln, bool check_conv = false) {
-        // printf("in subpsace solve\n");
-
-        // approximate fine grid solve using V-cycle and coarse direct solves
         bool is_perm = false;
+
+        int fine_level = level;
+        int coarse_level = level + 1;
+
         fine_grid->setDefect(rhs, is_perm);
         fine_grid->zeroSolution();
 
-        T init_defect_nrm;
-        if (check_conv || options.print) init_defect_nrm = fine_grid->getDefectNorm();
+        T init_defect_nrm = fine_grid->getDefectNorm();
+        T converged_nrm = options.atol + options.rtol * init_defect_nrm;
+        T final_defect_nrm = init_defect_nrm;
+
         bool converged = false;
 
-        for (int icycle = 0; icycle < options.ncycles; icycle++) {
-            // printf("icycle %d / %d\n", icycle, options.ncycles);
+        if (options.print && level == 0) {
+            printf("\n================ TWO-LEVEL GMG START ================\n");
+            printf("initial defect norm = %.6e\n", init_defect_nrm);
+        }
+        if (options.print) {
+            printf("level %d MG start with ncyc = %d\n", level, options.ncycles);
+        }
 
+        for (int icycle = 0; icycle < options.ncycles; icycle++) {
             n_steps = icycle + 1;
 
-            // presmooth and restrict
+            if (options.print && level == 0) {
+                printf("\n===================================================\n");
+                printf("V-cycle step %d\n", icycle);
+                printf("===================================================\n");
+
+                printf("[level %d] BEFORE pre-smooth\n", fine_level);
+                printf("    defect norm = %.6e\n", fine_grid->d_defect.norm());
+                printf("    soln   norm = %.6e\n", fine_grid->d_soln.norm());
+            }
+
+            // --------------------------------------------
+            // presmooth
+            // --------------------------------------------
+
             fine_grid->smoothDefect(options.nsmooth, options.debug, options.nsmooth - 1);
+
+            if (options.print) {
+                printf("[level %d] AFTER pre-smooth\n", fine_level);
+                printf("    defect norm = %.6e\n", fine_grid->d_defect.norm());
+                printf("    soln   norm = %.6e\n", fine_grid->d_soln.norm());
+            }
+
+            // --------------------------------------------
+            // restrict
+            // --------------------------------------------
+
             if constexpr (full_approx_scheme) {
                 coarse_grid->restrict_loads(fine_grid->d_rhs);
             } else {
                 coarse_grid->restrict_defect(fine_grid->d_defect);
             }
 
-            // coarse grid solve
+            if (options.print) {
+                printf("[level %d -> %d] AFTER restrict\n", fine_level, coarse_level);
+                printf("    defect norm = %.6e\n", coarse_grid->d_defect.norm());
+                printf("    soln   norm = %.6e\n", coarse_grid->d_soln.norm());
+            }
+
+            // --------------------------------------------
+            // coarse solve
+            // --------------------------------------------
+
+            if (options.print) {
+                printf("[level %d] BEFORE pre-smooth\n", coarse_level);
+                printf("    defect norm = %.6e\n", coarse_grid->d_defect.norm());
+                printf("    soln norm = %.6e\n", coarse_grid->d_soln.norm());
+            }
+
             if (is_coarse_direct || cycle == "V") {
-                // then only only one coarse solve
                 coarse_solver->solve(coarse_grid->d_defect, coarse_grid->d_soln);
+
             } else if (cycle == "W") {
-                // set inner cycle to 'W' and do two inner W-cycle solves (defn of W-cycle)
                 coarse_solver->set_cycle_type("W");
+
                 coarse_solver->solve(coarse_grid->d_defect, coarse_grid->d_soln);
                 coarse_solver->solve(coarse_grid->d_defect, coarse_grid->d_soln);
+
             } else if (cycle == "F" || cycle == "Fsym") {
-                // do inner F-cycle and then V-cycle (defn of F-cycle)
                 coarse_solver->set_cycle_type("F");
                 coarse_solver->solve(coarse_grid->d_defect, coarse_grid->d_soln);
+
                 coarse_solver->set_cycle_type("V");
                 coarse_solver->solve(coarse_grid->d_defect, coarse_grid->d_soln);
+
                 if (cycle == "Fsym") {
-                    // symmetric modification to make it work with PCG still (not usual F-cycle)
                     coarse_solver->set_cycle_type("F");
                     coarse_solver->solve(coarse_grid->d_defect, coarse_grid->d_soln);
                 }
+
             } else {
                 printf("ERROR: cycle type not valid option 'V', 'W', 'F'\n");
             }
 
-            // prolongate and postsmooth
+            if (options.print) {
+                printf("[level %d] AFTER post-smooth\n", coarse_level);
+                printf("    defect norm = %.6e\n", coarse_grid->d_defect.norm());
+                printf("    soln norm = %.6e\n", coarse_grid->d_soln.norm());
+            }
+
+            // --------------------------------------------
+            // prolongation
+            // --------------------------------------------
+
+            if (options.print) {
+                printf("[level %d] BEFORE prolongation\n", fine_level);
+                printf("    defect norm = %.6e\n", fine_grid->d_defect.norm());
+                printf("    soln   norm = %.6e\n", fine_grid->d_soln.norm());
+            }
+
             fine_grid->prolongate(coarse_grid->d_soln);
+
+            if (options.print) {
+                printf("[level %d] AFTER prolongation\n", fine_level);
+                printf("    defect norm = %.6e\n", fine_grid->d_defect.norm());
+                printf("    soln   norm = %.6e\n", fine_grid->d_soln.norm());
+            }
+
+            // --------------------------------------------
+            // postsmooth
+            // --------------------------------------------
+
             fine_grid->smoothDefect(options.nsmooth, options.debug, options.nsmooth - 1);
 
-            // check convergence if flag on
-            if (check_conv) {
-                T defect_nrm = fine_grid->getDefectNorm();
-                if (options.print && icycle % options.print_freq == 0)
-                    printf("v-cycle step %d, ||defect|| = %.3e\n", icycle, defect_nrm);
-
-                if (defect_nrm < options.atol + options.rtol * init_defect_nrm) {
-                    if (options.print) {
-                        printf(
-                            "V-cycle DirectLU-GMG converged in %d steps from %.2e defect nrm "
-                            "to "
-                            "%.2e\n",
-                            icycle + 1, init_defect_nrm, defect_nrm);
-                    }
-                    converged = true;
-                    break;
-                }
+            if (options.print) {
+                printf("[level %d] AFTER post-smooth\n", fine_level);
+                printf("    defect norm = %.6e\n", fine_grid->d_defect.norm());
+                printf("    soln   norm = %.6e\n", fine_grid->d_soln.norm());
             }
-        }  // end of cycles
+
+            // --------------------------------------------
+            // convergence check
+            // --------------------------------------------
+
+            T defect_nrm = fine_grid->getDefectNorm();
+            final_defect_nrm = defect_nrm;
+
+            if (options.print && level == 0) {
+                printf("\n[V-cycle %d] fine defect norm = %.6e\n", icycle, defect_nrm);
+            }
+
+            if (check_conv && options.print && icycle % options.print_freq == 0 && level == 0) {
+                printf("V-cycle step %d, ||defect|| = %.3e\n", icycle, defect_nrm);
+            }
+
+            if (check_conv && defect_nrm < converged_nrm) {
+                if (options.print && level == 0) {
+                    printf("\nGMG converged in %d V-cycles\n", icycle + 1);
+                    printf("final defect norm = %.6e\n", defect_nrm);
+                    printf("target norm       = %.6e\n", converged_nrm);
+                }
+
+                converged = true;
+                break;
+            }
+        }
 
         fine_grid->getSolution(soln, is_perm);
+
+        if (options.print && level == 0) {
+            printf("\n================ TWO-LEVEL GMG END ==================\n");
+            printf("final fine solution norm = %.6e\n", soln.norm());
+            printf("final fine defect norm   = %.6e\n", final_defect_nrm);
+            printf("=====================================================\n\n");
+        }
+
         if (check_conv) {
             return !converged;
         } else {
-            return false;  // no fail
+            return false;
         }
     }
 
@@ -122,6 +220,7 @@ class MultigridTwoLevelSolver : public BaseSolver {
     }
 
     SolverOptions options;
+    int level = 0;
 
    private:
     GRID *fine_grid, *coarse_grid;

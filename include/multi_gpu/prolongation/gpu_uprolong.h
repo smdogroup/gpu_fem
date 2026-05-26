@@ -1,4 +1,5 @@
 #pragma once
+
 #include "_unstruct_utils.h"
 #include "_unstructured.cuh"
 #include "matvec/gpumat.h"
@@ -28,20 +29,23 @@ class MultiGPUUnstructuredProlongation {
         streams = ctx->streams;
         block_dim = block_dim_;
         weights = new Vec(ctx, fine_part, block_dim);
-        // matrices only stored since they contain reduced elem_conn needed for prolong assembly
-        fine_mat = fine_mat_, coarse_mat = crs_mat_;
-        fine_assembler = fine_assembler_, crs_assembler = crs_assembler_;
+        fine_mat = fine_mat_;
+        coarse_mat = crs_mat_;
+        fine_assembler = fine_assembler_;
+        crs_assembler = crs_assembler_;
         fine_xpts = fine_assembler->getDeviceXpts();
         crs_xpts = crs_assembler->getDeviceXpts();
         ELEM_MAX = ELEM_MAX_;
 
         descr_P = new cusparseMatDescr_t[ngpus];
         descr_PT = new cusparseMatDescr_t[ngpus];
+
         for (int g = 0; g < ngpus; g++) {
             descr_P[g] = 0;
             CHECK_CUSPARSE(cusparseCreateMatDescr(&descr_P[g]));
             CHECK_CUSPARSE(cusparseSetMatType(descr_P[g], CUSPARSE_MATRIX_TYPE_GENERAL));
             CHECK_CUSPARSE(cusparseSetMatIndexBase(descr_P[g], CUSPARSE_INDEX_BASE_ZERO));
+
             descr_PT[g] = 0;
             CHECK_CUSPARSE(cusparseCreateMatDescr(&descr_PT[g]));
             CHECK_CUSPARSE(cusparseSetMatType(descr_PT[g], CUSPARSE_MATRIX_TYPE_GENERAL));
@@ -55,32 +59,34 @@ class MultiGPUUnstructuredProlongation {
     void construct_nz_pattern() {
         fine_xpts->expandToLocal();
         crs_xpts->expandToLocal();
+
         d_n2e_ptr = new int *[ngpus];
         d_n2e_elems = new int *[ngpus];
         d_n2e_xis = new T *[ngpus];
         P_bsr_data = new BsrData[ngpus];
         PT_bsr_data = new BsrData[ngpus];
-        d_P_vals = new DeviceVec<T>(ngpus);
-        d_PT_vals = new DeviceVec<T>(ngpus);
+
+        d_P_vals = new DeviceVec<T>[ngpus];
+        d_PT_vals = new DeviceVec<T>[ngpus];
 
         for (int g = 0; g < ngpus; g++) {
-            // get local connectivity and xpts for each GPU
+            CHECK_CUDA(cudaSetDevice(g));
+
             int *h_fine_loc_elem_conn = fine_mat->getHostLocalElemConn(g);
             int *h_crs_loc_elem_conn = coarse_mat->getHostLocalElemConn(g);
 
             int fine_loc_nnodes = fine_xpts->getExpandedNodes(g);
             int crs_loc_nnodes = crs_xpts->getExpandedNodes(g);
+
             T *h_fine_loc_xpts = fine_xpts->getLocalVecOnHost(g);
             T *h_crs_loc_xpts = crs_xpts->getLocalVecOnHost(g);
 
             int fine_nelems = fine_part->getLocalNumElements(g);
             int coarse_nelems = coarse_part->getLocalNumElements(g);
+
             int *h_fine_elem_comp = fine_assembler->getLocalElemComponents(g);
             int *h_crs_elem_comp = crs_assembler->getLocalElemComponents(g);
 
-            // assumes elements on this partition line up from coarse to fine
-            // aka fine partition is subset of coarse partition and vice versa (equal boundaries)
-            // True if using TacsComponentPartitioner
             init_unstructured_grid_maps<T, Basis, true, true>(
                 block_dim, h_fine_loc_xpts, h_crs_loc_xpts, fine_loc_nnodes, crs_loc_nnodes,
                 h_fine_loc_elem_conn, h_crs_loc_elem_conn, fine_nelems, coarse_nelems,
@@ -90,43 +96,47 @@ class MultiGPUUnstructuredProlongation {
     }
 
     void assemble_matrices() {
-        // get matrix values (no permutations, only singleGPU coarse direct uses it but done
-        // internally). Also apply_bcs done to vecs in gmg solver so not needed here
-        d_coarse_weights = new DeviceVec<T>(ngpus);
+        d_coarse_weights = new DeviceVec<T>[ngpus];
 
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
-            int *d_crs_loc_elem_conn = coarse_mat->getLocalElemConn(g);
+
             int fine_loc_nnodes = fine_xpts->getExpandedNodes(g);
+            int crs_loc_nnodes = crs_xpts->getExpandedNodes(g);
+
+            int *d_crs_loc_elem_conn = coarse_mat->getLocalElemConn(g);
             int *d_fine_iperm = P_bsr_data[g].iperm;
             int *d_coarse_iperm = PT_bsr_data[g].iperm;
-            int N_loc_coarse = crs_xpts->getExpandedSize(g);
+
+            int N_loc_coarse = crs_loc_nnodes * block_dim;
             d_coarse_weights[g] = DeviceVec<T>(N_loc_coarse);
+            d_coarse_weights[g].zeroValues();
 
             dim3 block(32);
             dim3 grid((fine_loc_nnodes + 31) / 32);
-            int *d_P_rowp = P_bsr_data[g].rowp;
-            int *d_P_cols = P_bsr_data[g].cols;
+
             k_prolong_mat_assembly<T, Basis, is_bsr><<<grid, block, 0, streams[g]>>>(
                 d_coarse_iperm, d_crs_loc_elem_conn, d_n2e_ptr[g], d_n2e_elems[g], d_n2e_xis[g],
-                fine_loc_nnodes, d_fine_iperm, d_P_rowp, d_P_cols, block_dim, d_P_vals[g].getPtr());
+                fine_loc_nnodes, d_fine_iperm, P_bsr_data[g].rowp, P_bsr_data[g].cols, block_dim,
+                d_P_vals[g].getPtr());
 
-            // assemble PT mat
-            int *d_PT_rowp = PT_bsr_data[g].rowp;
-            int *d_PT_cols = PT_bsr_data[g].cols;
+            CHECK_CUDA(cudaGetLastError());
+            CHECK_CUDA(cudaStreamSynchronize(streams[g]));
+
             k_restrict_mat_assembly<T, Basis, is_bsr><<<grid, block, 0, streams[g]>>>(
                 d_coarse_iperm, d_crs_loc_elem_conn, d_n2e_ptr[g], d_n2e_elems[g], d_n2e_xis[g],
-                fine_loc_nnodes, d_fine_iperm, d_PT_rowp, d_PT_cols, block_dim,
+                fine_loc_nnodes, d_fine_iperm, PT_bsr_data[g].rowp, PT_bsr_data[g].cols, block_dim,
                 d_PT_vals[g].getPtr(), d_coarse_weights[g].getPtr());
-            CHECK_CUDA(cudaGetLastError());
-        }
 
-        // weights to normalize P? not in original unstruct because num_attached_elems does it?
+            CHECK_CUDA(cudaGetLastError());
+            CHECK_CUDA(cudaStreamSynchronize(streams[g]));
+        }
     }
 
     void prolongate(Vec *coarse_in, Vec *fine_out) {
         coarse_in->expandToLocal();
         fine_out->zeroAll();
+
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
             CHECK_CUSPARSE(cusparseSetStream(cusparseHandles[g], streams[g]));
@@ -134,15 +144,16 @@ class MultiGPUUnstructuredProlongation {
             T *loc_coarse = coarse_in->getLocalPtr(g);
             T *loc_fine = fine_out->getLocalPtr(g);
 
-            T a = 1.0, b = 0.0;
-            int mb = P_bsr_data[g].mb, nb = P_bsr_data[g].nb;
-            int *d_P_rowp = P_bsr_data[g].rowp;
-            int *d_P_cols = P_bsr_data[g].cols;
+            T a = 1.0;
+            T b = 0.0;
+
             CHECK_CUSPARSE(cusparseDbsrmv(cusparseHandles[g], CUSPARSE_DIRECTION_ROW,
-                                          CUSPARSE_OPERATION_NON_TRANSPOSE, mb, nb,
-                                          P_bsr_data[g].nnzb, &a, descr_P[g], d_P_vals[g].getPtr(),
-                                          d_P_rowp, d_P_cols, block_dim, loc_coarse, &b, loc_fine));
+                                          CUSPARSE_OPERATION_NON_TRANSPOSE, P_bsr_data[g].mb,
+                                          P_bsr_data[g].nb, P_bsr_data[g].nnzb, &a, descr_P[g],
+                                          d_P_vals[g].getPtr(), P_bsr_data[g].rowp,
+                                          P_bsr_data[g].cols, block_dim, loc_coarse, &b, loc_fine));
         }
+
         ctx->sync();
         fine_out->reduceFromLocal();
     }
@@ -150,6 +161,7 @@ class MultiGPUUnstructuredProlongation {
     void restrict_vec(Vec *fine_in, Vec *coarse_out) {
         fine_in->expandToLocal();
         coarse_out->zeroAll();
+
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
             CHECK_CUSPARSE(cusparseSetStream(cusparseHandles[g], streams[g]));
@@ -157,23 +169,57 @@ class MultiGPUUnstructuredProlongation {
             T *loc_coarse = coarse_out->getLocalPtr(g);
             T *loc_fine = fine_in->getLocalPtr(g);
 
-            T a = 1.0, b = 0.0;
-            int mb = PT_bsr_data[g].mb, nb = PT_bsr_data[g].nb;
-            int *d_PT_rowp = PT_bsr_data[g].rowp;
-            int *d_PT_cols = PT_bsr_data[g].cols;
+            T a = 1.0;
+            T b = 0.0;
+
             CHECK_CUSPARSE(cusparseDbsrmv(
-                cusparseHandles[g], CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, mb,
-                nb, PT_bsr_data[g].nnzb, &a, descr_PT[g], d_PT_vals[g].getPtr(), d_PT_rowp,
-                d_PT_cols, block_dim, loc_fine, &b, loc_coarse));
+                cusparseHandles[g], CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                PT_bsr_data[g].mb, PT_bsr_data[g].nb, PT_bsr_data[g].nnzb, &a, descr_PT[g],
+                d_PT_vals[g].getPtr(), PT_bsr_data[g].rowp, PT_bsr_data[g].cols, block_dim,
+                loc_fine, &b, loc_coarse));
         }
+
         ctx->sync();
         coarse_out->reduceFromLocal();
-
-        // TODO : add normalize part for nonlinear structures (restrict with normalize)
     }
 
     void free() {
-        // TBD
+        if (descr_P) {
+            for (int g = 0; g < ngpus; g++) {
+                if (descr_P[g]) CHECK_CUSPARSE(cusparseDestroyMatDescr(descr_P[g]));
+            }
+            delete[] descr_P;
+            descr_P = nullptr;
+        }
+
+        if (descr_PT) {
+            for (int g = 0; g < ngpus; g++) {
+                if (descr_PT[g]) CHECK_CUSPARSE(cusparseDestroyMatDescr(descr_PT[g]));
+            }
+            delete[] descr_PT;
+            descr_PT = nullptr;
+        }
+
+        delete weights;
+        weights = nullptr;
+
+        delete[] d_n2e_ptr;
+        delete[] d_n2e_elems;
+        delete[] d_n2e_xis;
+        delete[] P_bsr_data;
+        delete[] PT_bsr_data;
+        delete[] d_P_vals;
+        delete[] d_PT_vals;
+        delete[] d_coarse_weights;
+
+        d_n2e_ptr = nullptr;
+        d_n2e_elems = nullptr;
+        d_n2e_xis = nullptr;
+        P_bsr_data = nullptr;
+        PT_bsr_data = nullptr;
+        d_P_vals = nullptr;
+        d_PT_vals = nullptr;
+        d_coarse_weights = nullptr;
     }
 
    private:
@@ -184,21 +230,37 @@ class MultiGPUUnstructuredProlongation {
     Partitioner *fine_part = nullptr;
     Partitioner *coarse_part = nullptr;
 
-    Assembler *fine_assembler, *crs_assembler;
+    Assembler *fine_assembler = nullptr;
+    Assembler *crs_assembler = nullptr;
 
-    int ngpus, block_dim;
-    int fine_num_nodes, coarse_num_nodes;
-    int fine_num_elements, coarse_num_elements;
-    int nxe_coarse, nxe_fine;
-    Vec *weights;
-    Mat *fine_mat, *coarse_mat;
-    Vec *fine_xpts, *crs_xpts;
+    int ngpus = 0;
+    int block_dim = 0;
+    int fine_num_nodes = 0;
+    int coarse_num_nodes = 0;
+    int fine_num_elements = 0;
+    int coarse_num_elements = 0;
+    int nxe_coarse = 0;
+    int nxe_fine = 0;
 
-    // matrix values
-    cusparseMatDescr_t *descr_P, *descr_PT;
-    BsrData *P_bsr_data, *PT_bsr_data;
-    DeviceVec<T> *d_P_vals, *d_PT_vals, *d_coarse_weights;
-    int **d_n2e_ptr, **d_n2e_elems;
-    T **d_n2e_xis;
+    Vec *weights = nullptr;
+    Mat *fine_mat = nullptr;
+    Mat *coarse_mat = nullptr;
+    Vec *fine_xpts = nullptr;
+    Vec *crs_xpts = nullptr;
+
+    cusparseMatDescr_t *descr_P = nullptr;
+    cusparseMatDescr_t *descr_PT = nullptr;
+
+    BsrData *P_bsr_data = nullptr;
+    BsrData *PT_bsr_data = nullptr;
+
+    DeviceVec<T> *d_P_vals = nullptr;
+    DeviceVec<T> *d_PT_vals = nullptr;
+    DeviceVec<T> *d_coarse_weights = nullptr;
+
+    int **d_n2e_ptr = nullptr;
+    int **d_n2e_elems = nullptr;
+    T **d_n2e_xis = nullptr;
+
     int ELEM_MAX = 10;
 };

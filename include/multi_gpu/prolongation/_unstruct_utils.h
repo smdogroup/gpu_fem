@@ -872,6 +872,36 @@ void init_unstructured_grid_maps(const int block_dim, T *h_xpts_fine, T *h_xpts_
     // std::chrono::duration<double> mat_nz_patterm_time = time_07 - time_06;
     // printf("\t\t\tmat nz pattern time %.2e\n", mat_nz_patterm_time.count());
 
+    // printf("P_nnzb = %d, PT_nnzb = %d\n", P_nnzb, PT_nnzb);
+
+    // int bad_host_cols = 0;
+    // for (int i = 0; i < nnodes_fine; i++) {
+    //     if (P_next[i] != h_prol_rowp[i + 1]) {
+    //         printf("P row not fully filled: row %d P_next=%d rowp_next=%d rowp=%d\n", i,
+    //         P_next[i],
+    //                h_prol_rowp[i + 1], h_prol_rowp[i]);
+    //         bad_host_cols = 1;
+    //         break;
+    //     }
+    // }
+    // for (int i = 0; i < nnodes_coarse; i++) {
+    //     if (PT_next[i] != h_prolT_rowp[i + 1]) {
+    //         printf("PT row not fully filled: row %d PT_next=%d rowp_next=%d rowp=%d\n", i,
+    //                PT_next[i], h_prolT_rowp[i + 1], h_prolT_rowp[i]);
+    //         bad_host_cols = 1;
+    //         break;
+    //     }
+    // }
+    // for (int jp = 0; jp < P_nnzb; jp++) {
+    //     if (h_prol_cols[jp] < 0 || h_prol_cols[jp] >= nnodes_coarse) {
+    //         printf("bad HOST P col jp=%d col=%d nnodes_coarse=%d\n", jp, h_prol_cols[jp],
+    //                nnodes_coarse);
+    //         bad_host_cols = 1;
+    //         break;
+    //     }
+    // }
+    // printf("bad_host_cols = %d\n", bad_host_cols);
+
     // now put these on the device with BsrData objects for P and PT
     // TODO : later is to just assemble P and then write my own transpose Bsrmv method in
     // CUDA
@@ -910,5 +940,6 @@ void init_unstructured_grid_maps(const int block_dim, T *h_xpts_fine, T *h_xpts_
     // printf("done with init unstructured grid maps\n");
     auto end0 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> P_PT_time = end0 - start0;
-    printf(" in %.2e sec ", nnodes_fine, P_PT_time.count());
+    // printf(" nnodes_fine=%d in %.2e sec ", nnodes_fine, P_PT_time.count());
+    printf(" in %.2e sec ", P_PT_time.count());
 }

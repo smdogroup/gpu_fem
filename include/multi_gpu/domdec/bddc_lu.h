@@ -703,6 +703,8 @@ class MultiGPUBDDC_LUSolver {
         I_rows = new int *[ngpus];
         d_IE_vals = new DeviceVec<T>[ngpus];
         d_I_vals = new DeviceVec<T>[ngpus];
+        d_IE_vals_ptr = new T *[ngpus];
+        d_I_vals_ptr = new T *[ngpus];
 
         for (int g = 0; g < ngpus; g++) {
             IE_rowp[g] = new int[IE_nnodes[g] + 1];
@@ -756,6 +758,8 @@ class MultiGPUBDDC_LUSolver {
             // make matrix values
             d_IE_vals[g] = DeviceVec<T>(block_dim2 * IE_nnzb[g]);
             d_I_vals[g] = DeviceVec<T>(block_dim2 * I_nnzb[g]);
+            d_IE_vals_ptr[g] = d_IE_vals[g].getPtr();
+            d_I_vals_ptr[g] = d_I_vals[g].getPtr();
         }  // done with gpu loop
     }
 
@@ -853,6 +857,7 @@ class MultiGPUBDDC_LUSolver {
         Svv_nnzb = new int[ngpus];
         Svv_rows = new int *[ngpus];
         d_Svv_vals = new DeviceVec<T>[ngpus];
+        d_Svv_vals_ptr = new T *[ngpus];
 
         for (int g = 0; g < ngpus; g++) {
             // reverse map of global => reduced Vc nodes
@@ -936,6 +941,7 @@ class MultiGPUBDDC_LUSolver {
             }
 
             d_Svv_vals[g] = DeviceVec<T>(Svv_nnzb[g] * block_dim2);
+            d_Svv_vals_ptr[g] = d_Svv_vals[g].getPtr();
         }
     }
 
@@ -1206,8 +1212,8 @@ class MultiGPUBDDC_LUSolver {
         apply_IEV_bcs();
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
-            cudaMemset(d_IE_vals, 0.0, block_dim2 * IE_nnzb[g] * sizeof(T));
-            cudaMemset(d_I_vals, 0.0, block_dim2 * I_nnzb[g] * sizeof(T));
+            cudaMemset(d_IE_vals[g].getPtr(), 0.0, block_dim2 * IE_nnzb[g] * sizeof(T));
+            cudaMemset(d_I_vals[g].getPtr(), 0.0, block_dim2 * I_nnzb[g] * sizeof(T));
         }
         ctx->sync();
         copyKmat_IEVtoIE();
@@ -1336,18 +1342,19 @@ class MultiGPUBDDC_LUSolver {
         // build Svv as a GPUbsrmat
         // build_Svv_gpumat();
 
-        subdomain_IE_solver = new CudssSubdomainBsrSolve<T>(ctx, num_nodes, block_dim, IE_rowp,
-                                                            IE_cols, IE_nnzb, d_IE_vals);
+        subdomain_IE_solver = new CudssSubdomainBsrSolve<T>(ctx, IE_nnodes, block_dim, IE_rowp,
+                                                            IE_cols, IE_nnzb, d_IE_vals_ptr);
 
-        subdomain_I_solver = new CudssSubdomainBsrSolve<T>(ctx, num_nodes, block_dim, I_rowp,
-                                                           I_cols, I_nnzb, d_I_vals);
+        subdomain_I_solver = new CudssSubdomainBsrSolve<T>(ctx, I_nnodes, block_dim, I_rowp, I_cols,
+                                                           I_nnzb, d_I_vals_ptr);
 
         // optional: alternate constructors to build an Svv_mat despite not having elem conn?
         // Svv_part = new LightPartitioner(ctx, sgpu_Vc_nnodes, Vc_nodes);
         // Svv_mat = GPUbsrmat<T, LightPartitioner>(ctx, Svv_part, block_dim, Svv_rowp, Svv_cols,
         //                                          Svv_nnzb, Svv_rows, d_Svv_vals);
-        Svv_solver = new CudssMgBSRSolverV2<T>(ctx, sgpu_Vc_nnodes, Vc_nnodes, Vc_nodes, block_dim,
-                                               Svv_rowp, Svv_cols, Svv_nnzb, Svv_rows, d_Svv_vals);
+        Svv_solver =
+            new CudssMgBSRSolverV2<T>(ctx, sgpu_Vc_nnodes, Vc_nnodes, Vc_nodes, block_dim, Svv_rowp,
+                                      Svv_cols, Svv_nnzb, Svv_rows, d_Svv_vals_ptr);
     }
 
     // deprecated
@@ -1833,6 +1840,9 @@ class MultiGPUBDDC_LUSolver {
     DeviceVec<T> *d_IE_vals = nullptr;
     DeviceVec<T> *d_I_vals = nullptr;
     DeviceVec<T> *d_Svv_vals = nullptr;
+    T **d_IE_vals_ptr = nullptr;
+    T **d_I_vals_ptr = nullptr;
+    T **d_Svv_vals_ptr = nullptr;
 
     int **IEV_rowp = nullptr;
     int **IEV_cols = nullptr;

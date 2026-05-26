@@ -115,7 +115,7 @@ class MultilevelKcycleSolver {
     void init_outer_solver(cublasHandle_t &cublasHandle, cusparseHandle_t &cusparseHandle,
                            int n_smooth, int n_cycles, int n_krylov, T omega = 1.0, T atol = 1e-6,
                            T rtol = 1e-6, int print_freq = 1, bool print = true,
-                           bool double_smooth = false) {
+                           bool double_smooth = false, bool mg_print = false) {
         // initialize objects, so we just do K-cycle on outer level
 
         int nvcyc_inner = 1, nvcyc_outer = n_cycles, nkcyc_inner = 2, nkcyc_outer = n_krylov;
@@ -132,6 +132,8 @@ class MultilevelKcycleSolver {
         auto outerKrylovOptions =
             SolverOptions(omega, 0, nkcyc_outer, false, atol, rtol, print_freq);
         outerKrylovOptions.print = print;
+        inner_subspaceOptions.print = mg_print;
+        outer_subspaceOptions.print = mg_print;
 
         init_solvers(cublasHandle, cusparseHandle, inner_subspaceOptions, outer_subspaceOptions,
                      innerKrylovOptions, outerKrylovOptions, just_outer_krylov, double_smooth);
@@ -164,7 +166,7 @@ class MultilevelKcycleSolver {
 
                     BaseSolver *subspace_solver = new SubspaceSolver(
                         cublasHandle, cusparseHandle, &grids[ilevel], &grids[ilevel + 1],
-                        solvers[isolver - 1], copy_options, is_coarse_direct);
+                        solvers[isolver - 1], copy_options, is_coarse_direct, ilevel);
                     if (ilevel != 0) solvers.push_back(subspace_solver);
 
                     // then make the krylov solver at this level with the subspace solver as
@@ -188,7 +190,7 @@ class MultilevelKcycleSolver {
                     if (double_smooth) copy_options.nsmooth *= (1 << ilevel);
                     BaseSolver *subspace_solver = new SubspaceSolver(
                         cublasHandle, cusparseHandle, &grids[ilevel], &grids[ilevel + 1],
-                        solvers[isolver - 1], copy_options, is_coarse_direct);
+                        solvers[isolver - 1], copy_options, is_coarse_direct, ilevel);
 
                     // then make the krylov solver at this level with the subspace solver as
                     // preconditioner

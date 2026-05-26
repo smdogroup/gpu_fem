@@ -28,7 +28,7 @@
   - [x] Use partition ghost maps through `GPUvec::expandToLocal()`
   - [x] Support matvec using owned rows + local expanded columns
   - [x] Add efficient element-to-BSR-entry maps for GPU assembly
-- [ ] allow matrix permutations.. and perm operations
+<!-- - [ ] allow matrix permutations.. and perm operations -->
 
 ### 3. Multi-GPU Assembly
 - [x] Create base multi-GPU assembler class
@@ -53,15 +53,15 @@
   - [ ] Add multi-GPU state and ownership maps
 
 ### 6. Coarse-Grid Solve
-- [ ] Gather coarse problem onto one GPU
-- [ ] Implement direct coarse solve on single GPU
-- [ ] Scatter coarse correction back to multi-GPU vectors
+- [x] Gather coarse problem onto one GPU
+- [x] Implement direct coarse solve on single GPU
+- [x] Scatter coarse correction back to multi-GPU vectors
 
 ### 7. Full Demo / Validation
-- [ ] Run K-cycle GMG-ASW on cylinder benchmark
-- [ ] Compare multi-GPU results against single-GPU baseline
-- [ ] Verify residual histories, displacements, and analysis outputs match
-- [ ] Measure speedup and scaling across GPUs
+- [x] Run K-cycle GMG-ASW on cylinder benchmark
+- [x] Compare multi-GPU results against single-GPU baseline
+- [x] Verify residual histories, displacements, and analysis outputs match
+- [x] Measure speedup and scaling across GPUs
 
 ### 8. mult-CPU + multi-GPU
 - [ ] might be limited to only 4 GPUs if only using CPU serial => so need to code multi-CPU + multi-GPU case next for even higher DOF problems..

@@ -57,6 +57,35 @@ std::string time_string(int itime) {
     }
 }
 
+template <typename T>
+void printVecOnHost(DeviceVec<T> &vec, int max_node = 20) {
+    int nvals = vec.getSize();
+    int _nnodes = nvals / 6;
+    auto h_vec = vec.createHostVec();
+    T *_ptr = h_vec.getPtr();
+    for (int inode = 0; inode < _nnodes; inode++) {
+        if (inode >= max_node) continue;
+        printf("node[%d]: ", inode);
+        for (int j = 0; j < 6; j++) {
+            printf("%.8e ", _ptr[6 * inode + j]);
+        }
+        printf("\n");
+        // printVec<T>(6, &_ptr[6 * inode]);
+    }   
+}
+
+template <typename T>
+T getVecNorm(DeviceVec<T> &vec) {
+    int nvals = vec.getSize();
+    auto h_vec = vec.createHostVec();
+    T *_ptr = h_vec.getPtr();
+    T nrm2 = 0.0;
+    for (int i = 0; i < nvals; i++) {
+        nrm2 += _ptr[i] * _ptr[i];
+    }
+    return sqrt(nrm2);
+}
+
 template <typename T, class Assembler>
 void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, int ninnercyc, T omega, std::string cycle_type) {
     // geometric multigrid method here..
@@ -105,9 +134,14 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
         mg = new MG();
     }
 
+    // bool debug = true;
+    bool debug = false;
+
+    int lev_min = debug ? (level-1) : 0;
+
     // make each wing multigrid object.. with L0 the coarsest mesh, L3 finest 
     //   (this way mg.grids is still finest to coarsest meshes order by convention)
-    for (int i = level; i >= 0; i--) {
+    for (int i = level; i >= lev_min; i--) {
 
         // read the ESP/CAPS => nastran mesh for TACS
         TACSMeshLoader mesh_loader{comm};
@@ -136,7 +170,7 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
         auto &bsr_data = assembler.getBsrData();
         int num_colors, *_color_rowp;
 
-        bool coarsest_grid = i == 0;
+        bool coarsest_grid = i == lev_min;
         if (!coarsest_grid) {
             // don't do coloring for additive schwarz smoother..
             // WingboxMultiColoring<Assembler>::apply_coloring(assembler, bsr_data, num_colors, _color_rowp);
@@ -208,11 +242,13 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
     // best was V(4,4) before
     // bool print = false;
     bool print = true;
-    T atol = 1e-6, rtol = 1e-6;
+    T atol = 1e-30, rtol = 1e-6;
     int n_cycles = SR >= 100.0 ? 1000 : 200;
     // bool time = false;
     bool time = true;
-    int print_freq = 5;
+    int print_freq = 10;
+    // bool mg_print = true;
+    bool mg_print = false;
 
     bool double_smooth = false;
     // bool double_smooth = true; // true tends to be slightly faster sometimes
@@ -220,9 +256,9 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
     if (is_kcycle) {
         int n_krylov = 500;
         kmg->init_outer_solver(cublasHandle, cusparseHandle, nsmooth, ninnercyc, 
-            n_krylov, omega, atol, rtol, print_freq, print, double_smooth);    
-        // kmg->set_cycle_type("V");
-        kmg->set_cycle_type("W");
+            n_krylov, omega, atol, rtol, print_freq, print, double_smooth, mg_print);    
+        kmg->set_cycle_type("V");
+        // kmg->set_cycle_type("W");
         kmg->coarse_solver->factor();
     }
 
@@ -243,7 +279,82 @@ void solve_linear_multigrid(MPI_Comm &comm, int level, double SR, int nsmooth, i
     CHECK_CUDA(cudaDeviceSynchronize());
     auto end_factor = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> asw_factor_time = end_factor - start1;
-    printf("ASW factor time %.4e\n", asw_factor_time.count());
+    printf("ASW factor time %.8e\n", asw_factor_time.count());
+
+
+    // ------------------------------------------------------------
+    // DEBUG phase
+    // ------------------------------------------------------------
+
+    if (level <= 3 && debug) {
+    // if (level <= 1) {
+        auto grids = kmg->grids;
+        int max_node = 20;
+
+        T nrm1 = getVecNorm(grids[0].d_defect);
+        printf("fine rhs (nrm = %.8e)\n", nrm1);
+        printVecOnHost<T>(grids[0].d_defect, max_node);
+
+        // pre-smooth
+        grids[0].smoothDefect(2, false, 1);
+
+        T nrm2 = getVecNorm(grids[0].d_defect);
+        printf("fine defect after pre-smooth (nrm = %.8e)\n", nrm2);
+        printVecOnHost<T>(grids[0].d_defect, max_node);
+
+        T nrm3 = getVecNorm(grids[0].d_soln);
+        printf("fine soln after pre-smooth (nrm = %.8e)\n", nrm3);
+        printVecOnHost<T>(grids[0].d_soln, max_node);
+
+        grids[1].restrict_defect(grids[0].d_defect);
+
+        // un-permute to Visualization order
+        grids[1].d_defect.permuteData(6, grids[1].d_perm);
+
+        T nrm4 = getVecNorm(grids[1].d_defect);
+        printf("crs defect (nrm = %.8e)\n", nrm4);
+        printVecOnHost<T>(grids[1].d_defect, max_node);
+
+        // re-permute to solve order and do coarse solve
+        grids[1].d_defect.permuteData(6, grids[1].d_iperm);
+        kmg->coarse_solver->solve(grids[1].d_defect, grids[1].d_soln);
+
+        // un-permute to vis order
+        grids[1].d_soln.permuteData(6, grids[1].d_perm);
+
+        T nrm5 = getVecNorm(grids[1].d_soln);
+        printf("crs soln (nrm = %.8e)\n", nrm5);
+        printVecOnHost<T>(grids[1].d_soln, max_node);
+
+        // re-permute
+        grids[1].d_soln.permuteData(6, grids[1].d_iperm);
+
+        // intermed prolongate
+        grids[0].prolongation->prolongate(grids[1].d_soln, grids[0].d_temp_vec);
+
+        grids[0].d_temp_vec.permuteData(6, grids[0].d_perm);
+
+        T nrm6 = getVecNorm(grids[0].d_temp_vec);
+        printf("prolong fine soln (nrm = %.8e)\n", nrm6);
+        printVecOnHost<T>(grids[0].d_temp_vec, max_node);
+
+        // prolongate with line search
+        grids[0].prolongate(grids[1].d_soln);
+
+        // un-permute to vis order
+        grids[0].d_soln.permuteData(6, grids[0].d_perm);
+
+        T nrm7 = getVecNorm(grids[0].d_soln);
+        printf("prolong fine soln w line search (nrm = %.8e)\n", nrm7);
+        printVecOnHost<T>(grids[0].d_soln, max_node);
+
+        return;
+    }
+
+    // ------------------------------
+    // solve
+    // ------------------------------
+
 
     // fastest is K-cycle usually
     if (cycle_type == "V") {

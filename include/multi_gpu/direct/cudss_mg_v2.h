@@ -115,7 +115,7 @@ class CudssMgBSRSolverV2 {
    public:
     CudssMgBSRSolverV2(MultiGPUContext *ctx_, int sgpu_Vc_nnodes_, int *Vc_nnodes_, int **Vc_nodes_,
                        int block_dim_, int **Svv_rowp_, int **Svv_cols_, int *Svv_nnzb_,
-                       int *Svv_rows_, T **d_Svv_vals_)
+                       int **Svv_rows_, T **d_Svv_vals_)
         : ctx(ctx_),
           sgpu_Vc_nnodes(sgpu_Vc_nnodes_),
           Vc_nnodes(Vc_nnodes_),
@@ -224,7 +224,7 @@ class CudssMgBSRSolverV2 {
     int **Svv_rowp = nullptr;
     int **Svv_cols = nullptr;
     int *Svv_nnzb = nullptr;
-    int *Svv_rows = nullptr;
+    int **Svv_rows = nullptr;
     T **d_Svv_vals = nullptr;
 
     std::vector<int> devices;
