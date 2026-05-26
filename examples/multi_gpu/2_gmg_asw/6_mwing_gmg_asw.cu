@@ -108,8 +108,9 @@ int main(int argc, char *argv[]) {
     Vec *fine_test = nullptr;
     int fine_N = 0;
 
+    bool debug = level == 1;
     // bool debug = true;
-    bool debug = false;
+    // bool debug = false;
 
     int lev_min = debug ? (level - 1) : 0;
 
