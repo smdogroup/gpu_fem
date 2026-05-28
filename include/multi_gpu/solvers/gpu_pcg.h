@@ -116,8 +116,8 @@ class GPU_PCG {
             std::printf("] ---");
         }
 
-        std::printf(" - resid: %.8e - target: %.3e - rel: %.3e", double(resid_norm),
-                    double(conv_tol), rel);
+        std::printf(" - resid: %.8e - tol: %.3e - rel: %.3e", double(resid_norm), double(conv_tol),
+                    rel);
 
         // Return to blank spacer line below the progress bar
         std::printf("\n");

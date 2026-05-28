@@ -115,8 +115,8 @@ class GPU_PCGMatfree {
             std::printf("] ---");
         }
 
-        std::printf(" - resid: %.8e - target: %.3e - rel: %.3e", double(resid_norm),
-                    double(conv_tol), rel);
+        std::printf(" - resid: %.8e - tol: %.3e - rel: %.3e", double(resid_norm), double(conv_tol),
+                    rel);
 
         std::printf("\n");
         std::printf("\r\033[K");
