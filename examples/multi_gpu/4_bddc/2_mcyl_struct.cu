@@ -197,19 +197,25 @@ int main(int argc, char **argv) {
     int nxs = nxe / nxe_subdomain_size;
     const int order = Basis::order;
     int close_hoop = true; // for cylinder mesh (but not for plate)
-    auto split = new IEVSplit(num_elements, num_nodes, nodes_per_elem, h_elem_conn, 
-        nxe, nxe, nxs, nxs, order, close_hoop);
+    printf("[MAIN] make IEV splitting class\n");
+    auto split = new IEVSplit(num_elements, num_nodes, nodes_per_elem, h_elem_conn,
+                            nxe, nxe, nxs, nxs, order, close_hoop);
+    printf("[MAIN] done making IEV splitting class\n");
 
+    printf("[MAIN] make BDDC class\n");
+    bool debug = true;
+    // bool debug = false;
+    auto bddc = new BDDC(ctx, part, assembler, kmat, split, debug);
+    printf("[MAIN] done making BDDC class\n");
 
-    // build BDDC problem
-    auto bddc = new BDDC(ctx, part, assembler, kmat, split);
-
-    // setup internal rhs (need rhs in IEV form only hence the internal call)
+    printf("[MAIN] add_subdomain_fext\n");
     ObliqueCylinderLoad<T> load;
     bddc->add_subdomain_fext(load, mag);
+    printf("[MAIN] done add_subdomain_fext\n");
 
-    // then set final internal residual
+    printf("[MAIN] set_IEV_residual\n");
     bddc->set_IEV_residual(1.0, 0.0, vars);
+    printf("[MAIN] done set_IEV_residual\n");
 
     // lambda rhs (TODO : fix this later so it can do multi-GPU)
     // VecType<T> gam_rhs(bddc->getLambdaSize(0));

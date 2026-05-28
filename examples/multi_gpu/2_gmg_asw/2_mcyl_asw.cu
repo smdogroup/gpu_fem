@@ -178,7 +178,7 @@ int main(int argc, char *argv[]) {
     auto pc = new ASW(ctx, part, kmat, omega, nsmooth);
     printf("build PCG\n");
     const char *precond_name = "ASW";
-    auto pcg = new PCG(ctx, fine_part, fine_kmat, pc, fine_N, block_dim, precond_name);
+    auto pcg = new PCG(ctx, part, kmat, pc, N, block_dim, precond_name);
     printf("\tdone build PCG\n");
 
     // ---------------------------------------------

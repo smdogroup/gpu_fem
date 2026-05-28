@@ -303,8 +303,8 @@ class GPUElementAssembler {
     HostVec<int> *getConn() { return h_elem_conn; }
     HostVec<Data> *getCompData() { return h_compData; }
     Data **getDeviceCompData() { return d_loc_comp_data; }
-    void getLocalDeviceBCs(int *n_owned_bcs_, int *n_local_bcs_, int **d_owned_bcs_,
-                           int **d_local_bcs_) {
+    void getLocalDeviceBCs(int *&n_owned_bcs_, int *&n_local_bcs_, int **&d_owned_bcs_,
+                           int **&d_local_bcs_) {
         n_owned_bcs_ = n_owned_bcs;
         n_local_bcs_ = n_local_bcs;
         d_owned_bcs_ = d_owned_bcs;
