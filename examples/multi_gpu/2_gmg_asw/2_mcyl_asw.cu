@@ -177,7 +177,8 @@ int main(int argc, char *argv[]) {
     printf("build ASW preconditioner\n");
     auto pc = new ASW(ctx, part, kmat, omega, nsmooth);
     printf("build PCG\n");
-    auto pcg = new PCG(ctx, part, kmat, pc, N, block_dim);
+    const char *precond_name = "ASW";
+    auto pcg = new PCG(ctx, fine_part, fine_kmat, pc, fine_N, block_dim, precond_name);
     printf("\tdone build PCG\n");
 
     // ---------------------------------------------
@@ -207,7 +208,7 @@ int main(int argc, char *argv[]) {
 
 
     // then solve
-    int max_iter = 500, print_freq = 10;
+    int max_iter = 500, print_freq = 3;
     T rtol = 1e-6, atol = 1e-30;
     bool can_print = true;
 

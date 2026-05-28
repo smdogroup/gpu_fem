@@ -238,7 +238,8 @@ int main(int argc, char *argv[]) {
     T LS_max = 2.0;
     bool PRINT = false;
     // bool PRINT = true;
-    int print_freq = 10;
+    int print_freq = 1;
+    // int print_freq = 10;
 
     auto gmg = new GMG(ctx, assemblers, mats, smoothers, prolongations, coarse_solver, NSTEPS,
                        rtol, atol, PRINT, print_freq, LS_min, LS_max);
@@ -306,10 +307,13 @@ int main(int argc, char *argv[]) {
 
     auto pc = gmg;
 
-    auto pcg = new PCG(ctx, fine_part, fine_kmat, pc, fine_N, block_dim);
+    const char *precond_name = "GMG-ASW(unstruct)";
+    auto pcg = new PCG(ctx, fine_part, fine_kmat, pc, fine_N, block_dim, precond_name);
 
     int max_iter = 500;
-    int print_freq2 = 10;
+    // int print_freq2 = 1;
+    int print_freq2 = 3;
+    // int print_freq2 = 5;
     T rtol2 = 1e-6;
     T atol2 = 1e-30;
     bool can_print = true;

@@ -17,7 +17,7 @@ parent_parser.add_argument("--spanMult", type=float, default=1.0) # recommend 1.
 parent_parser.add_argument(
     "--level",
     type=int,
-    choices=[0, 1, 2, 3, 4],
+    choices=[0, 1, 2, 3, 4, 5],
     required=True,
     help="Mesh refinement level: 0 = coarsest, 1 = finer, 2 etc..",
 )
