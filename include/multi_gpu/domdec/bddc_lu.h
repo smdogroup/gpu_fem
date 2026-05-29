@@ -218,6 +218,7 @@ class MultiGPUBDDC_LUSolver {
             CHECK_CUDA(cudaGetLastError());
         }
         ctx->sync();
+        fint_IEV->reduceFromLocal();
 
         if (debug) printf("[BDDC-set_IEV_residual]: checkpt3\n");
 
@@ -233,12 +234,14 @@ class MultiGPUBDDC_LUSolver {
     void get_lam_rhs(SDVec *gam_rhs) {
         // gets rhs of interface BDDC system
         gam_rhs->zeroAll();
-        printf("[BDDC-get_lam_rhs]: f_IEV\n");
-        printNodeVec(IEV_nnodes[0], f_IEV->getPtr(0));
 
         // harmonic extension from interface (Gam) to interior (I) nodes
         if (debug) printf("[BDDC-get_lam_rhs]: vec copy\n");
         res_IEV->copyTo(f_IEV);
+        if (debug) {
+            printf("[BDDC-get_lam_rhs]: res_IEV\n");
+            printDeviceNodeVec(IEV_nnodes[0], res_IEV->getPtr(0));
+        }
         if (debug) {
             printf("[BDDC-get_lam_rhs]: f_IEV\n");
             printDeviceNodeVec(IEV_nnodes[0], f_IEV->getPtr(0));
@@ -269,23 +272,48 @@ class MultiGPUBDDC_LUSolver {
     void mat_vec(SDVec *gam_in, SDVec *gam_out) {
         // gets K_{Gam,Gam}*x_{Gam} internal residual of interface BDDC system
         gam_out->zeroAll();
+        if (debug) {
+            printf("[BDDC-mat_vec]: gam_in\n");
+            printDeviceNodeVec(ngam[0], gam_in->getPtr(0));
+        }
 
         // harmonic extension from interface (Gam) to interior (I) nodes
         addVecGamtoIEV(1.0, gam_in, 0.0, u_IEV);
+        if (debug) {
+            printf("[BDDC-mat_vec]: u_IEV\n");
+            printDeviceNodeVec(IEV_nnodes[0], u_IEV->getPtr(0));
+        }
         kmat_IEV->mult(1.0, u_IEV, 0.0, f_IEV);
         addVecIEVtoI(1.0, f_IEV, 0.0, f_I);
+        if (debug) {
+            printf("[BDDC-mat_vec]: f_I\n");
+            printDeviceNodeVec(I_nnodes[0], f_I->getPtr(0));
+        }
 
         // solve interior (I) subdomain-parallel matrix
         solveSubdomainI(f_I, u_I);
+        if (debug) {
+            printf("[BDDC-mat_vec]: u_I\n");
+            printDeviceNodeVec(I_nnodes[0], u_I->getPtr(0));
+        }
 
         // harmonic extension from interior (I) to interface (Gam)
         addVecItoIEV(1.0, u_I, 0.0, u_IEV);
         kmat_IEV->mult(-1.0, u_IEV, 1.0, f_IEV);
         addVecIEVtoGam(1.0, f_IEV, 0.0, gam_out);
+        if (debug) {
+            printf("[BDDC-mat_vec]: gam_out\n");
+            printDeviceNodeVec(ngam[0], gam_out->getPtr(0));
+        }
     }
 
     bool solve(SDVec *gam_rhs, SDVec *gam, bool check_conv = false) {
         // gets preconditioner solve for interface BDDC system M_{gam}^{-1} * y_{Gam}
+
+        if (debug) {
+            printf("[BDDC-solve]: gam_rhs\n");
+            printDeviceNodeVec(ngam[0], gam_rhs->getPtr(0));
+        }
 
         // get coarse vertex (V) loads for later
         constexpr bool SCALED = true;
@@ -306,7 +334,15 @@ class MultiGPUBDDC_LUSolver {
         addVecIEVtoVc(1.0, f_IEV, 1.0, f_V);
 
         // solve coarse vertex (V) problem using Schur complement system
+        if (debug) {
+            printf("[BDDC-solve]: f_V\n");
+            printDeviceNodeVec(Vc_nnodes[0], f_V->getPtr(0));
+        }
         solveCoarse(f_V, u_V);
+        if (debug) {
+            printf("[BDDC-solve]: u_V\n");
+            printDeviceNodeVec(Vc_nnodes[0], u_V->getPtr(0));
+        }
 
         // compute updated IE loads from coarse vertex (V) solution
         //    uses IEV system as intermediary
@@ -322,6 +358,11 @@ class MultiGPUBDDC_LUSolver {
         addVecIEtoIEV(1.0, u_IE, 1.0, u_IEV);
         addVecVctoIEV<SCALED>(1.0, u_V, 1.0, u_IEV);
         addVecIEVtoGam<SCALED>(1.0, u_IEV, 0.0, gam);
+
+        if (debug) {
+            printf("[BDDC-solve]: gam\n");
+            printDeviceNodeVec(ngam[0], gam->getPtr(0));
+        }
 
         return false;
     }
@@ -359,6 +400,8 @@ class MultiGPUBDDC_LUSolver {
     void add_subdomain_fext(const LoadMagnitude &load, T load_mag, T x_inplane_frac = 0.0) {
         fext_IEV->zeroAll();
         const int elems_per_block = 8;
+        addVec_globalToIEV(1.0, d_xpts, 0.0, d_IEV_xpts, 3);
+        addVec_globalToIEV(1.0, d_vars, 0.0, d_IEV_vars, block_dim);
 
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
@@ -390,6 +433,7 @@ class MultiGPUBDDC_LUSolver {
         }
         ctx->sync();
 
+        fext_IEV->reduceFromLocal();
         fext_IEV->apply_bcs(n_IEV_owned_bcs, d_IEV_owned_bcs, n_IEV_local_bcs, d_IEV_local_bcs);
         fext_IEV->copyTo(res_IEV);
     }
@@ -2661,6 +2705,7 @@ class MultiGPUBDDC_LUSolver {
         addVecIEVtoIE(alpha, vec_IEV, 0.0, temp_IE);
         if (debug) printf("[BDDC-addVecIEVtoGam] addVecIEtoGam\n");
         addVecIEtoGam(1.0, temp_IE, 0.0, temp_lam);
+        temp_lam->expandToLocal();
 
         if (debug) printf("[BDDC-addVecIEVtoGam] set_edge_values\n");
         for (int g = 0; g < ngpus; g++) {
@@ -2684,6 +2729,7 @@ class MultiGPUBDDC_LUSolver {
 
         if (debug) printf("[BDDC-addVecIEVtoGam] addVecIEVtoVc\n");
         addVecIEVtoVc(alpha, vec_IEV, 0.0, temp_V);
+        temp_V->expandToLocal();
 
         if (debug) printf("[BDDC-addVecIEVtoGam] set vertex values\n");
         for (int g = 0; g < ngpus; g++) {
@@ -2734,7 +2780,9 @@ class MultiGPUBDDC_LUSolver {
             CHECK_CUDA(cudaGetLastError());
         }
         ctx->sync();
+        temp_lam->reduceFromLocal();
 
+        // TODO : might be a multi-GPU mistake in reduce and expand vec_IEV multiple times..
         addVecGamtoIE(1.0, temp_lam, 0.0, temp_IE);
         addVecIEtoIEV(1.0, temp_IE, 0.0, vec_IEV);
 
@@ -2752,7 +2800,7 @@ class MultiGPUBDDC_LUSolver {
         }
         ctx->sync();
 
-        addVecVctoIEV(1.0, temp_V, 0.0, vec_IEV);
+        addVecVctoIEV(1.0, temp_V, 1.0, vec_IEV);
         vec_IEV->reduceFromLocal();
     }
 
