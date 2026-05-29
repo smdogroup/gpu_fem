@@ -1039,6 +1039,9 @@ class FetidpSolver : public BaseSolver {
         d_Vc_nodes = HostVec<int>(Vc_nnodes, Vc_nodes_vec.data()).createDeviceVec().getPtr();
         Vc_nodes = DeviceVec<int>(Vc_nnodes, d_Vc_nodes).createHostVec().getPtr();
 
+        printf("Vc_nodes: ");
+        printVec<int>(Vc_nnodes, Vc_nodes);
+
         // set VcToV_imap and IEVtoV_imap now
         VctoV_imap = new int[V_nnodes];
         std::memset(VctoV_imap, -1, V_nnodes * sizeof(int));
@@ -1244,6 +1247,9 @@ class FetidpSolver : public BaseSolver {
         V_nnodes = 4 * nnodes_vertex;  // vertex repeated
         lam_nnodes = nnodes_edge;      // FETI lagrange multipliers
 
+        printf("nsub=%d, I=%d, IE=%d, IEV=%d, Vc=%d, V=%d, lam=%d\n", num_subdomains, I_nnodes,
+               IE_nnodes, IEV_nnodes, Vc_nnodes, V_nnodes, lam_nnodes);
+
         // -----------------------------------------
         // build duplicated IEV nodal layout
         // -----------------------------------------
@@ -1278,6 +1284,8 @@ class FetidpSolver : public BaseSolver {
         }
         delete[] temp_completion;
 
+        printf("IEV_nodes: ");
+        printVec<int>(IEV_nnodes, IEV_nodes);
         // printf("IEV_sd_ptr: ");
         // printVec<int>(num_subdomains + 1, IEV_sd_ptr);
         // printf("IEV_sd_ind: ");
@@ -1313,8 +1321,10 @@ class FetidpSolver : public BaseSolver {
         // printf("IEV_ind %d\n", IEV_ind);
         // printf("IEV_nodes %d: ", IEV_nnodes);
         // printVec<int>(IEV_nnodes, IEV_nodes);
-        // printf("Fine BDDC IEV_conn: ");
-        // printVec<int>(nodes_per_elem * num_elements, IEV_elem_conn);
+        printf("Fine BDDC IEV_conn: ");
+        printVec<int>(nodes_per_elem * num_elements, IEV_elem_conn);
+        printf("elem_sd_ind: ");
+        printVec<int>(num_elements, elem_sd_ind);
 
         // for (int iev = 0; iev < IEV_nnodes; iev++) {
         //     int isd = IEV_sd_ind[iev];
@@ -1352,10 +1362,10 @@ class FetidpSolver : public BaseSolver {
         d_IE_general_edge = HostVec<bool>(IE_nnodes, IE_general_edge).createDeviceVec().getPtr();
         d_IE_nodes = HostVec<int>(IE_nnodes, IE_nodes).createDeviceVec().getPtr();
 
-        // printf("IE_nodes %d: ", IE_nnodes);
-        // printVec<int>(IE_nnodes, IE_nodes);
-        // printf("I_nodes %d: ", I_nnodes);
-        // printVec<int>(I_nnodes, I_nodes);
+        printf("IE_nodes %d: ", IE_nnodes);
+        printVec<int>(IE_nnodes, IE_nodes);
+        printf("I_nodes %d: ", I_nnodes);
+        printVec<int>(I_nnodes, I_nodes);
 
         // -----------------------------------------
         // build IEV sparsity from duplicated connectivity
@@ -5788,6 +5798,18 @@ class FetidpSolver : public BaseSolver {
                               d_IEV_elem_conn, d_IEV_elem_conn, d_IEV_xpts, d_IEV_vars, d_compData,
                               *kmat_IEV);
 
+        // printf("kmat_IEV vals on GPU[0]: ");
+        // int nnz = IEV_nnzb * block_dim2;
+        // T *h_kmat_IEV_vals = kmat_IEV->createHostVec().getPtr();
+        // for (int i = 0; i < IEV_nnzb; i++) {
+        //     T *h_block = &h_kmat_IEV_vals[block_dim2 * i];
+        //     printf("kmat_IEV: block[%d]:\n", i);
+
+        //     for (int j = 0; j < block_dim; j++) {
+        //         printVec<T>(block_dim, &h_block[block_dim * j]);
+        //     }
+        // }
+
         // apply bcs to the kmat_IEV (before copying to IE and I subdomain matrices)
         kmat_IEV->apply_bcs(d_IEV_bcs);
 
@@ -5812,6 +5834,23 @@ class FetidpSolver : public BaseSolver {
             computeSvvInverseTerm();
             CHECK_CUDA(cudaDeviceSynchronize());
             // printf("\tdone with Svv inverse term\n");
+        }
+
+        bool debug = true;
+        if (debug) {
+            printf("S_VV vals on GPU[0] with nnzb=%d: \n", Svv_nofill_nnzb);
+            T *h_Svv_vals = d_Svv_vals.createHostVec().getPtr();
+            // int *Svv_nofill_map =
+            //     DeviceVec<int>(Svv_nofill_nnzb, d_Svv_Vc_copyBlocks).createHostVec().getPtr();
+            for (int i = 0; i < Svv_nofill_nnzb; i++) {
+                // int i2 = Svv_nofill_map[i];
+                int row = Svv_rows[i], col = Svv_cols[i];
+                T *h_block = &h_Svv_vals[block_dim2 * i];
+                printf("S_VV: block[%d] (%d,%d):\n", i, row, col);
+                for (int j = 0; j < block_dim; j++) {
+                    printVec<T>(block_dim, &h_block[block_dim * j]);
+                }
+            }
         }
     }
     void _assemble_coarse_problem_timing() {
@@ -5923,8 +5962,6 @@ class FetidpSolver : public BaseSolver {
     template <int elems_per_block = 8>
     void set_IEV_residual(T lambdaE, T lambdaI, DeviceVec<T> vars) {
         // res_IEV(u_IEV) = lambdaE * fext_IEV - lambdaI * fint_IEV
-
-        // printf("set_IEV_residual\n");
 
         addVec_globalToIEV(d_xpts, d_IEV_xpts, 3, 1.0, 0.0);
         addVec_globalToIEV(vars, d_IEV_vars, block_dim, 1.0, 0.0);
@@ -6396,6 +6433,25 @@ class FetidpSolver : public BaseSolver {
         // printVec<int>(IE_nofill_nnzb, IEVtoIE_imap);
         // printf("kmat_IEnofill_map: ");
         // printVec<int>(IE_nofill_nnzb, kmat_IEnofill_map);
+
+        // bool debug = true;
+        // if (debug) {
+        //     int _nnz = IE_nofill_nnzb * block_dim2;
+        //     printf("kmat_IE vals on GPU[0] with nnzb=%d: \n", IE_nofill_nnzb);
+        //     T *h_kmat_IE_vals = d_IE_vals.createHostVec().getPtr();
+        //     for (int i = 0; i < IE_nofill_nnzb; i++) {
+        //         // because the IE pattern here has fillin (so nofill match to new code requires
+        //         this
+        //         // map)
+        //         int i2 = kmat_IEnofill_map[i];
+        //         T *h_block = &h_kmat_IE_vals[block_dim2 * i2];
+        //         printf("kmat_IE: block[%d]:\n", i);
+
+        //         for (int j = 0; j < block_dim; j++) {
+        //             printVec<T>(block_dim, &h_block[block_dim * j]);
+        //         }
+        //     }
+        // }
     }
 
     void copyKmat_IEVtoI() {
@@ -6406,6 +6462,25 @@ class FetidpSolver : public BaseSolver {
         k_copyMatToMat_restrict<T><<<grid, block>>>(I_nofill_nnzb, block_dim, d_kmat_ItoIEV_map,
                                                     d_kmat_Inofill_map, d_IEV_vals.getPtr(),
                                                     d_I_vals.getPtr());
+
+        // bool debug = true;
+        // if (debug) {
+        //     int _nnz = I_nofill_nnzb * block_dim2;
+        //     printf("kmat_I vals on GPU[0] with nnzb=%d: \n", I_nofill_nnzb);
+        //     T *h_kmat_I_vals = d_I_vals.createHostVec().getPtr();
+        //     for (int i = 0; i < I_nofill_nnzb; i++) {
+        //         // because the IE pattern here has fillin (so nofill match to new code requires
+        //         this
+        //         // map)
+        //         int i2 = kmat_Inofill_map[i];
+        //         T *h_block = &h_kmat_I_vals[block_dim2 * i2];
+        //         printf("kmat_I: block[%d]:\n", i);
+
+        //         for (int j = 0; j < block_dim; j++) {
+        //             printVec<T>(block_dim, &h_block[block_dim * j]);
+        //         }
+        //     }
+        // }
     }
 
     void copyKmat_IEVtoSvv() {
@@ -6437,6 +6512,14 @@ class FetidpSolver : public BaseSolver {
         }
     }
 
+    void printNodeVec(int nnodes, T *vec) {
+        for (int i = 0; i < nnodes; i++) {
+            T *node_vec = &vec[i * block_dim];
+            printf("n=%d: ", i);
+            printVec<T>(block_dim, node_vec);
+        }
+    }
+
     void computeSvvInverseTerm() {
         // need 24 IE subdomain solves (tops) for quad-macro elements of struct mesh
         // to compute the -A_{V,IE} * A_{IE,IE}^{-1} * A_{IE,V} += > S_{VV} second Schur
@@ -6449,13 +6532,40 @@ class FetidpSolver : public BaseSolver {
         for (int icol = 0; icol < ncols; icol++) {
             u_IEV.zeroValues();
             setVec_IEVtoV_vals(u_IEV, icol, 1.0);  // set these vals to 1.0 and all else 0
+            printf("computeSvvInverseTerm on icol=%d: u_IEV vec\n", icol);
+            T *h_uIEV = u_IEV.createHostVec().getPtr();
+            // printVec<T>(block_dim * IEV_nnodes, h_uIEV);
+            printNodeVec(IEV_nnodes, h_uIEV);
 
             sparseMatVec(*kmat_IEV, u_IEV, 1.0, 0.0, f_IEV);
+            printf("computeSvvInverseTerm on icol=%d: f_IEV vec\n", icol);
+            T *h_fIEV = f_IEV.createHostVec().getPtr();
+            // printVec<T>(block_dim * IEV_nnodes, h_fIEV);
+            printNodeVec(IEV_nnodes, h_fIEV);
+
             addVecIEVtoIE(f_IEV, f_IE, 1.0, 0.0);
+            printf("computeSvvInverseTerm on icol=%d: f_IE vec\n", icol);
+            T *h_fIE = f_IE.createHostVec().getPtr();
+            // printVec<T>(block_dim * IE_nnodes, h_fIE);
+            printNodeVec(IE_nnodes, h_fIE);
+
             solveSubdomainIE(f_IE, u_IE);
+            printf("computeSvvInverseTerm on icol=%d: u_IE vec\n", icol);
+            T *h_uIE = u_IE.createHostVec().getPtr();
+            // printVec<T>(block_dim * IE_nnodes, h_uIE);
+            printNodeVec(IE_nnodes, h_uIE);
+
             addVecIEtoIEV(u_IE, u_IEV, 1.0, 0.0);
+            printf("computeSvvInverseTerm on icol=%d: u_IEV2 vec\n", icol);
+            T *h_uIEV2 = u_IEV.createHostVec().getPtr();
+            // printVec<T>(block_dim * IEV_nnodes, h_uIEV2);
+            printNodeVec(IEV_nnodes, h_uIEV2);
 
             sparseMatVec(*kmat_IEV, u_IEV, -1.0, 0.0, f_IEV);
+            printf("computeSvvInverseTerm on icol=%d: f_IEV2 vec\n", icol);
+            T *h_fIEV2 = f_IEV.createHostVec().getPtr();
+            printVec<T>(block_dim * IEV_nnodes, h_fIEV2);
+            printNodeVec(IEV_nnodes, h_fIEV2);
             // CHECK_CUDA(cudaDeviceSynchronize());
             // printf("after sparseMatVec #2 icol %d\n", icol);
 

@@ -395,6 +395,8 @@ int main(int argc, char **argv) {
     T init_gam_resid = gam_solver->getResidualNorm(gam_rhs, gam);
     printf("initial gamma residual = %.8e\n", init_gam_resid);
 
+    return; // debug
+
     // ==============================================
     // SOLVE (TIMING)
     // ==============================================

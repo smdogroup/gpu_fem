@@ -177,10 +177,25 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
     void set_IEV_residual(T lambdaE, T lambdaI, DeviceVec<T> vars) {
         // res_IEV(u_IEV) = lambdaE * fext_IEV - lambdaI * fint_IEV
 
-        // printf("set_IEV_residual\n");
+        // temp debug
+        printf("set_IEV_residual\n");
+        T *h_xpts = this->d_xpts.createHostVec().getPtr();
+        printf("h_xpts: ");
+        printVec<T>(3 * this->num_nodes, h_xpts);
+        int *h_IE_nsd = DeviceVec<int>(this->IE_nnodes, this->d_IE_nsd).createHostVec().getPtr();
+        printf("h_IE_nsd: ");
+        printVec<int>(this->IE_nnodes, h_IE_nsd);
+        int *h_vertex_nsd =
+            DeviceVec<int>(this->Vc_nnodes, this->d_vertex_nsd).createHostVec().getPtr();
+        printf("h_vertex_nsd: ");
+        printVec<int>(this->Vc_nnodes, h_vertex_nsd);
 
         this->addVec_globalToIEV(this->d_xpts, this->d_IEV_xpts, 3, 1.0, 0.0);
         this->addVec_globalToIEV(vars, this->d_IEV_vars, this->block_dim, 1.0, 0.0);
+
+        T *h_IEV_xpts = this->d_IEV_xpts.createHostVec().getPtr();
+        printf("h_IEV_xpts on GPU[0]: ");
+        printVec<T>(3 * this->IEV_nnodes, h_IEV_xpts);
 
         this->fint_IEV.zeroValues();
 

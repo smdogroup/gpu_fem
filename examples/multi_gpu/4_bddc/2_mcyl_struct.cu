@@ -85,8 +85,8 @@ int main(int argc, char **argv) {
     using BDDC = MultiGPUBDDC_LUSolver<T, Assembler, Partitioner, IEVSplit>;
     using PCG_MatFree = GPU_PCGMatfree<T, SDPartitioner, BDDC, BDDC>;
 
-    // int nxe = 6, nxe_subdomain_size = 2;
-    int nxe = 256, nxe_subdomain_size = 8; // 8 subdomains slightly faster (cause shrinks coarse problem) for local + HPC
+    int nxe = 6, nxe_subdomain_size = 2;
+    // int nxe = 256, nxe_subdomain_size = 8; // 8 subdomains slightly faster (cause shrinks coarse problem) for local + HPC
     T thick = 1e-3;
     T mag = 1.0;
 
@@ -217,17 +217,25 @@ int main(int argc, char **argv) {
     bddc->set_IEV_residual(1.0, 0.0, vars);
     printf("[MAIN] done set_IEV_residual\n");
 
+    printf("[MAIN] update_after_assembly\n");
+    bddc->update_after_assembly(vars);
+    printf("[MAIN] done update_after_assembly\n");
+
     // lambda rhs (TODO : fix this later so it can do multi-GPU)
     // VecType<T> gam_rhs(bddc->getLambdaSize(0));
     // VecType<T> gam(bddc->getLambdaSize(0));
     auto gam_rhs = bddc->createGamVec();
     auto gam_soln = bddc->createGamVec();
+    printf("[MAIN] get_lam_rhs\n");
     bddc->get_lam_rhs(gam_soln);
+    printf("[MAIN] done get_lam_rhs\n");
 
     auto sd_part = bddc->get_part_gam();
     
     // build the matrix-free PCG solver now
+    printf("[MAIN] build PCG_MatFree\n");
     auto pcg = new PCG_MatFree(ctx, sd_part, bddc, bddc, N, block_dim);
+    printf("[MAIN] done build PCG_MatFree\n");
 
     // then solve
     int max_iter = 100, print_freq = 10;

@@ -225,6 +225,17 @@ class GPUvec {
         if (can_sync) sync();
     }
 
+    void setOwnedValuesFromHost(const T *h_owned_vals, int g) {
+        if (owned_N[g] == 0) return;
+
+        CHECK_CUDA(cudaSetDevice(debug ? 0 : g));
+
+        CHECK_CUDA(cudaMemcpyAsync(d_vals_owned[g], h_owned_vals, owned_N[g] * sizeof(T),
+                                   cudaMemcpyHostToDevice, streams[g]));
+
+        CHECK_CUDA(cudaStreamSynchronize(streams[g]));
+    }
+
     void copyTo(GPUvec<T, Partitioner> *y) {
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(debug ? 0 : g));
@@ -488,6 +499,143 @@ class GPUvec {
 
         sync();
     }
+
+    // void expandToLocal() {
+    //     printf("[expandToLocal] BEGIN\n");
+
+    //     zeroLocal();
+
+    //     printf("[expandToLocal] after zeroLocal\n");
+
+    //     // ------------------------------------------------------------
+    //     // scatter owned -> local
+    //     // ------------------------------------------------------------
+    //     for (int g = 0; g < ngpus; g++) {
+    //         printf("[expandToLocal] scatter g=%d owned_nnodes=%d owned_N=%d\n", g,
+    //                part->owned_nnodes[g], owned_N[g]);
+
+    //         if (part->owned_nnodes[g] == 0) continue;
+
+    //         CHECK_CUDA(cudaSetDevice(debug ? 0 : g));
+
+    //         printf("[expandToLocal] g=%d owned_to_local=%p vals_owned=%p vals_local=%p\n", g,
+    //                (void *)part->d_owned_to_local_map[g], (void *)d_vals_owned[g],
+    //                (void *)d_vals_local[g]);
+
+    //         dim3 block(32);
+    //         dim3 grid((owned_N[g] + block.x - 1) / block.x);
+
+    //         printf("[expandToLocal] launch scatter g=%d grid=%d block=%d\n", g, (int)grid.x,
+    //                (int)block.x);
+
+    //         k_scatter_owned_to_local<T><<<grid, block, 0, streams[g]>>>(
+    //             part->owned_nnodes[g], block_dim, part->d_owned_to_local_map[g], d_vals_owned[g],
+    //             d_vals_local[g]);
+
+    //         CHECK_CUDA(cudaGetLastError());
+    //         CHECK_CUDA(cudaStreamSynchronize(streams[g]));
+
+    //         printf("[expandToLocal] scatter done g=%d\n", g);
+    //     }
+
+    //     printf("[expandToLocal] before packGhostReduced\n");
+
+    //     packGhostReduced();
+
+    //     CHECK_CUDA(cudaDeviceSynchronize());
+
+    //     printf("[expandToLocal] after packGhostReduced\n");
+
+    //     // ------------------------------------------------------------
+    //     // peer copies
+    //     // ------------------------------------------------------------
+    //     for (int dst = 0; dst < ngpus; dst++) {
+    //         for (int src = 0; src < ngpus; src++) {
+    //             if (src == dst) continue;
+
+    //             int idx = pair_index(dst, src);
+    //             int Nred = red_N[idx];
+
+    //             printf("[expandToLocal] copy dst=%d src=%d idx=%d Nred=%d\n", dst, src, idx,
+    //             Nred);
+
+    //             if (Nred == 0) continue;
+
+    //             CHECK_CUDA(cudaSetDevice(debug ? 0 : src));
+
+    //             printf("[expandToLocal] copy ptrs red=%p red_dst=%p\n", (void *)d_vals_red[idx],
+    //                    (void *)d_vals_red_dst[idx]);
+
+    //             if (debug) {
+    //                 CHECK_CUDA(cudaMemcpyAsync(d_vals_red_dst[idx], d_vals_red[idx],
+    //                                            Nred * sizeof(T), cudaMemcpyDeviceToDevice,
+    //                                            streams[src]));
+    //             } else {
+    //                 CHECK_CUDA(cudaMemcpyPeerAsync(d_vals_red_dst[idx], dst, d_vals_red[idx],
+    //                 src,
+    //                                                Nred * sizeof(T), streams[src]));
+    //             }
+
+    //             CHECK_CUDA(cudaGetLastError());
+    //             CHECK_CUDA(cudaStreamSynchronize(streams[src]));
+
+    //             printf("[expandToLocal] copy done dst=%d src=%d idx=%d\n", dst, src, idx);
+    //         }
+    //     }
+
+    //     printf("[expandToLocal] before copy sync\n");
+
+    //     sync();
+
+    //     printf("[expandToLocal] after copy sync\n");
+
+    //     // ------------------------------------------------------------
+    //     // place ghosts
+    //     // ------------------------------------------------------------
+    //     for (int dst = 0; dst < ngpus; dst++) {
+    //         CHECK_CUDA(cudaSetDevice(debug ? 0 : dst));
+
+    //         printf("[expandToLocal] dst=%d local=%p\n", dst, (void *)d_vals_local[dst]);
+
+    //         for (int src = 0; src < ngpus; src++) {
+    //             if (src == dst) continue;
+
+    //             int idx = pair_index(dst, src);
+    //             int Nred = red_N[idx];
+
+    //             printf("[expandToLocal] place dst=%d src=%d idx=%d Nred=%d\n", dst, src, idx,
+    //             Nred);
+
+    //             if (Nred == 0) continue;
+
+    //             int nred_nodes = Nred / block_dim;
+
+    //             dim3 block(32);
+    //             dim3 grid((Nred + block.x - 1) / block.x);
+
+    //             printf(
+    //                 "[expandToLocal] launch place dst=%d src=%d idx=%d "
+    //                 "nred_nodes=%d map=%p red_dst=%p local=%p\n",
+    //                 dst, src, idx, nred_nodes, (void *)part->d_dstred_map[idx],
+    //                 (void *)d_vals_red_dst[idx], (void *)d_vals_local[dst]);
+
+    //             k_place_ghost_red<T><<<grid, block, 0, streams[dst]>>>(
+    //                 nred_nodes, block_dim, part->d_dstred_map[idx], d_vals_red_dst[idx],
+    //                 d_vals_local[dst]);
+
+    //             CHECK_CUDA(cudaGetLastError());
+    //             CHECK_CUDA(cudaStreamSynchronize(streams[dst]));
+
+    //             printf("[expandToLocal] place done dst=%d src=%d idx=%d\n", dst, src, idx);
+    //         }
+    //     }
+
+    //     printf("[expandToLocal] before final sync\n");
+
+    //     sync();
+
+    //     printf("[expandToLocal] END\n");
+    // }
 
     void reduceFromLocal() {
         zero();

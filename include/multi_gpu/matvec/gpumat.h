@@ -143,7 +143,20 @@ class GPUbsrmat {
 
     void mult(T alpha, GPUvec<T, Partitioner> *x, T beta, GPUvec<T, Partitioner> *y) {
         // alpha * A * x + beta * y => y
+
+        // printf("[GPUmat-mult] x vec: ");
+        // T *h_x = DeviceVec<T>(block_dim * x->getLocalNodes(0), x->getLocalPtr(0))
+        //              .createHostVec()
+        //              .getPtr();
+        // printVec<T>(block_dim * x->getLocalNodes(0), h_x);
+
         x->expandToLocal();
+
+        // printf("[GPUmat-mult] x vec (v2): ");
+        // T *h_x2 = DeviceVec<T>(block_dim * x->getLocalNodes(0), x->getLocalPtr(0))
+        //               .createHostVec()
+        //               .getPtr();
+        // printVec<T>(block_dim * x->getLocalNodes(0), h_x2);
 
         for (int g = 0; g < ngpus; g++) {
             CHECK_CUDA(cudaSetDevice(g));
@@ -158,6 +171,12 @@ class GPUbsrmat {
         }
 
         sync();
+
+        // printf("[GPUmat-mult] temp vec: ");
+        // T *h_temp = DeviceVec<T>(block_dim * temp->getLocalNodes(0), temp->getLocalPtr(0))
+        //                 .createHostVec()
+        //                 .getPtr();
+        // printVec<T>(block_dim * temp->getLocalNodes(0), h_temp);
 
         temp->reduceFromLocal();
         y->axpby(alpha, temp, beta);
