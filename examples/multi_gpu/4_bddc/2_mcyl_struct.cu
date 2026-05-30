@@ -85,10 +85,11 @@ int main(int argc, char **argv) {
     using BDDC = MultiGPUBDDC_LUSolver<T, Assembler, Partitioner, IEVSplit>;
     using PCG_MatFree = GPU_PCGMatfree<T, SDPartitioner, BDDC, BDDC>;
 
-    int nxe = 6, nxe_subdomain_size = 2;
-    // int nxe = 256, nxe_subdomain_size = 8; // 8 subdomains slightly faster (cause shrinks coarse problem) for local + HPC
+    // int nxe = 6, nxe_subdomain_size = 2;
+    int nxe = 256, nxe_subdomain_size = 4; // 8 subdomains slightly faster (cause shrinks coarse problem) for local + HPC
+    // int nxe = 512, nxe_subdomain_size = 4; // 8 subdomains slightly faster (cause shrinks coarse problem) for local + HPC
     T thick = 1e-3;
-    T mag = 1.0;
+    T mag = 1.0e2;
 
     for (int i = 1; i < argc; ++i) {
         char* arg = argv[i];
@@ -152,20 +153,20 @@ int main(int argc, char **argv) {
     // double rho = 2500, ys = 350e6;
     bool imperfection = false; // option for geom imperfection
     int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
-    printf("create GPU cylinder assembler\n");
+    // printf("create GPU cylinder assembler\n");
     auto assembler = createGPUCylinderAssembler<Assembler>(ctx, nxe, nxe, L, R, E, nu, thick, 
         imperfection, imp_x, imp_hoop);
 
     // ---------------------------------------------
     // get mesh partitioner
-    printf("get mesh partitioner\n");
+    // printf("get mesh partitioner\n");
     auto part = assembler->getPartitioner();
     
     // build matrix and vectors
     // ---------------------------------------------
-    printf("make GPUbsrmat\n");
+    // printf("make GPUbsrmat\n");
     auto kmat = new GPUbsrmat<T, Partitioner>(ctx, part, block_dim);
-    printf("make GPUvecs\n");
+    // printf("make GPUvecs\n");
     // auto rhs = new GPUvec<T, Partitioner>(ctx, part, block_dim);
     auto soln = new GPUvec<T, Partitioner>(ctx, part, block_dim);
     auto vars = new GPUvec<T, Partitioner>(ctx, part, block_dim);
@@ -177,7 +178,7 @@ int main(int argc, char **argv) {
     // ---------------------------------------------
     // printf("rhs->setValuesFromHost\n");
     // rhs->setValuesFromHost(my_loads);
-    printf("add jacobian\n");
+    // printf("add jacobian\n");
     assembler->add_jacobian(kmat);
 
     // printf("add jacobian post-sync\n");
@@ -197,52 +198,57 @@ int main(int argc, char **argv) {
     int nxs = nxe / nxe_subdomain_size;
     const int order = Basis::order;
     int close_hoop = true; // for cylinder mesh (but not for plate)
-    printf("[MAIN] make IEV splitting class\n");
+    // printf("[MAIN] make IEV splitting class\n");
     auto split = new IEVSplit(num_elements, num_nodes, nodes_per_elem, h_elem_conn,
                             nxe, nxe, nxs, nxs, order, close_hoop);
-    printf("[MAIN] done making IEV splitting class\n");
+    // printf("[MAIN] done making IEV splitting class\n");
 
-    printf("[MAIN] make BDDC class\n");
+    // printf("[MAIN] make BDDC class\n");
     bool debug = true;
     // bool debug = false;
     auto bddc = new BDDC(ctx, part, assembler, kmat, split, debug);
-    printf("[MAIN] done making BDDC class\n");
+    // printf("[MAIN] done making BDDC class\n");
 
-    printf("[MAIN] add_subdomain_fext\n");
+    // printf("[MAIN] add_subdomain_fext\n");
     ObliqueCylinderLoad<T> load;
     bddc->add_subdomain_fext(load, mag);
-    printf("[MAIN] done add_subdomain_fext\n");
+    // printf("[MAIN] done add_subdomain_fext\n");
 
-    printf("[MAIN] set_IEV_residual\n");
+    // printf("[MAIN] set_IEV_residual\n");
     bddc->set_IEV_residual(1.0, 0.0, vars);
-    printf("[MAIN] done set_IEV_residual\n");
+    // printf("[MAIN] done set_IEV_residual\n");
 
-    printf("[MAIN] update_after_assembly\n");
+    // printf("[MAIN] update_after_assembly\n");
     bddc->update_after_assembly(vars);
-    printf("[MAIN] done update_after_assembly\n");
+    // printf("[MAIN] done update_after_assembly\n");
 
     // lambda rhs (TODO : fix this later so it can do multi-GPU)
     // VecType<T> gam_rhs(bddc->getLambdaSize(0));
     // VecType<T> gam(bddc->getLambdaSize(0));
     auto gam_rhs = bddc->createGamVec();
     auto gam_soln = bddc->createGamVec();
-    printf("[MAIN] get_lam_rhs\n");
-    bddc->get_lam_rhs(gam_soln);
-    printf("[MAIN] done get_lam_rhs\n");
+    // printf("[MAIN] get_lam_rhs\n");
+    bddc->get_lam_rhs(gam_rhs);
+    // printf("[MAIN] done get_lam_rhs\n");
+
+    // return; // debug
 
     auto sd_part = bddc->get_part_gam();
     
     // build the matrix-free PCG solver now
-    printf("[MAIN] build PCG_MatFree\n");
-    auto pcg = new PCG_MatFree(ctx, sd_part, bddc, bddc, N, block_dim);
-    printf("[MAIN] done build PCG_MatFree\n");
+    // printf("[MAIN] build PCG_MatFree\n");
+    const char *precond_name = "BDDC-Interface";
+    auto pcg = new PCG_MatFree(ctx, sd_part, bddc, bddc, N, block_dim, precond_name);
+    // printf("[MAIN] done build PCG_MatFree\n");
 
     // then solve
-    int max_iter = 100, print_freq = 10;
+    int max_iter = 100;
+    // int max_iter = 5; // temp debug
+    int print_freq = 3;
     T rtol = 1e-6, atol = 1e-30;
     bool can_print = true;
 
-    printf("begin PCG solve\n");
+    // printf("begin PCG solve\n");
     int exp_iters = pcg->solve(gam_rhs, gam_soln, max_iter, atol, rtol, print_freq, can_print);
 
     bddc->get_global_soln(gam_soln, soln);

@@ -20,45 +20,45 @@ class SubdomainGPUPartitioner {
           part_IEV(part_IEV_),
           same_IEV_order(same_IEV_order_),
           debug(debug_) {
-        if (debug) printf("[SDPartition] begin ngpus=%d\n", ngpus);
+        // if (debug) printf("[SDPartition] begin ngpus=%d\n", ngpus);
 
-        if (debug) printf("[SDPartition] build_IE_offsets\n");
+        // if (debug) printf("[SDPartition] build_IE_offsets\n");
         build_IE_offsets();
-        if (debug) printf("[SDPartition] num_IE_nodes=%d\n", num_IE_nodes);
+        // if (debug) printf("[SDPartition] num_IE_nodes=%d\n", num_IE_nodes);
 
-        if (debug) printf("[SDPartition] build_IEV_to_IE_map\n");
+        // if (debug) printf("[SDPartition] build_IEV_to_IE_map\n");
         build_IEV_to_IE_map();
 
-        if (debug) printf("[SDPartition] build_owned_node_lists\n");
+        // if (debug) printf("[SDPartition] build_owned_node_lists\n");
         build_owned_node_lists();
 
-        if (debug) printf("[SDPartition] build_local_node_lists\n");
+        // if (debug) printf("[SDPartition] build_local_node_lists\n");
         build_local_node_lists();
 
-        if (debug) {
-            for (int g = 0; g < ngpus; g++) {
-                printf("[SDPartition] gpu %d: owned=%d local=%d IE_in=%d IEV_local=%d\n", g,
-                       owned_nnodes[g], local_nnodes[g], IE_nnodes_in[g],
-                       part_IEV->getNumLocalNodes(g));
-            }
-        }
+        // if (debug) {
+        //     for (int g = 0; g < ngpus; g++) {
+        //         printf("[SDPartition] gpu %d: owned=%d local=%d IE_in=%d IEV_local=%d\n", g,
+        //                owned_nnodes[g], local_nnodes[g], IE_nnodes_in[g],
+        //                part_IEV->getNumLocalNodes(g));
+        //     }
+        // }
 
-        if (debug) printf("[SDPartition] build_owned_local_maps\n");
+        // if (debug) printf("[SDPartition] build_owned_local_maps\n");
         build_owned_local_maps();
 
-        if (debug) printf("[SDPartition] build_ghost_node_maps\n");
+        // if (debug) printf("[SDPartition] build_ghost_node_maps\n");
         build_ghost_node_maps();
 
-        if (debug) {
-            int total_ghost = 0;
-            for (int i = 0; i < ngpus * ngpus; i++) total_ghost += ghost_nnodes[i];
-            printf("[SDPartition] total_ghost=%d\n", total_ghost);
-        }
+        // if (debug) {
+        //     int total_ghost = 0;
+        //     for (int i = 0; i < ngpus * ngpus; i++) total_ghost += ghost_nnodes[i];
+        //     printf("[SDPartition] total_ghost=%d\n", total_ghost);
+        // }
 
-        if (debug) printf("[SDPartition] move_maps_to_device\n");
+        // if (debug) printf("[SDPartition] move_maps_to_device\n");
         move_maps_to_device();
 
-        if (debug) printf("[SDPartition] done\n");
+        // if (debug) printf("[SDPartition] done\n");
     }
 
     int pair_index(int dst, int src) const { return ngpus * dst + src; }
@@ -195,16 +195,80 @@ class SubdomainGPUPartitioner {
         std::memset(d_owned_nodes, 0, ngpus * sizeof(int *));
 
         for (int g = 0; g < ngpus; g++) {
-            owned_nnodes[g] = IE_nnodes_in[g];
+            std::vector<int> owned_ie_nodes;
+
+            if (same_IEV_order) {
+                // Original behavior: IE_nodes_in[g] order is trusted
+                owned_ie_nodes.reserve(IE_nnodes_in[g]);
+
+                for (int i = 0; i < IE_nnodes_in[g]; i++) {
+                    owned_ie_nodes.push_back(IE_offsets[g] + i);
+                }
+            } else {
+                // Important case:
+                // Preserve the owned IEV ordering, which should already be E then V.
+                // This makes the owned reduced vector use the same E+V split as local.
+                int IEV_owned_nnodes = part_IEV->getNumOwnedNodes(g);
+                int *h_IEV_owned_nodes = part_IEV->getOwnedNodesPtr(g);
+
+                owned_ie_nodes.reserve(IE_nnodes_in[g]);
+
+                for (int iev_owned = 0; iev_owned < IEV_owned_nnodes; iev_owned++) {
+                    int iev_global = h_IEV_owned_nodes[iev_owned];
+
+                    if (iev_global < 0 || iev_global >= num_IEV_nodes) continue;
+
+                    int ie = h_nred_to_IE[iev_global];
+
+                    if (ie < 0) continue;
+
+                    // Only keep IE nodes owned by this subdomain
+                    if (h_node_gpu_ind[ie] != g) continue;
+
+                    owned_ie_nodes.push_back(ie);
+                }
+
+                if ((int)owned_ie_nodes.size() != IE_nnodes_in[g]) {
+                    printf(
+                        "[SDPartition] ERROR gpu %d: unordered owned E+V count mismatch: "
+                        "got %d expected %d\n",
+                        g, (int)owned_ie_nodes.size(), IE_nnodes_in[g]);
+                    exit(-1);
+                }
+            }
+
+            owned_nnodes[g] = static_cast<int>(owned_ie_nodes.size());
             owned_N[g] = owned_nnodes[g];
 
             h_owned_nodes[g] = new int[owned_nnodes[g]];
 
             for (int i = 0; i < owned_nnodes[g]; i++) {
-                h_owned_nodes[g][i] = IE_offsets[g] + i;
+                h_owned_nodes[g][i] = owned_ie_nodes[i];
             }
         }
     }
+
+    // void build_owned_node_lists() {
+    //     owned_nnodes = new int[ngpus];
+    //     owned_N = new int[ngpus];
+
+    //     h_owned_nodes = new int *[ngpus];
+    //     d_owned_nodes = new int *[ngpus];
+
+    //     std::memset(h_owned_nodes, 0, ngpus * sizeof(int *));
+    //     std::memset(d_owned_nodes, 0, ngpus * sizeof(int *));
+
+    //     for (int g = 0; g < ngpus; g++) {
+    //         owned_nnodes[g] = IE_nnodes_in[g];
+    //         owned_N[g] = owned_nnodes[g];
+
+    //         h_owned_nodes[g] = new int[owned_nnodes[g]];
+
+    //         for (int i = 0; i < owned_nnodes[g]; i++) {
+    //             h_owned_nodes[g][i] = IE_offsets[g] + i;
+    //         }
+    //     }
+    // }
 
     void build_local_node_lists() {
         local_nnodes = new int[ngpus];

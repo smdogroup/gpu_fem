@@ -178,24 +178,24 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         // res_IEV(u_IEV) = lambdaE * fext_IEV - lambdaI * fint_IEV
 
         // temp debug
-        printf("set_IEV_residual\n");
-        T *h_xpts = this->d_xpts.createHostVec().getPtr();
-        printf("h_xpts: ");
-        printVec<T>(3 * this->num_nodes, h_xpts);
-        int *h_IE_nsd = DeviceVec<int>(this->IE_nnodes, this->d_IE_nsd).createHostVec().getPtr();
-        printf("h_IE_nsd: ");
-        printVec<int>(this->IE_nnodes, h_IE_nsd);
-        int *h_vertex_nsd =
-            DeviceVec<int>(this->Vc_nnodes, this->d_vertex_nsd).createHostVec().getPtr();
-        printf("h_vertex_nsd: ");
-        printVec<int>(this->Vc_nnodes, h_vertex_nsd);
+        // printf("set_IEV_residual\n");
+        // T *h_xpts = this->d_xpts.createHostVec().getPtr();
+        // printf("h_xpts: ");
+        // printVec<T>(3 * this->num_nodes, h_xpts);
+        // int *h_IE_nsd = DeviceVec<int>(this->IE_nnodes, this->d_IE_nsd).createHostVec().getPtr();
+        // printf("h_IE_nsd: ");
+        // printVec<int>(this->IE_nnodes, h_IE_nsd);
+        // int *h_vertex_nsd =
+        //     DeviceVec<int>(this->Vc_nnodes, this->d_vertex_nsd).createHostVec().getPtr();
+        // printf("h_vertex_nsd: ");
+        // printVec<int>(this->Vc_nnodes, h_vertex_nsd);
 
         this->addVec_globalToIEV(this->d_xpts, this->d_IEV_xpts, 3, 1.0, 0.0);
         this->addVec_globalToIEV(vars, this->d_IEV_vars, this->block_dim, 1.0, 0.0);
 
-        T *h_IEV_xpts = this->d_IEV_xpts.createHostVec().getPtr();
-        printf("h_IEV_xpts on GPU[0]: ");
-        printVec<T>(3 * this->IEV_nnodes, h_IEV_xpts);
+        // T *h_IEV_xpts = this->d_IEV_xpts.createHostVec().getPtr();
+        // printf("h_IEV_xpts on GPU[0]: ");
+        // printVec<T>(3 * this->IEV_nnodes, h_IEV_xpts);
 
         this->fint_IEV.zeroValues();
 
@@ -233,14 +233,23 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         // printf("FineBDDC :: pre-synchronize\n");
 
         this->res_IEV.copyValuesTo(this->f_IEV);
+        // printf("[BDDC-get_lam_rhs]: res_IEV\n");
+        // this->printDeviceNodeVec(this->IEV_nnodes, this->res_IEV.getPtr());
+        // printf("[BDDC-get_lam_rhs]: f_IEV\n");
+        // this->printDeviceNodeVec(this->IEV_nnodes, this->f_IEV.getPtr());
+
         this->addVecIEVtoIE(this->f_IEV, this->f_IE, 1.0, 0.0);
         this->addVecIEtoI(this->f_IE, this->f_I, 1.0, 0.0);
         // this part here must use full fillin / Krylov solve on K_II subdomain parallel matrix
+        // printf("[BDDC-get_lam_rhs]: f_I\n");
+        // this->printDeviceNodeVec(this->I_nnodes, this->f_I.getPtr());
 
         // CHECK_CUDA(cudaDeviceSynchronize());
         // printf("FineBDDC::get_lam_rhs - pre solveSubdomainI\n");
 
         this->solveSubdomainIKrylov(this->f_I, this->u_I);
+        // printf("[BDDC-get_lam_rhs]: u_I\n");
+        // this->printDeviceNodeVec(this->I_nnodes, this->u_I.getPtr());
 
         // CHECK_CUDA(cudaDeviceSynchronize());
         // printf("FineBDDC :: post solveSubdomainIKrylov\n");
@@ -255,24 +264,15 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         // CHECK_CUDA(cudaDeviceSynchronize());
         // printf("FineBDDC :: pre kmat_IEV SpMV\n");
         this->sparseMatVec(*this->kmat_IEV, this->u_IEV, -1.0, 1.0, this->f_IEV);
+        // printf("[BDDC-get_lam_rhs]: f_IEV2\n");
+        // this->printDeviceNodeVec(this->IEV_nnodes, this->f_IEV.getPtr());
 
         // CHECK_CUDA(cudaDeviceSynchronize());
         // printf("FineBDDC :: post kmat_IEV SpMV\n");
 
         this->addVecIEVtoGam(this->f_IEV, gam_rhs, 1.0, 0.0);
-
-        // CHECK_CUDA(cudaDeviceSynchronize());
-        // T *h_int_rhs = this->u_I.createHostVec().getPtr();
-        // printf("h_u_I in gam rhs:\n");
-        // for (int ilam = 0; ilam < this->I_nnodes; ilam++) {
-        //     int iglob = this->I_nodes[ilam];
-        //     printf("i_int %d, glob node %d: ", ilam, iglob);
-        //     for (int idof = 2; idof < 5; idof++) {
-        //         int lam_dof = this->block_dim * ilam + idof;
-        //         printf("%.6e,", h_int_rhs[lam_dof]);
-        //     }
-        //     printf("\n");
-        // }
+        // printf("[BDDC-get_lam_rhs]: final_gam_rhs\n");
+        // this->printDeviceNodeVec(ngam, gam_rhs.getPtr());
     }
 
     void mat_vec(DeviceVec<T> &gam_in, DeviceVec<T> &gam_out) {
@@ -296,6 +296,11 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
     void _mat_vec(DeviceVec<T> &gam_in, DeviceVec<T> &gam_out) {
         // non-profiled method
         gam_out.zeroValues();
+        // bool debug = true;
+        // if (debug) {
+        //     printf("[BDDC-mat_vec]: gam_in\n");
+        //     this->printDeviceNodeVec(ngam, gam_in.getPtr());
+        // }
 
         this->addVecGamtoIEV(gam_in, this->u_IEV, 1.0, 0.0);
         this->sparseMatVec(*this->kmat_IEV, this->u_IEV, 1.0, 0.0, this->f_IEV);
@@ -309,14 +314,28 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         this->addVecIEtoIEV(this->u_IE, this->u_IEV, 1.0, 0.0);
         this->sparseMatVec(*this->kmat_IEV, this->u_IEV, -1.0, 1.0, this->f_IEV);
         this->addVecIEVtoGam(this->f_IEV, gam_out, 1.0, 0.0);
+        // if (debug) {
+        //     printf("[BDDC-mat_vec]: gam_out\n");
+        //     this->printDeviceNodeVec(ngam, gam_out.getPtr());
+        // }
     }
 
     bool _solve(DeviceVec<T> gam_rhs, DeviceVec<T> gam, bool check_conv = false) {
         // does edge averaging (not vertex averaging since that's primal S_VV)
         const bool SCALED = true;
 
+        // bool debug = true;
+        // if (debug) {
+        //     printf("[BDDC-solve]: gam_rhs\n");
+        //     this->printDeviceNodeVec(ngam, gam_rhs.getPtr());
+        // }
+
         // printf("BDDCsolve: addVecGamtoIEV\n");
         this->addVecGamtoIEV<SCALED>(gam_rhs, this->f_IEV, 1.0, 0.0);
+        // if (debug) {
+        //     printf("[BDDC-solve]: f_IEV\n");
+        //     this->printDeviceNodeVec(this->IEV_nnodes, this->f_IEV.getPtr());
+        // }
 
         // debug check initial V_rhs
         // printf("BDDCsolve: addVecIEVtoVc\n");
@@ -324,7 +343,6 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
 
         // IE solve
         this->addVecIEVtoIE(this->f_IEV, this->f_IE, 1.0, 0.0);
-
         this->addVecIEtoIEV(this->f_IE, this->f_IEV, -1.0, 1.0);  // remove IE part
         this->zeroInteriorIE(this->f_IE);
 
@@ -337,7 +355,16 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         // coarse solve
         // printf("BDDCsolve: solveCoarse\n");
         this->addVecIEVtoVc(this->f_IEV, this->f_V, 1.0, 1.0);
+
+        // if (debug) {
+        //     printf("[BDDC-solve]: f_V\n");
+        //     this->printDeviceNodeVec(this->Vc_nnodes, this->f_V.getPtr());
+        // }
         this->solveCoarse(this->f_V, this->u_V);
+        // if (debug) {
+        //     printf("[BDDC-solve]: u_V\n");
+        //     this->printDeviceNodeVec(this->Vc_nnodes, this->u_V.getPtr());
+        // }
 
         // harmonic extension back to edge space
         this->addVecVctoIEV(this->u_V, this->temp_IEV, 1.0, 0.0);
@@ -353,6 +380,11 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         // now IEV to gam with averaging
         // printf("BDDCsolve: addVecIEVtoGam\n");
         this->addVecIEVtoGam<SCALED>(this->u_IEV, gam, 1.0, 0.0);
+
+        // if (debug) {
+        //     printf("[BDDC-solve]: gam\n");
+        //     this->printDeviceNodeVec(ngam, gam.getPtr());
+        // }
 
         return false;  // fail = false
     }
@@ -444,7 +476,18 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
 
         // add IEV to lam first (edge DOF)
         this->addVecIEVtoIE(vec_IEV, this->temp_IE, alpha, 0.0);
+        // bool debug = true;
+        // if (debug) {
+        //     printf("[BDDC-addVecIEVtoGam]: temp_IE\n");
+        //     this->printDeviceNodeVec(this->IE_nnodes, this->temp_IE.getPtr());
+        // }
+
         addVecIEtoGam(this->temp_IE, this->temp_lam, 1.0, 0.0);
+        // bool debug = true;
+        // if (debug) {
+        //     printf("[BDDC-addVecIEVtoGam]: temp_lam\n");
+        //     this->printDeviceNodeVec(this->lam_nnodes, this->temp_lam.getPtr());
+        // }
 
         int edge_size = this->lam_nnodes * this->block_dim;
         if constexpr (SCALED) {
@@ -469,9 +512,15 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
     }
 
     template <bool SCALED = false>
-    void addVecGamtoIEV(const DeviceVec<T> &vec_gam, DeviceVec<T> &vec_IEV, T alpha, T beta) {
+    void addVecGamtoIEV(DeviceVec<T> &vec_gam, DeviceVec<T> &vec_IEV, T alpha, T beta) {
         int IEV_size = this->block_dim * this->IEV_nnodes;
         CHECK_CUBLAS(cublasDscal(this->cublasHandle, IEV_size, &beta, vec_IEV.getPtr(), 1));
+
+        // bool debug = true;
+        // if (debug) {
+        //     printf("[BDDC-addVecGamtoIEV]: vec_gam\n");
+        //     this->printDeviceNodeVec(ngam, vec_gam.getPtr());
+        // }
 
         this->temp_lam.zeroValues();
         this->temp_V.zeroValues();
@@ -487,13 +536,29 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
                 this->lam_nnodes, this->block_dim, this->d_edge_nsd, this->temp_lam.getPtr());
         }
 
+        // if (debug) {
+        //     printf("[BDDC-addVecGamtoIEV]: temp_lam\n");
+        //     this->printDeviceNodeVec(this->lam_nnodes, temp_lam.getPtr());
+        // }
+
         addVecGamtoIE(this->temp_lam, this->temp_IE, 1.0, 0.0);
         this->addVecIEtoIEV(this->temp_IE, vec_IEV, 1.0, 0.0);
+
+        // if (debug) {
+        //     printf("[BDDC-addVecGamtoIEV]: vec_IEV\n");
+        //     this->printDeviceNodeVec(this->IEV_nnodes, vec_IEV.getPtr());
+        // }
 
         a = alpha;
         int V_size = this->Vc_nnodes * this->block_dim;
         CHECK_CUBLAS(cublasDaxpy(this->cublasHandle, V_size, &a, &vec_gam.getPtr()[edge_size], 1,
                                  this->temp_V.getPtr(), 1));
+
+        // if (debug) {
+        //     printf("[BDDC-addVecGamtoIEV]: temp_V\n");
+        //     this->printDeviceNodeVec(this->Vc_nnodes, this->temp_V.getPtr());
+        // }
+
         this->addVecVctoIEV(this->temp_V, vec_IEV, 1.0, 1.0);
     }
 
@@ -506,13 +571,27 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
                                             gam.getPtr(), vec_IE.getPtr(), a);
     }
 
-    void addVecIEtoGam(const DeviceVec<T> &vec_IE, DeviceVec<T> &gam, T a, T b) {
+    void addVecIEtoGam(DeviceVec<T> &vec_IE, DeviceVec<T> &gam, T a, T b) {
         // map(a * x) + b * y => y
+        // bool debug = true;
+        // if (debug) {
+        //     printf("[BDDC-addVecIEtoGam]: vec_IE\n");
+        //     this->printDeviceNodeVec(this->IE_nnodes, vec_IE.getPtr());
+        //     printf("[BDDC-addVecIEtoGam]: pre_gam\n");
+        //     this->printDeviceNodeVec(ngam, gam.getPtr());
+        // }
+
         CHECK_CUBLAS(cublasDscal(this->cublasHandle, gam.getSize(), &b, gam.getPtr(), 1));
         int nvals = this->IE_nnodes * this->block_dim;
         dim3 block(32), grid((nvals + 31) / 32);
         k_addVecIEtoGam<T><<<grid, block>>>(this->IE_nnodes, this->block_dim, this->d_IE_to_lam_map,
                                             vec_IE.getPtr(), gam.getPtr(), a);
+        CHECK_CUDA(cudaDeviceSynchronize());
+
+        // if (debug) {
+        //     printf("[BDDC-addVecIEtoGam]: post_gam\n");
+        //     this->printDeviceNodeVec(ngam, gam.getPtr());
+        // }
     }
 
    protected:

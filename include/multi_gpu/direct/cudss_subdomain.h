@@ -275,8 +275,8 @@ class CudssSubdomainBsrSolve {
         CHECK_CUDA(cudaFree(d_bsr_rowp));
         CHECK_CUDA(cudaFree(d_bsr_cols_dev));
 
-        printf("GPU %d local BSR->CSR: n_block_rows=%d, N=%d, nnzb=%d, nnz=%d\n", gs.device,
-               gs.n_block_rows, gs.N, gs.nnzb, gs.nnz);
+        // printf("GPU %d local BSR->CSR: n_block_rows=%d, N=%d, nnzb=%d, nnz=%d\n", gs.device,
+        //        gs.n_block_rows, gs.N, gs.nnzb, gs.nnz);
     }
 
     void init_all() {

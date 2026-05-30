@@ -133,8 +133,10 @@ class GPU_PCGMatfree {
 
         rhs->copyTo(resid);
 
-        A->mat_vec(x, temp);
-        resid->axpy(-1.0, temp);
+        // x->zeroAll();
+        // ignore cause x = 0
+        // A->mat_vec(x, temp);
+        // resid->axpy(-1.0, temp);
 
         T init_resid_norm = resid->norm();
         T conv_tol = abs_tol + init_resid_norm * rel_tol;

@@ -377,9 +377,12 @@ int main(int argc, char **argv) {
     VecType<T> gam(bddc->getLambdaSize());
     bddc->get_lam_rhs(gam_rhs);
 
+    // return; // debug
+
     // matrix-free PCG for FETI-DP interface problem
     SolverOptions opts;
-    opts.ncycles = 50;
+    // opts.ncycles = 5; // temp debug
+    opts.ncycles = 50; // default
     // opts.ncycles = 500;
     opts.print = true;
     opts.print_freq = 5;
@@ -392,10 +395,9 @@ int main(int argc, char **argv) {
 
     // optional: true initial residual before solve
     gam.zeroValues();
-    T init_gam_resid = gam_solver->getResidualNorm(gam_rhs, gam);
-    printf("initial gamma residual = %.8e\n", init_gam_resid);
+    // T init_gam_resid = gam_solver->getResidualNorm(gam_rhs, gam);
+    // printf("initial gamma residual = %.8e\n", init_gam_resid);
 
-    return; // debug
 
     // ==============================================
     // SOLVE (TIMING)

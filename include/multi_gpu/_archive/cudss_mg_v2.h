@@ -21,20 +21,18 @@
 
 template <typename T>
 struct CudssMgType;
-
 template <>
 struct CudssMgType<double> {
     static constexpr cudaDataType_t type = CUDA_R_64F;
 };
-
 template <>
 struct CudssMgType<float> {
     static constexpr cudaDataType_t type = CUDA_R_32F;
 };
 
 template <typename T>
-__global__ void bsr_to_local_csr_kernel(int mb, int block_dim, const int *Vc_nodes,
-                                        const int *bsr_rowp, const int *bsr_cols, const T *bsr_vals,
+__global__ void bsr_to_local_csr_kernel(int mb, int block_dim, const int *bsr_rowp,
+                                        const int *bsr_cols, const T *bsr_vals,
                                         const int *local_csr_rowp, int *local_csr_cols,
                                         T *local_csr_vals) {
     int scalar_row = blockIdx.x * blockDim.x + threadIdx.x;
@@ -47,18 +45,10 @@ __global__ void bsr_to_local_csr_kernel(int mb, int block_dim, const int *Vc_nod
     int p = local_csr_rowp[scalar_row];
 
     for (int jp = bsr_rowp[brow]; jp < bsr_rowp[brow + 1]; jp++) {
-        int local_bcol = bsr_cols[jp];
-
-        if (local_bcol < 0 || local_bcol >= mb) {
-            printf("[bsr_to_local_csr] bad local_bcol=%d mb=%d brow=%d jp=%d\n", local_bcol, mb,
-                   brow, jp);
-            return;
-        }
-
-        int root_bcol = Vc_nodes[local_bcol];
+        int bcol = bsr_cols[jp];
 
         for (int bj = 0; bj < block_dim; bj++) {
-            local_csr_cols[p] = root_bcol * block_dim + bj;
+            local_csr_cols[p] = bcol * block_dim + bj;
             local_csr_vals[p] = bsr_vals[jp * block_dim * block_dim + bi * block_dim + bj];
             p++;
         }
@@ -149,7 +139,6 @@ class CudssMgBSRSolverV2 {
     void factor() {
         build_root_csr();
         init_cudss();
-
         execute(CUDSS_PHASE_ANALYSIS, analysis_ms);
         execute(CUDSS_PHASE_FACTORIZATION, factor_ms);
     }
@@ -175,7 +164,6 @@ class CudssMgBSRSolverV2 {
                                         CUDSS_LAYOUT_COL_MAJOR));
 
         execute(CUDSS_PHASE_SOLVE, solve_ms);
-
         scatter_solution_from_root(d_sol_local);
     }
 
@@ -212,12 +200,6 @@ class CudssMgBSRSolverV2 {
         data = nullptr;
         config = nullptr;
         handle = nullptr;
-
-        d_rowp_root = nullptr;
-        d_cols_root = nullptr;
-        d_vals_root = nullptr;
-        d_b_root = nullptr;
-        d_x_root = nullptr;
     }
 
     float getAnalysisMs() const { return analysis_ms; }
@@ -287,14 +269,6 @@ class CudssMgBSRSolverV2 {
                 int bnnz = Svv_rowp[g][brow + 1] - Svv_rowp[g][brow];
                 int root_brow = Vc_nodes[g][brow];
 
-                if (root_brow < 0 || root_brow >= sgpu_Vc_nnodes) {
-                    printf(
-                        "[CudssMgBSRSolverV2] ERROR gpu %d brow %d bad root_brow=%d "
-                        "sgpu_Vc_nnodes=%d\n",
-                        g, brow, root_brow, sgpu_Vc_nnodes);
-                    std::exit(-1);
-                }
-
                 for (int bi = 0; bi < block_dim; bi++) {
                     int local_scalar_row = brow * block_dim + bi;
                     int root_scalar_row = root_brow * block_dim + bi;
@@ -353,6 +327,8 @@ class CudssMgBSRSolverV2 {
 
         CHECK_CUDA(cudaSetDevice(root));
         CHECK_CUDA(cudaDeviceSynchronize());
+
+        // printf("CudssMgBSRSolver root CSR: N=%d nnz=%d root=%d ngpus=%d\n", N, nnz, root, ngpus);
     }
 
     void build_and_scatter_gpu_csr(int g) {
@@ -387,8 +363,8 @@ class CudssMgBSRSolverV2 {
         int grid = (local_N + block - 1) / block;
 
         bsr_to_local_csr_kernel<T><<<grid, block, 0, ctx->streams[g]>>>(
-            mb, block_dim, d_Vc_nodes[g], d_bsr_rowp[g], d_bsr_cols[g], d_Svv_vals[g],
-            d_local_csr_rowp[g], d_local_csr_cols[g], d_local_csr_vals[g]);
+            mb, block_dim, d_bsr_rowp[g], d_bsr_cols[g], d_Svv_vals[g], d_local_csr_rowp[g],
+            d_local_csr_cols[g], d_local_csr_vals[g]);
 
         CHECK_CUDA(cudaGetLastError());
         CHECK_CUDA(cudaStreamSynchronize(ctx->streams[g]));
@@ -436,6 +412,9 @@ class CudssMgBSRSolverV2 {
             CHECK_CUDA(cudaFree(d_lcols_root));
             CHECK_CUDA(cudaFree(d_lvals_root));
         }
+
+        // printf("GPU %d Svv BSR->CSR: mb=%d local_N=%d nnzb=%d local_nnz=%d\n", dev, mb, local_N,
+        //        Svv_nnzb[g], local_nnz);
     }
 
     void init_cudss() {
