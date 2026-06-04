@@ -359,7 +359,8 @@ int main(int argc, char *argv[]) {
     // gmg->MAX_STEPS = 100;
     // gmg->solve(fine_rhs, fine_soln);
 
-    auto pcg = new PCG(ctx, fine_part, fine_kmat, pc, fine_N, block_dim);
+    const char *precond_name = "GMG-ASW(struct)";
+    auto pcg = new PCG(ctx, fine_part, fine_kmat, pc, fine_N, block_dim, precond_name);
     // printf("\tdone build PCG\n");
 
     // ---------------------------------------------
@@ -367,7 +368,7 @@ int main(int argc, char *argv[]) {
     // ---------------------------------------------
 
     // PCG solver settings
-    int max_iter = 500, print_freq2 = 10;
+    int max_iter = 500, print_freq2 = 3;
     T rtol2 = 1e-6, atol2 = 1e-30;
     bool can_print = true;
 
