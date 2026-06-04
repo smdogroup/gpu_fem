@@ -244,7 +244,7 @@ int main(int argc, char **argv) {
     // then solve
     int max_iter = 100;
     // int max_iter = 5; // temp debug
-    int print_freq = 3;
+    int print_freq = 1;
     T rtol = 1e-6, atol = 1e-30;
     bool can_print = true;
 
