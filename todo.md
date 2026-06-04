@@ -1,4 +1,5 @@
 
+
 ## Journal paper plan
 
 - [ ] multigrid has these issues with MITC for thin shells
@@ -16,6 +17,8 @@
 
 
 ## Journal paper tasks
+
+* see examples/domdec/unstruct_bddc/todo.md for some more tasks
 
 0. [ ] multi-GPU direct-LU solver to use for BDDC
    - [x] try single GPU direct solve on root GPU (just with larger subdomains)
