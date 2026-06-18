@@ -85,8 +85,8 @@ int main(int argc, char **argv) {
     using BDDC = MultiGPUBDDC_LUSolver<T, Assembler, Partitioner, IEVSplit>;
     using PCG_MatFree = GPU_PCGMatfree<T, SDPartitioner, BDDC, BDDC>;
 
-    // int nxe = 6, nxe_subdomain_size = 2;
-    int nxe = 256, nxe_subdomain_size = 4; // 8 subdomains slightly faster (cause shrinks coarse problem) for local + HPC
+    int nxe = 6, nxe_subdomain_size = 2;
+    // int nxe = 256, nxe_subdomain_size = 4; // 8 subdomains slightly faster (cause shrinks coarse problem) for local + HPC
     // int nxe = 512, nxe_subdomain_size = 4; // 8 subdomains slightly faster (cause shrinks coarse problem) for local + HPC
     T thick = 1e-3;
     T mag = 1.0e2;
@@ -195,7 +195,7 @@ int main(int argc, char **argv) {
     int num_nodes = assembler->get_num_nodes();
     int nodes_per_elem = Basis::num_nodes;
     int *h_elem_conn = part->h_elem_conn; // comes directly from mesh loader on host + root
-    int target_sd_size = 9;
+    int target_sd_size = nxe_subdomain_size * nxe_subdomain_size;
     // printf("[MAIN] make IEV splitting class\n");
     auto split = new IEVSplit(num_elements, num_nodes, nodes_per_elem, h_elem_conn,
                             target_sd_size);
@@ -240,7 +240,7 @@ int main(int argc, char **argv) {
     // printf("[MAIN] done build PCG_MatFree\n");
 
     // then solve
-    int max_iter = 100;
+    int max_iter = 500;
     // int max_iter = 5; // temp debug
     int print_freq = 1;
     T rtol = 1e-6, atol = 1e-30;

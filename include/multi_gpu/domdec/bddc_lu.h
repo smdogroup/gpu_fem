@@ -1045,25 +1045,50 @@ class MultiGPUBDDC_LUSolver {
         d_Vc_nodes = new int *[ngpus];
 
         for (int g = 0; g < ngpus; g++) {
-            std::unordered_set<int> Vc_set;
+            // std::unordered_set<int> Vc_set;
+
+            // for (int iev = 0; iev < IEV_nnodes[g]; iev++) {
+            //     int lnode = IEV_nodes[g][iev];
+
+            //     if (node_class_ind[g][lnode] == IEV_VERTEX) {
+            //         Vc_set.insert(lnode);
+            //     }
+            // }
+
+            // std::vector<int> Vc_vec(Vc_set.begin(), Vc_set.end());
+            // std::sort(Vc_vec.begin(), Vc_vec.end());
+
+            // // if (debug) {
+            // //     printf(
+            // //         "[BDDC-build_Vc_and_gam_maps] gpu %d: "
+            // //         "Vc_set=%d expected_Vc=%d V=%d lam=%d\n",
+            // //         g, (int)Vc_vec.size(), Vc_nnodes[g], V_nnodes[g], lam_nnodes[g]);
+            // // }
+
+            // Vc_nodes[g] = new int[Vc_nnodes[g]];
+            // Vc_inodes[g] = new int[local_nnodes[g]];
+
+            // unordered set code above destroys IEV discovery order..
+            std::vector<int> Vc_vec;
+            Vc_vec.reserve(Vc_nnodes[g]);
+
+            std::vector<char> seen(local_nnodes[g], 0);
 
             for (int iev = 0; iev < IEV_nnodes[g]; iev++) {
                 int lnode = IEV_nodes[g][iev];
 
-                if (node_class_ind[g][lnode] == IEV_VERTEX) {
-                    Vc_set.insert(lnode);
+                if (node_class_ind[g][lnode] == IEV_VERTEX && !seen[lnode]) {
+                    seen[lnode] = 1;
+                    Vc_vec.push_back(lnode);  // preserves first occurrence order in IEV_nodes
                 }
             }
 
-            std::vector<int> Vc_vec(Vc_set.begin(), Vc_set.end());
-            std::sort(Vc_vec.begin(), Vc_vec.end());
-
-            // if (debug) {
-            //     printf(
-            //         "[BDDC-build_Vc_and_gam_maps] gpu %d: "
-            //         "Vc_set=%d expected_Vc=%d V=%d lam=%d\n",
-            //         g, (int)Vc_vec.size(), Vc_nnodes[g], V_nnodes[g], lam_nnodes[g]);
-            // }
+            // Optional sanity check
+            if ((int)Vc_vec.size() != Vc_nnodes[g]) {
+                printf("ERROR gpu %d: Vc_vec.size=%d expected=%d\n", g, (int)Vc_vec.size(),
+                       Vc_nnodes[g]);
+                std::abort();
+            }
 
             Vc_nodes[g] = new int[Vc_nnodes[g]];
             Vc_inodes[g] = new int[local_nnodes[g]];
@@ -1071,8 +1096,9 @@ class MultiGPUBDDC_LUSolver {
             std::memset(Vc_inodes[g], -1, local_nnodes[g] * sizeof(int));
 
             for (int i = 0; i < (int)Vc_vec.size(); i++) {
-                Vc_nodes[g][i] = Vc_vec[i];
-                Vc_inodes[g][Vc_vec[i]] = i;
+                int lnode = Vc_vec[i];
+                Vc_nodes[g][i] = lnode;
+                Vc_inodes[g][lnode] = i;
             }
 
             IEVtoV_imap[g] = new int[V_nnodes[g]];
@@ -1993,24 +2019,28 @@ class MultiGPUBDDC_LUSolver {
         // whether node subsets for partition are in same order as IEV nodes
         bool same_IEV_order = true;
 
-        // if (debug) printf("[BDDC-compute_reduced_partitions] build part_IE\n");
+        // printf("[BDDC-compute_reduced_partitions] build part_IE\n");
         part_IE = new SDPartition(ngpus, num_nodes, IE_nnodes, IE_nodes, IEV_nodes, part_IEV,
                                   same_IEV_order, debug);
 
-        // if (debug) printf("[BDDC-compute_reduced_partitions] build part_I\n");
+        // printf("[BDDC-compute_reduced_partitions] build part_I\n");
         part_I = new SDPartition(ngpus, num_nodes, I_nnodes, I_nodes, IEV_nodes, part_IEV,
                                  same_IEV_order, debug);
 
-        // if (debug) printf("[BDDC-compute_reduced_partitions] build part_V\n");
+        // printf("[BDDC-compute_reduced_partitions] build part_V\n");
+        // printf("Vc_nodes (size=%d): ", Vc_nnodes[0]);
+        // printVec<int>(Vc_nnodes[0], Vc_nodes[0]);
+        // printf("IEV_nodes (size=%d): ", IEV_nnodes[0]);
+        // printVec<int>(IEV_nnodes[0], IEV_nodes[0]);
         part_V = new SDPartition(ngpus, num_nodes, Vc_nnodes, Vc_nodes, IEV_nodes, part_IEV,
                                  same_IEV_order, debug);
 
-        // if (debug) printf("[BDDC-compute_reduced_partitions] build part_gam\n");
+        // printf("[BDDC-compute_reduced_partitions] build part_gam\n");
         same_IEV_order = false;  // since it's all E nodes then V nodes (not in same IEV order)
         part_gam = new SDPartition(ngpus, num_nodes, ngam, gam_nodes, IEV_nodes, part_IEV,
                                    same_IEV_order, debug);
 
-        // if (debug) printf("[BDDC-compute_reduced_partitions] done\n");
+        // printf("[BDDC-compute_reduced_partitions] done\n");
     }
 
     void allocate_vectors() {
@@ -2267,11 +2297,12 @@ class MultiGPUBDDC_LUSolver {
     }
 
     void computeSvvInverseTerm() {
+        // printf("MAX_NUM_VERTEX_PER_SUBDOMAIN = %d\n", MAX_NUM_VERTEX_PER_SUBDOMAIN);
         int ncols = MAX_NUM_VERTEX_PER_SUBDOMAIN * block_dim;
         for (int icol = 0; icol < ncols; icol++) {
             u_IEV->zeroAll();
-            // if (debug && icol == 0)
-            //     printf("[BDDC-computeSvvInverseTerm, icol=0] setVec_IEVtoV_vals\n");
+            // if (debug) printf("[BDDC-computeSvvInverseTerm, icol=%d] setVec_IEVtoV_vals\n",
+            // icol);
             setVec_IEVtoV_vals(u_IEV, icol, 1.0);  // set these vals to 1.0 and all else 0
             // if (debug) {
             //     printf("[BDDC-computeSvvInverseTerm, icol=%d] u_IEV vec\n", icol);
@@ -2282,8 +2313,7 @@ class MultiGPUBDDC_LUSolver {
             //     printNodeVec(IEV_nnodes[0], h_uIEV);
             // }
 
-            // if (debug && icol == 0) printf("[BDDC-computeSvvInverseTerm, icol=0]
-            // kmat_IEV->mult\n"); kmat_IEV->mult(1.0, u_IEV, 0.0, f_IEV);
+            // if (debug) printf("[BDDC-computeSvvInverseTerm, icol=%d] kmat_IEV->mult\n", icol);
             kmat_IEV->mult(u_IEV, f_IEV);
             // if (debug) {
             //     printf("[BDDC-computeSvvInverseTerm, icol=%d] f_IEV vec\n", icol);
@@ -2294,8 +2324,7 @@ class MultiGPUBDDC_LUSolver {
             //     printNodeVec(IEV_nnodes[0], h_fIEV);
             // }
 
-            // if (debug && icol == 0) printf("[BDDC-computeSvvInverseTerm, icol=0]
-            // addVecIEVtoIE\n");
+            // if (debug) printf("[BDDC-computeSvvInverseTerm, icol=%d] addVecIEVtoIE\n", icol);
             addVecIEVtoIE(1.0, f_IEV, 0.0, f_IE);
             // if (debug) {
             //     printf("[BDDC-computeSvvInverseTerm, icol=%d] f_IE vec\n", icol);
@@ -2306,8 +2335,7 @@ class MultiGPUBDDC_LUSolver {
             //     printNodeVec(IE_nnodes[0], h_fIE);
             // }
 
-            // if (debug && icol == 0)
-            //     printf("[BDDC-computeSvvInverseTerm, icol=0] solveSubdomainIE\n");
+            // if (debug) printf("[BDDC-computeSvvInverseTerm, icol=%d] solveSubdomainIE\n", icol);
             solveSubdomainIE(f_IE, u_IE);
             // if (debug) {
             //     printf("[BDDC-computeSvvInverseTerm, icol=%d] u_IE vec\n", icol);
@@ -2318,8 +2346,7 @@ class MultiGPUBDDC_LUSolver {
             //     printNodeVec(IE_nnodes[0], h_uIE);
             // }
 
-            // if (debug && icol == 0) printf("[BDDC-computeSvvInverseTerm, icol=0]
-            // addVecIEtoIEV\n");
+            // if (debug) printf("[BDDC-computeSvvInverseTerm, icol=%d] addVecIEtoIEV\n", icol);
             addVecIEtoIEV(1.0, u_IE, 0.0, u_IEV);
             // if (debug) {
             //     printf("[BDDC-computeSvvInverseTerm, icol=%d] u_IEV2 vec\n", icol);
@@ -2330,8 +2357,7 @@ class MultiGPUBDDC_LUSolver {
             //     printNodeVec(IEV_nnodes[0], h_uIEV);
             // }
 
-            // if (debug && icol == 0) printf("[BDDC-computeSvvInverseTerm, icol=0]
-            // kmat_IEV->mult\n");
+            // if (debug) printf("[BDDC-computeSvvInverseTerm, icol=%d] kmat_IEV->mult\n", icol);
             kmat_IEV->mult(-1.0, u_IEV, 0.0, f_IEV);
             // if (debug) {
             //     printf("[BDDC-computeSvvInverseTerm, icol=%d] f_IEV2 vec\n", icol);
@@ -2342,10 +2368,10 @@ class MultiGPUBDDC_LUSolver {
             //     printNodeVec(IEV_nnodes[0], h_fIEV);
             // }
 
-            // if (debug && icol == 0)
-            //     printf("[BDDC-computeSvvInverseTerm, icol=0] addMat_IEVtoV_vals\n");
+            // if (debug) printf("[BDDC-computeSvvInverseTerm, icol=%d] addMat_IEVtoV_vals\n",
+            // icol);
             addMat_IEVtoV_vals(icol, f_IEV);
-            // if (debug && icol == 0) printf("[BDDC-computeSvvInverseTerm, icol=0] done\n");
+            // if (debug) printf("[BDDC-computeSvvInverseTerm, icol=%d] done\n", icol);
         }
     }
 
@@ -2456,6 +2482,7 @@ class MultiGPUBDDC_LUSolver {
             int set_nnzb = IEVset_nnzb[g][block_row];
             int *d_blocks = d_IEVset_blocks[g][block_row];
             T *loc_vec_IEV = vec_IEV->getLocalPtr(g);
+            if (set_nnzb == 0) continue;
 
             dim3 block(32);
             dim3 grid((set_nnzb + 31) / 32);
@@ -2479,6 +2506,7 @@ class MultiGPUBDDC_LUSolver {
             int *d_iev_blocks = d_IEVout_blocks[g][block_col];
 
             T *loc_hvec = hvec->getLocalPtr(g);
+            if (set_nnzb == 0) continue;
 
             dim3 block(32);
             dim3 grid((set_nnzb * block_dim + 31) / 32);

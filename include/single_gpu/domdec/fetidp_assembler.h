@@ -277,14 +277,14 @@ class FetidpSolver : public BaseSolver {
             }
         }
         // DEBUG node-element adjacency
-        for (int inode = 0; inode < num_nodes; inode++) {
-            printf("node %d: ", inode);
-            for (int jp = ne_ptr[inode]; jp < ne_ptr[inode + 1]; jp++) {
-                int ielem = ne_cols[jp];
-                printf("%d,", ielem);
-            }
-            printf("\n");
-        }
+        // for (int inode = 0; inode < num_nodes; inode++) {
+        //     printf("node %d: ", inode);
+        //     for (int jp = ne_ptr[inode]; jp < ne_ptr[inode + 1]; jp++) {
+        //         int ielem = ne_cols[jp];
+        //         printf("%d,", ielem);
+        //     }
+        //     printf("\n");
+        // }
 
         // then build element-element adjacency
         // elem => local nodes on elem => adj elem through elem-elem adjacency
@@ -303,7 +303,7 @@ class FetidpSolver : public BaseSolver {
                 }
             }
         }
-        printf("here1\n");
+        // printf("here1\n");
         int *ee_ptr = new int[num_elements + 1];
         memset(ee_ptr, 0, (num_elements + 1) * sizeof(int));
         for (int ielem = 0; ielem < num_elements; ielem++) {
@@ -326,14 +326,14 @@ class FetidpSolver : public BaseSolver {
             }
         }
         // DEBUG element-element adjacency
-        for (int ielem = 0; ielem < num_elements; ielem++) {
-            printf("elem %d: ", ielem);
-            for (int jp = ee_ptr[ielem]; jp < ee_ptr[ielem + 1]; jp++) {
-                int jelem = ee_cols[jp];
-                printf("%d,", jelem);
-            }
-            printf("\n");
-        }
+        // for (int ielem = 0; ielem < num_elements; ielem++) {
+        //     printf("elem %d: ", ielem);
+        //     for (int jp = ee_ptr[ielem]; jp < ee_ptr[ielem + 1]; jp++) {
+        //         int jelem = ee_cols[jp];
+        //         printf("%d,", jelem);
+        //     }
+        //     printf("\n");
+        // }
 
         // -------------------------------------------
         // begin assigning subdomains
@@ -345,7 +345,7 @@ class FetidpSolver : public BaseSolver {
         int subdomain_ind = 0;
         bool all_visited = false;
         while (!all_visited) {
-            printf("in while loop 1\n");
+            // printf("in while loop 1\n");
             // find an un-assigned element
             int elem = -1;
             for (int _elem = 0; _elem < num_elements; _elem++) {
@@ -361,11 +361,11 @@ class FetidpSolver : public BaseSolver {
             sd_elems.push_back(elem);
             elem_sd_ind[elem] = subdomain_ind;
             visited[elem] = true;
-            printf("start subdomain %d, with elem %d\n", subdomain_ind, elem);
+            // printf("start subdomain %d, with elem %d\n", subdomain_ind, elem);
 
             // fill out the rest of the elements in this subdomain
             while (sd_elems.size() < target_sd_size) {
-                printf("in while loop 2\n");
+                // printf("in while loop 2\n");
                 // build a unique element frontier (of element neighbors)
                 std::unordered_set<int> frontier_set;
 
@@ -501,10 +501,10 @@ class FetidpSolver : public BaseSolver {
             }
             // end of while loop to build the subdomain
 
-            printf("done with subdomain %d, #elems = %d == target_sd_size %d\n", subdomain_ind,
-                   sd_elems.size(), target_sd_size);
-            printf("\tsd_elems: ");
-            printVec<int>(sd_elems.size(), sd_elems.data());
+            // printf("done with subdomain %d, #elems = %d == target_sd_size %d\n", subdomain_ind,
+            //        sd_elems.size(), target_sd_size);
+            // printf("\tsd_elems: ");
+            // printVec<int>(sd_elems.size(), sd_elems.data());
             subdomain_ind++;
 
             // check if all visited
@@ -519,12 +519,15 @@ class FetidpSolver : public BaseSolver {
         num_subdomains = subdomain_ind;
         int n_subdomain = num_subdomains;
 
+        printf("initial elem_sd_ind: ");
+        printVec<int>(num_elements, elem_sd_ind);
+
         auto h_vars0 = assembler.createVarsVec().createHostVec();
         printToVTK_elemVec<int, ShellAssembler, HostVec<T>>(assembler, h_vars0, elem_sd_ind,
                                                             "subdomains", "out/elem_sd_ind0.vtk");
 
         // Phase 2 : merge very small subdomains if it reduces total vertices
-        printf("begin phase 2\n");
+        // printf("begin phase 2\n");
         int *subdomain_cts = new int[n_subdomain];
         memset(subdomain_cts, 0, n_subdomain * sizeof(int));
         for (int ielem = 0; ielem < num_elements; ielem++) {
@@ -553,8 +556,8 @@ class FetidpSolver : public BaseSolver {
                     int ielem = subdomain_cols[jp];
                     sd_elems.push_back(ielem);
                 }
-                printf("sd[%d]-elems: ", isd);
-                printVec<int>(sd_elems.size(), sd_elems.data());
+                // printf("sd[%d]-elems: ", isd);
+                // printVec<int>(sd_elems.size(), sd_elems.data());
                 std::unordered_set<int> adj_subdomains_set;
                 for (auto _elem : sd_elems) {
                     // adjacent elems to find adjacent subdomains
@@ -568,8 +571,8 @@ class FetidpSolver : public BaseSolver {
 
                 std::vector<int> adj_subdomains(adj_subdomains_set.begin(),
                                                 adj_subdomains_set.end());
-                printf("adj subdomains[%d]: ", isd);
-                printVec<int>(adj_subdomains.size(), adj_subdomains.data());
+                // printf("adj subdomains[%d]: ", isd);
+                // printVec<int>(adj_subdomains.size(), adj_subdomains.data());
 
                 // TODO : combine with nearest subdomain to get min vertices
                 // for now just combine with the nearest subdomain
@@ -579,7 +582,7 @@ class FetidpSolver : public BaseSolver {
                 }
             }
         }
-        printf("done with phase 2\n");
+        // printf("done with phase 2\n");
 
         // now get unique list of subdomains (and adjust isd to new max)
         std::unordered_set<int> sd_set;
@@ -616,7 +619,7 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         // node -> subdomain incidence
         // -----------------------------------------
-        printf("node -> subdomain incidence\n");
+        // printf("node -> subdomain incidence\n");
         node_elem_nnz = 0;
         node_elem_rowp = new int[num_nodes + 1];
         node_elem_ct = new int[num_nodes];
@@ -657,7 +660,7 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         // classify nodes
         // -----------------------------------------
-        printf("classify nodes\n");
+        // printf("classify nodes\n");
         node_class_ind = new int[num_nodes];
         std::memset(node_class_ind, 0, num_nodes * sizeof(int));
         node_nsd = new int[num_nodes];
@@ -689,7 +692,7 @@ class FetidpSolver : public BaseSolver {
             }
         }
 
-        printf("before comp_node_nsd / comp_node_class VTK\n");
+        // printf("before comp_node_nsd / comp_node_class VTK\n");
         T *h_soln = new T[num_nodes * block_dim];
         memset(h_soln, 0.0, num_nodes * block_dim * sizeof(T));
         for (int i = 0; i < num_nodes; i++) {
@@ -729,7 +732,7 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         // build duplicated IEV nodal layout
         // -----------------------------------------
-        printf("build duplicated IEV nodal layout\n");
+        // printf("build duplicated IEV nodal layout\n");
         IEV_sd_ptr = new int[num_subdomains + 1];
         IEV_sd_ind = new int[IEV_nnodes];
         IEV_nodes = new int[IEV_nnodes];
@@ -769,7 +772,7 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         // build IEV element connectivity
         // -----------------------------------------
-        printf("build IEV element connectivity\n");
+        // printf("build IEV element connectivity\n");
         IEV_elem_conn = new int[num_elements * nodes_per_elem];
         for (int ielem = 0; ielem < num_elements; ielem++) {
             int *local_elem_conn = &elem_conn[nodes_per_elem * ielem];
@@ -846,7 +849,7 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         // build IEV sparsity from duplicated connectivity
         // -----------------------------------------
-        printf("build IEV sparsity from duplicated connectivity\n");
+        // printf("build IEV sparsity from duplicated connectivity\n");
         IEV_bsr_data = BsrData(num_elements, IEV_nnodes, nodes_per_elem, block_dim, IEV_elem_conn);
         IEV_rowp = IEV_bsr_data.rowp;
         IEV_cols = IEV_bsr_data.cols;
@@ -865,7 +868,7 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         // reduced rowp arrays
         // -----------------------------------------
-        printf("reduced rowp arrays\n");
+        // printf("reduced rowp arrays\n");
         IE_rowp = new int[IE_nnodes + 1];
         I_rowp = new int[I_nnodes + 1];
         std::memset(IE_rowp, 0, (IE_nnodes + 1) * sizeof(int));
@@ -923,7 +926,7 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         // IEV -> IE map
         // -----------------------------------------
-        printf("IEV -> IE map\n");
+        // printf("IEV -> IE map\n");
         IEVtoIE_map = new int[IEV_nnodes];
         std::memset(IEVtoIE_map, -1, IEV_nnodes * sizeof(int));
         IEVtoIE_imap = new int[IE_nnodes];
@@ -947,7 +950,7 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         // IEV -> I map
         // -----------------------------------------
-        printf("IEV -> I map\n");
+        // printf("IEV -> I map\n");
         IEVtoI_map = new int[IEV_nnodes];
         IEVtoI_imap = new int[I_nnodes];
         std::memset(IEVtoI_map, -1, IEV_nnodes * sizeof(int));
@@ -971,7 +974,7 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         // reduced column arrays
         // -----------------------------------------
-        printf("reduced column arrays\n");
+        // printf("reduced column arrays\n");
         IE_cols = new int[IE_nnzb];
         I_cols = new int[I_nnzb];
 
@@ -1010,7 +1013,7 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         // IEV -> Vc map (coarse non-repeated vertices)
         // -----------------------------------------
-        printf("IEV -> Vc map (coarse non-repeated vertices)\n");
+        // printf("IEV -> Vc map (coarse non-repeated vertices)\n");
 
         // make a list of the reduced Vc_ind (takes global node and figures out it's Vc_ind)
         std::unordered_set<int> Vc_nodeset;
@@ -1039,8 +1042,8 @@ class FetidpSolver : public BaseSolver {
         d_Vc_nodes = HostVec<int>(Vc_nnodes, Vc_nodes_vec.data()).createDeviceVec().getPtr();
         Vc_nodes = DeviceVec<int>(Vc_nnodes, d_Vc_nodes).createHostVec().getPtr();
 
-        printf("Vc_nodes: ");
-        printVec<int>(Vc_nnodes, Vc_nodes);
+        // printf("Vc_nodes: ");
+        // printVec<int>(Vc_nnodes, Vc_nodes);
 
         // set VcToV_imap and IEVtoV_imap now
         VctoV_imap = new int[V_nnodes];
@@ -1070,7 +1073,7 @@ class FetidpSolver : public BaseSolver {
         // Build all remaining maps/permutations:
         //  - jump operator ownership/sign maps
 
-        printf("compute jump operators\n");
+        // printf("compute jump operators\n");
         _compute_jump_operators(false);
         allocate_workspace();
 
@@ -1109,6 +1112,29 @@ class FetidpSolver : public BaseSolver {
         I_bsr_data = BsrData(I_nnodes, block_dim, I_nnzb, I_rowp, I_cols);
         I_bsr_data.rows = I_rows;
         I_nofill_nnzb = I_nnzb;
+
+        // DEBUG
+        // printf("num_subdomains %d\n", num_subdomains);
+        // printf("I_nnodes %d\n", I_nnodes);
+        // printf("IE_nnodes %d\n", IE_nnodes);
+        // printf("IEV_nnodes %d\n", IEV_nnodes);
+        // printf("Vc_nnodes %d\n", Vc_nnodes);
+        // printf("V_nnodes %d\n", V_nnodes);
+        // printf("lam_nnodes %d\n", lam_nnodes);
+        // printf("elem_sd_ind: ");
+        // printVec<int>(num_elements, elem_sd_ind);
+        // printf("node_class_ind: ");
+        // printVec<int>(num_nodes, node_class_ind);
+        // printf("node_nsd: ");
+        // printVec<int>(num_nodes, node_nsd);
+        // printf("IEV_sd_ptr: ");
+        // printVec<int>(num_subdomains + 1, IEV_sd_ptr);
+        // printf("IEV_sd_ind: ");
+        // printVec<int>(IEV_nnodes, IEV_sd_ind);
+        // printf("IEV_nodes: ");
+        // printVec<int>(IEV_nnodes, IEV_nodes);
+        // printf("IEV_elem_conn: ");
+        // printVec<int>(4 * num_elements, IEV_elem_conn);
     }
 
     void setup_structured_subdomains(int nxe_, int nye_, int nxs_, int nys_,

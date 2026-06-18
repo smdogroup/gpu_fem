@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <tuple>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -15,23 +15,20 @@ class UnstructuredIEVSplitting {
     int num_elements = 0;
     int num_nodes = 0;
     int nodes_per_elem = 0;
-    int target_sd_size = 16;
-    int MAX_NUM_VERTEX_PER_SUBDOMAIN = 20;
+    int target_sd_size = 0;
+    int MAX_NUM_VERTEX_PER_SUBDOMAIN = 12;
 
     const int *elem_conn = nullptr;
 
     int num_subdomains = 0;
 
-    // element -> subdomain
     std::vector<int> elem_sd_ind;
 
-    // node -> unique incident subdomains
     int node_elem_nnz = 0;
     std::vector<int> node_elem_rowp;
     std::vector<int> node_elem_ct;
     std::vector<int> node_sd_cols;
 
-    // node classes
     std::vector<int> node_class_ind;
     std::vector<int> node_nsd;
 
@@ -42,7 +39,6 @@ class UnstructuredIEVSplitting {
     int V_nnodes = 0;
     int lam_nnodes = 0;
 
-    // duplicated IEV layout
     std::vector<int> IEV_sd_ptr;
     std::vector<int> IEV_sd_ind;
     std::vector<int> IEV_nodes;
@@ -101,53 +97,59 @@ class UnstructuredIEVSplitting {
         return gnode;
     }
 
-    static long long key_isd_node(int isd, int node) {
-        return (static_cast<long long>(isd) << 32) ^ static_cast<unsigned int>(node);
-    }
-
     void setup_unstructured_subdomains() {
         clear();
 
-        if (num_elements < 0 || num_nodes < 0 || nodes_per_elem <= 0) {
-            die("bad sizes");
-        }
-        if (num_elements > 0 && elem_conn == nullptr) {
-            die("elem_conn is null");
-        }
-        if (target_sd_size <= 0) {
-            target_sd_size = 1;
-        }
+        if (num_elements < 0 || num_nodes < 0 || nodes_per_elem <= 0) die("bad sizes");
+        if (num_elements > 0 && elem_conn == nullptr) die("elem_conn is null");
+        if (target_sd_size <= 0) target_sd_size = 1;
 
-        std::vector<int> ne_ptr;
-        std::vector<int> ne_cols;
-        build_node_element_adjacency(ne_ptr, ne_cols);
+        std::vector<int> ne_ptr, ne_cols;
+        build_node_element_adjacency_legacy(ne_ptr, ne_cols);
 
-        std::vector<int> ee_ptr;
-        std::vector<int> ee_cols;
-        build_element_element_adjacency(ne_ptr, ne_cols, ee_ptr, ee_cols);
+        std::vector<int> ee_ptr, ee_cols;
+        build_element_element_adjacency_legacy(ne_ptr, ne_cols, ee_ptr, ee_cols);
 
-        assign_initial_subdomains(ne_ptr, ne_cols, ee_ptr, ee_cols);
-        merge_small_subdomains(ee_ptr, ee_cols);
-        compact_subdomain_ids();
+        assign_initial_subdomains_legacy(ne_ptr, ne_cols, ee_ptr, ee_cols);
+        merge_small_subdomains_legacy(ee_ptr, ee_cols);
+        compact_subdomain_ids_legacy();
 
-        build_node_subdomain_incidence();
-        classify_nodes();
-        build_IEV_nodes();
-        build_IEV_elem_conn();
+        build_node_subdomain_incidence_legacy();
+        classify_nodes_legacy();
+        compute_max_vertices_per_subdomain_legacy();
+
+        build_IEV_nodes_legacy();
+        build_IEV_elem_conn_legacy();
 
         printf("UnstructuredIEVSplitting complete:\n");
         printf("  num_subdomains = %d\n", num_subdomains);
-        printf("  I_nnodes       = %d\n", I_nnodes);
-        printf("  IE_nnodes      = %d\n", IE_nnodes);
+        // printf("  I_nnodes       = %d\n", I_nnodes);
+        // printf("  IE_nnodes      = %d\n", IE_nnodes);
         printf("  IEV_nnodes     = %d\n", IEV_nnodes);
         printf("  Vc_nnodes      = %d\n", Vc_nnodes);
-        printf("  V_nnodes       = %d\n", V_nnodes);
-        printf("  lam_nnodes     = %d\n", lam_nnodes);
+        // printf("  V_nnodes       = %d\n", V_nnodes);
+        // printf("  lam_nnodes     = %d\n", lam_nnodes);
+        printf("  MAX_NUM_VERTEX_PER_SUBDOMAIN = %d\n", MAX_NUM_VERTEX_PER_SUBDOMAIN);
+
+        // printf("elem_sd_ind: ");
+        // printVec<int>(elem_sd_ind.size(), elem_sd_ind.data());
+        // printf("node_class_ind: ");
+        // printVec<int>(node_class_ind.size(), node_class_ind.data());
+        // printf("node_nsd: ");
+        // printVec<int>(node_nsd.size(), node_nsd.data());
+        // printf("IEV_sd_ptr: ");
+        // printVec<int>(IEV_sd_ptr.size(), IEV_sd_ptr.data());
+        // printf("IEV_sd_ind: ");
+        // printVec<int>(IEV_sd_ind.size(), IEV_sd_ind.data());
+        // printf("IEV_nodes: ");
+        // printVec<int>(IEV_nodes.size(), IEV_nodes.data());
+        // printf("IEV_elem_conn: ");
+        // printVec<int>(IEV_elem_conn.size(), IEV_elem_conn.data());
     }
 
-    void build_node_element_adjacency(std::vector<int> &ne_ptr, std::vector<int> &ne_cols) {
-        std::vector<int> ne_cts(num_nodes, 0);
+    void build_node_element_adjacency_legacy(std::vector<int> &ne_ptr, std::vector<int> &ne_cols) {
         int ne_nnz = 0;
+        std::vector<int> ne_cts(num_nodes, 0);
 
         for (int ielem = 0; ielem < num_elements; ielem++) {
             for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
@@ -163,7 +165,7 @@ class UnstructuredIEVSplitting {
         }
 
         std::fill(ne_cts.begin(), ne_cts.end(), 0);
-        ne_cols.assign(ne_nnz, -1);
+        ne_cols.assign(ne_nnz, 0);
 
         for (int ielem = 0; ielem < num_elements; ielem++) {
             for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
@@ -175,307 +177,312 @@ class UnstructuredIEVSplitting {
         }
     }
 
-    void build_element_element_adjacency(const std::vector<int> &ne_ptr,
-                                         const std::vector<int> &ne_cols, std::vector<int> &ee_ptr,
-                                         std::vector<int> &ee_cols) {
-        std::vector<std::vector<int>> adj(num_elements);
+    void build_element_element_adjacency_legacy(const std::vector<int> &ne_ptr,
+                                                const std::vector<int> &ne_cols,
+                                                std::vector<int> &ee_ptr,
+                                                std::vector<int> &ee_cols) {
+        std::vector<int> ee_cts(num_elements, 0);
+        int ee_nnz = 0;
 
         for (int ielem = 0; ielem < num_elements; ielem++) {
-            std::unordered_set<int> nbrs;
-
             for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
                 int gnode = checked_node(ielem, lnode);
-
                 for (int jp = ne_ptr[gnode]; jp < ne_ptr[gnode + 1]; jp++) {
                     int jelem = ne_cols[jp];
-                    if (jelem != ielem) {
-                        nbrs.insert(jelem);
-                    }
+                    if (jelem == ielem) continue;
+                    ee_cts[ielem]++;
+                    ee_nnz++;
                 }
             }
-
-            adj[ielem].assign(nbrs.begin(), nbrs.end());
-            std::sort(adj[ielem].begin(), adj[ielem].end());
         }
 
         ee_ptr.assign(num_elements + 1, 0);
         for (int ielem = 0; ielem < num_elements; ielem++) {
-            ee_ptr[ielem + 1] = ee_ptr[ielem] + static_cast<int>(adj[ielem].size());
+            ee_ptr[ielem + 1] = ee_ptr[ielem] + ee_cts[ielem];
         }
 
-        ee_cols.assign(ee_ptr[num_elements], -1);
+        std::fill(ee_cts.begin(), ee_cts.end(), 0);
+        ee_cols.assign(ee_nnz, 0);
+
         for (int ielem = 0; ielem < num_elements; ielem++) {
-            int offset = ee_ptr[ielem];
-            for (int j = 0; j < static_cast<int>(adj[ielem].size()); j++) {
-                ee_cols[offset + j] = adj[ielem][j];
+            for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
+                int gnode = checked_node(ielem, lnode);
+                for (int jp = ne_ptr[gnode]; jp < ne_ptr[gnode + 1]; jp++) {
+                    int jelem = ne_cols[jp];
+                    if (jelem == ielem) continue;
+
+                    int offset = ee_ptr[ielem] + ee_cts[ielem];
+                    ee_cols[offset] = jelem;
+                    ee_cts[ielem]++;
+                }
             }
         }
     }
 
-    void assign_initial_subdomains(const std::vector<int> &ne_ptr, const std::vector<int> &ne_cols,
-                                   const std::vector<int> &ee_ptr,
-                                   const std::vector<int> &ee_cols) {
-        elem_sd_ind.assign(num_elements, -1);
-        std::vector<char> visited(num_elements, 0);
+    void assign_initial_subdomains_legacy(const std::vector<int> &ne_ptr,
+                                          const std::vector<int> &ne_cols,
+                                          const std::vector<int> &ee_ptr,
+                                          const std::vector<int> &ee_cols) {
+        elem_sd_ind.assign(num_elements, 0);
+        std::vector<bool> visited(num_elements, false);
 
-        int isd = 0;
+        int subdomain_ind = 0;
+        bool all_visited = false;
 
-        while (true) {
-            int seed_elem = -1;
+        while (!all_visited) {
+            int elem = -1;
             for (int ielem = 0; ielem < num_elements; ielem++) {
                 if (!visited[ielem]) {
-                    seed_elem = ielem;
+                    elem = ielem;
                     break;
                 }
             }
 
-            if (seed_elem < 0) break;
+            if (elem == -1) break;
 
             std::vector<int> sd_elems;
-            sd_elems.push_back(seed_elem);
-            elem_sd_ind[seed_elem] = isd;
-            visited[seed_elem] = 1;
+            sd_elems.push_back(elem);
+            elem_sd_ind[elem] = subdomain_ind;
+            visited[elem] = true;
 
-            while (static_cast<int>(sd_elems.size()) < target_sd_size) {
+            while ((int)sd_elems.size() < target_sd_size) {
                 std::unordered_set<int> frontier_set;
 
-                for (int elem : sd_elems) {
-                    for (int jp = ee_ptr[elem]; jp < ee_ptr[elem + 1]; jp++) {
+                for (auto e : sd_elems) {
+                    for (int jp = ee_ptr[e]; jp < ee_ptr[e + 1]; jp++) {
                         int nbr = ee_cols[jp];
-                        if (!visited[nbr]) {
-                            frontier_set.insert(nbr);
-                        }
+                        if (visited[nbr]) continue;
+                        frontier_set.insert(nbr);
                     }
                 }
 
-                if (frontier_set.empty()) break;
+                std::vector<int> frontier(frontier_set.begin(), frontier_set.end());
+                if (frontier.size() == 0) break;
 
-                std::vector<std::tuple<int, int, int>> candidates;
-                candidates.reserve(frontier_set.size());
+                int nfrontier = (int)frontier.size();
 
-                for (int frontier_elem : frontier_set) {
+                std::vector<int> candidate_corner_count(nfrontier, 0);
+                std::vector<int> candidate_corner_delta(nfrontier, 0);
+
+                int ii = 0;
+                for (auto frontier_elem : frontier) {
+                    std::vector<int> proposed_sd_elems;
+                    proposed_sd_elems.push_back(frontier_elem);
+                    for (auto e : sd_elems) proposed_sd_elems.push_back(e);
+
+                    std::unordered_set<int> proposed_sd_nodes;
+                    for (auto sd_elem : proposed_sd_elems) {
+                        for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
+                            int gnode = checked_node(sd_elem, lnode);
+                            proposed_sd_nodes.insert(gnode);
+                        }
+                    }
+
                     int total_corners = 0;
                     int added_corners = 0;
 
-                    score_candidate_corner_count(frontier_elem, sd_elems, ne_ptr, ne_cols,
-                                                 total_corners, added_corners);
+                    for (auto gnode : proposed_sd_nodes) {
+                        int nelems_in_subdomain = 0;
+                        bool candidate_elem_contains_node = false;
 
-                    candidates.emplace_back(frontier_elem, total_corners, added_corners);
+                        for (int jp = ne_ptr[gnode]; jp < ne_ptr[gnode + 1]; jp++) {
+                            int jelem = ne_cols[jp];
+
+                            if (jelem == frontier_elem) {
+                                candidate_elem_contains_node = true;
+                            }
+
+                            for (auto e : proposed_sd_elems) {
+                                if (jelem == e) {
+                                    nelems_in_subdomain++;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (nelems_in_subdomain == 1) {
+                            total_corners++;
+                            if (candidate_elem_contains_node) {
+                                added_corners++;
+                            }
+                        }
+                    }
+
+                    candidate_corner_count[ii] = total_corners;
+                    candidate_corner_delta[ii] = added_corners;
+                    ii++;
+                }
+
+                std::vector<std::tuple<int, int, int>> frontier_candidates;
+                frontier_candidates.reserve(nfrontier);
+
+                for (int i = 0; i < nfrontier; i++) {
+                    frontier_candidates.emplace_back(frontier[i], candidate_corner_count[i],
+                                                     candidate_corner_delta[i]);
                 }
 
                 std::sort(
-                    candidates.begin(), candidates.end(),
-                    [](const std::tuple<int, int, int> &a, const std::tuple<int, int, int> &b) {
-                        if (std::get<1>(a) != std::get<1>(b)) {
-                            return std::get<1>(a) < std::get<1>(b);
-                        }
-                        if (std::get<2>(a) != std::get<2>(b)) {
-                            return std::get<2>(a) < std::get<2>(b);
-                        }
-                        return std::get<0>(a) < std::get<0>(b);
-                    });
+                    frontier_candidates.begin(), frontier_candidates.end(),
+                    [](const auto &a, const auto &b) { return std::get<1>(a) < std::get<1>(b); });
+
+                for (int i = 0; i < nfrontier; i++) {
+                    frontier[i] = std::get<0>(frontier_candidates[i]);
+                    candidate_corner_count[i] = std::get<1>(frontier_candidates[i]);
+                    candidate_corner_delta[i] = std::get<2>(frontier_candidates[i]);
+                }
 
                 bool added_any = false;
 
-                for (const auto &cand : candidates) {
-                    int elem = std::get<0>(cand);
-                    int added_corners = std::get<2>(cand);
+                for (int i = 0; i < nfrontier; i++) {
+                    int frontier_elem = frontier[i];
 
-                    if (static_cast<int>(sd_elems.size()) >= target_sd_size) break;
-                    if (visited[elem]) continue;
+                    if ((int)sd_elems.size() >= target_sd_size) break;
+                    if (visited[frontier_elem]) continue;
+                    if (candidate_corner_delta[i] > 2) continue;
 
-                    if (added_corners > 2) continue;
-
-                    sd_elems.push_back(elem);
-                    elem_sd_ind[elem] = isd;
-                    visited[elem] = 1;
+                    sd_elems.push_back(frontier_elem);
+                    elem_sd_ind[frontier_elem] = subdomain_ind;
+                    visited[frontier_elem] = true;
                     added_any = true;
                 }
 
                 if (!added_any) break;
             }
 
-            isd++;
-        }
+            subdomain_ind++;
 
-        num_subdomains = isd;
-    }
-
-    void score_candidate_corner_count(int candidate_elem, const std::vector<int> &sd_elems,
-                                      const std::vector<int> &ne_ptr,
-                                      const std::vector<int> &ne_cols, int &total_corners,
-                                      int &added_corners) const {
-        std::vector<int> proposed = sd_elems;
-        proposed.push_back(candidate_elem);
-
-        std::unordered_set<int> proposed_elem_set;
-        proposed_elem_set.reserve(proposed.size() * 2 + 1);
-        for (int elem : proposed) {
-            proposed_elem_set.insert(elem);
-        }
-
-        std::unordered_set<int> proposed_nodes;
-        proposed_nodes.reserve(proposed.size() * nodes_per_elem * 2 + 1);
-
-        for (int elem : proposed) {
-            for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
-                proposed_nodes.insert(checked_node(elem, lnode));
-            }
-        }
-
-        total_corners = 0;
-        added_corners = 0;
-
-        for (int gnode : proposed_nodes) {
-            int nelems_in_subdomain = 0;
-            bool candidate_contains_node = false;
-
-            for (int jp = ne_ptr[gnode]; jp < ne_ptr[gnode + 1]; jp++) {
-                int jelem = ne_cols[jp];
-
-                if (jelem == candidate_elem) {
-                    candidate_contains_node = true;
-                }
-
-                if (proposed_elem_set.find(jelem) != proposed_elem_set.end()) {
-                    nelems_in_subdomain++;
-                }
-            }
-
-            if (nelems_in_subdomain == 1) {
-                total_corners++;
-                if (candidate_contains_node) {
-                    added_corners++;
-                }
-            }
-        }
-    }
-
-    void merge_small_subdomains(const std::vector<int> &ee_ptr, const std::vector<int> &ee_cols) {
-        if (num_subdomains <= 1) return;
-
-        bool changed = true;
-        int max_passes = 4;
-
-        for (int pass = 0; pass < max_passes && changed; pass++) {
-            changed = false;
-
-            std::vector<int> sd_cts(num_subdomains, 0);
+            all_visited = true;
             for (int ielem = 0; ielem < num_elements; ielem++) {
-                sd_cts[elem_sd_ind[ielem]]++;
+                if (!visited[ielem]) {
+                    all_visited = false;
+                    break;
+                }
             }
+        }
 
-            for (int isd = 0; isd < num_subdomains; isd++) {
-                if (sd_cts[isd] == 0 || sd_cts[isd] >= target_sd_size) continue;
+        num_subdomains = subdomain_ind;
+    }
 
-                std::vector<int> adj_cts(num_subdomains, 0);
+    void merge_small_subdomains_legacy(const std::vector<int> &ee_ptr,
+                                       const std::vector<int> &ee_cols) {
+        int n_subdomain = num_subdomains;
+        if (n_subdomain <= 1) return;
 
-                for (int ielem = 0; ielem < num_elements; ielem++) {
-                    if (elem_sd_ind[ielem] != isd) continue;
+        std::vector<int> subdomain_cts(n_subdomain, 0);
+        for (int ielem = 0; ielem < num_elements; ielem++) {
+            int isd = elem_sd_ind[ielem];
+            subdomain_cts[isd]++;
+        }
 
-                    for (int kp = ee_ptr[ielem]; kp < ee_ptr[ielem + 1]; kp++) {
-                        int jelem = ee_cols[kp];
+        std::vector<int> subdomain_ptr(n_subdomain + 1, 0);
+        for (int isd = 0; isd < n_subdomain; isd++) {
+            subdomain_ptr[isd + 1] = subdomain_ptr[isd] + subdomain_cts[isd];
+        }
+
+        std::fill(subdomain_cts.begin(), subdomain_cts.end(), 0);
+        std::vector<int> subdomain_cols(num_elements, 0);
+
+        for (int ielem = 0; ielem < num_elements; ielem++) {
+            int isd = elem_sd_ind[ielem];
+            int offset = subdomain_ptr[isd] + subdomain_cts[isd];
+            subdomain_cols[offset] = ielem;
+            subdomain_cts[isd]++;
+        }
+
+        for (int isd = 0; isd < n_subdomain; isd++) {
+            int nelems_sd = subdomain_cts[isd];
+
+            if (nelems_sd < target_sd_size) {
+                std::vector<int> sd_elems;
+                for (int jp = subdomain_ptr[isd]; jp < subdomain_ptr[isd + 1]; jp++) {
+                    sd_elems.push_back(subdomain_cols[jp]);
+                }
+
+                std::unordered_set<int> adj_subdomains_set;
+
+                for (auto e : sd_elems) {
+                    for (int jp = ee_ptr[e]; jp < ee_ptr[e + 1]; jp++) {
+                        int jelem = ee_cols[jp];
                         int jsd = elem_sd_ind[jelem];
-
-                        if (jsd != isd) {
-                            adj_cts[jsd]++;
-                        }
+                        if (jsd == isd) continue;
+                        adj_subdomains_set.insert(jsd);
                     }
                 }
 
-                int best_jsd = -1;
-                int best_score = -1;
+                std::vector<int> adj_subdomains(adj_subdomains_set.begin(),
+                                                adj_subdomains_set.end());
 
-                for (int jsd = 0; jsd < num_subdomains; jsd++) {
-                    if (jsd == isd) continue;
-                    if (adj_cts[jsd] > best_score) {
-                        best_score = adj_cts[jsd];
-                        best_jsd = jsd;
-                    }
+                if (adj_subdomains.size() == 0) continue;
+
+                int jsd = adj_subdomains[0];
+
+                for (auto e : sd_elems) {
+                    elem_sd_ind[e] = jsd;
                 }
-
-                if (best_jsd < 0) continue;
-
-                for (int ielem = 0; ielem < num_elements; ielem++) {
-                    if (elem_sd_ind[ielem] == isd) {
-                        elem_sd_ind[ielem] = best_jsd;
-                    }
-                }
-
-                changed = true;
             }
-
-            compact_subdomain_ids();
         }
     }
 
-    void compact_subdomain_ids() {
+    void compact_subdomain_ids_legacy() {
+        int old_n_subdomain = num_subdomains;
+
         std::unordered_set<int> sd_set;
         for (int ielem = 0; ielem < num_elements; ielem++) {
-            if (elem_sd_ind[ielem] >= 0) {
-                sd_set.insert(elem_sd_ind[ielem]);
-            }
+            sd_set.insert(elem_sd_ind[ielem]);
         }
 
         std::vector<int> sd_vec(sd_set.begin(), sd_set.end());
         std::sort(sd_vec.begin(), sd_vec.end());
 
-        int old_max = sd_vec.empty() ? -1 : sd_vec.back();
-        std::vector<int> sd_imap(old_max + 1, -1);
+        std::vector<int> sd_imap(old_n_subdomain, -1);
 
-        for (int new_isd = 0; new_isd < static_cast<int>(sd_vec.size()); new_isd++) {
-            sd_imap[sd_vec[new_isd]] = new_isd;
+        for (int new_isd = 0; new_isd < (int)sd_vec.size(); new_isd++) {
+            int old_isd = sd_vec[new_isd];
+            sd_imap[old_isd] = new_isd;
         }
 
         for (int ielem = 0; ielem < num_elements; ielem++) {
             int old_isd = elem_sd_ind[ielem];
-            if (old_isd < 0 || old_isd > old_max || sd_imap[old_isd] < 0) {
-                die("bad subdomain id during compaction");
-            }
             elem_sd_ind[ielem] = sd_imap[old_isd];
         }
 
-        num_subdomains = static_cast<int>(sd_vec.size());
+        num_subdomains = (int)sd_vec.size();
     }
 
-    void build_node_subdomain_incidence() {
-        std::vector<std::vector<int>> node_sds(num_nodes);
+    void build_node_subdomain_incidence_legacy() {
+        node_elem_nnz = 0;
+        node_elem_rowp.assign(num_nodes + 1, 0);
+        node_elem_ct.assign(num_nodes, 0);
+
+        for (int ielem = 0; ielem < num_elements; ielem++) {
+            for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
+                int gnode = checked_node(ielem, lnode);
+                node_elem_ct[gnode]++;
+                node_elem_nnz++;
+            }
+        }
+
+        for (int inode = 0; inode < num_nodes; inode++) {
+            node_elem_rowp[inode + 1] = node_elem_rowp[inode] + node_elem_ct[inode];
+        }
+
+        std::vector<int> temp_node_elem(num_nodes, 0);
+        node_sd_cols.assign(node_elem_nnz, 0);
 
         for (int ielem = 0; ielem < num_elements; ielem++) {
             int isd = elem_sd_ind[ielem];
 
             for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
                 int gnode = checked_node(ielem, lnode);
-                node_sds[gnode].push_back(isd);
-            }
-        }
-
-        node_elem_nnz = 0;
-        node_elem_rowp.assign(num_nodes + 1, 0);
-        node_elem_ct.assign(num_nodes, 0);
-
-        for (int inode = 0; inode < num_nodes; inode++) {
-            auto &v = node_sds[inode];
-            std::sort(v.begin(), v.end());
-            v.erase(std::unique(v.begin(), v.end()), v.end());
-
-            node_elem_ct[inode] = static_cast<int>(v.size());
-            node_elem_nnz += node_elem_ct[inode];
-            node_elem_rowp[inode + 1] = node_elem_nnz;
-        }
-
-        node_sd_cols.assign(node_elem_nnz, -1);
-
-        for (int inode = 0; inode < num_nodes; inode++) {
-            int offset = node_elem_rowp[inode];
-            for (int j = 0; j < static_cast<int>(node_sds[inode].size()); j++) {
-                node_sd_cols[offset + j] = node_sds[inode][j];
+                int offset = node_elem_rowp[gnode] + temp_node_elem[gnode];
+                node_sd_cols[offset] = isd;
+                temp_node_elem[gnode]++;
             }
         }
     }
 
-    void classify_nodes() {
-        node_class_ind.assign(num_nodes, INTERIOR);
+    void classify_nodes_legacy() {
+        node_class_ind.assign(num_nodes, 0);
         node_nsd.assign(num_nodes, 0);
 
         I_nnodes = 0;
@@ -486,90 +493,114 @@ class UnstructuredIEVSplitting {
         lam_nnodes = 0;
 
         for (int inode = 0; inode < num_nodes; inode++) {
-            int nsd = node_elem_rowp[inode + 1] - node_elem_rowp[inode];
+            std::unordered_set<int> node_sds;
+
+            for (int jp = node_elem_rowp[inode]; jp < node_elem_rowp[inode + 1]; jp++) {
+                node_sds.insert(node_sd_cols[jp]);
+            }
+
+            int nsd = (int)node_sds.size();
             node_nsd[inode] = nsd;
 
-            if (nsd == 0) {
-                // Unused global node. Do not count it in I/IE/IEV.
-                node_class_ind[inode] = INTERIOR;
-            } else if (nsd == 1) {
+            if (nsd < 2) {
                 node_class_ind[inode] = IEV_INTERIOR;
-
-                I_nnodes += 1;
-                IE_nnodes += 1;
-                IEV_nnodes += 1;
+                I_nnodes++;
+                IE_nnodes++;
+                IEV_nnodes++;
             } else if (nsd == 2) {
                 node_class_ind[inode] = IEV_EDGE;
-
-                lam_nnodes += 1;
+                lam_nnodes++;
                 IE_nnodes += nsd;
                 IEV_nnodes += nsd;
             } else {
                 node_class_ind[inode] = IEV_VERTEX;
-
-                Vc_nnodes += 1;
+                Vc_nnodes++;
                 V_nnodes += nsd;
                 IEV_nnodes += nsd;
             }
         }
     }
 
-    void build_IEV_nodes() {
-        IEV_sd_ptr.assign(num_subdomains + 1, 0);
-
-        for (int inode = 0; inode < num_nodes; inode++) {
-            for (int jp = node_elem_rowp[inode]; jp < node_elem_rowp[inode + 1]; jp++) {
-                int isd = node_sd_cols[jp];
-                IEV_sd_ptr[isd + 1]++;
-            }
-        }
-
-        for (int isd = 0; isd < num_subdomains; isd++) {
-            IEV_sd_ptr[isd + 1] += IEV_sd_ptr[isd];
-        }
-
-        if (IEV_sd_ptr[num_subdomains] != IEV_nnodes) {
-            printf("ERROR[UnstructuredIEVSplitting]: IEV count mismatch from ptrs %d expected %d\n",
-                   IEV_sd_ptr[num_subdomains], IEV_nnodes);
-            std::exit(1);
-        }
-
-        IEV_sd_ind.assign(IEV_nnodes, -1);
-        IEV_nodes.assign(IEV_nnodes, -1);
-
-        std::vector<int> temp = IEV_sd_ptr;
-
-        for (int inode = 0; inode < num_nodes; inode++) {
-            for (int jp = node_elem_rowp[inode]; jp < node_elem_rowp[inode + 1]; jp++) {
-                int isd = node_sd_cols[jp];
-                int iev = temp[isd]++;
-
-                IEV_nodes[iev] = inode;
-                IEV_sd_ind[iev] = isd;
-            }
-        }
-    }
-
-    void build_IEV_elem_conn() {
-        IEV_elem_conn.assign(num_elements * nodes_per_elem, -1);
-
-        std::unordered_map<long long, int> iev_map;
-        iev_map.reserve(static_cast<size_t>(IEV_nnodes) * 2 + 1);
-
-        for (int iev = 0; iev < IEV_nnodes; iev++) {
-            int isd = IEV_sd_ind[iev];
-            int gnode = IEV_nodes[iev];
-            iev_map[key_isd_node(isd, gnode)] = iev;
-        }
+    void compute_max_vertices_per_subdomain_legacy() {
+        std::vector<int> nvertex(num_subdomains, 0);
+        MAX_NUM_VERTEX_PER_SUBDOMAIN = 0;
 
         for (int ielem = 0; ielem < num_elements; ielem++) {
             int isd = elem_sd_ind[ielem];
 
             for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
                 int gnode = checked_node(ielem, lnode);
-                auto it = iev_map.find(key_isd_node(isd, gnode));
+                int node_class = node_class_ind[gnode];
 
-                if (it == iev_map.end()) {
+                if (node_class == IEV_VERTEX) {
+                    nvertex[isd]++;
+                }
+            }
+        }
+
+        for (int isd = 0; isd < num_subdomains; isd++) {
+            MAX_NUM_VERTEX_PER_SUBDOMAIN = std::max(MAX_NUM_VERTEX_PER_SUBDOMAIN, nvertex[isd]);
+        }
+    }
+
+    void build_IEV_nodes_legacy() {
+        IEV_sd_ptr.assign(num_subdomains + 1, 0);
+        IEV_sd_ind.assign(IEV_nnodes, 0);
+        IEV_nodes.assign(IEV_nnodes, 0);
+
+        int IEV_ind = 0;
+        std::vector<int> temp_completion(num_nodes, 0);
+
+        for (int isd = 0; isd < num_subdomains; isd++) {
+            std::fill(temp_completion.begin(), temp_completion.end(), 0);
+            IEV_sd_ptr[isd + 1] = IEV_sd_ptr[isd];
+
+            for (int ielem = 0; ielem < num_elements; ielem++) {
+                if (elem_sd_ind[ielem] != isd) continue;
+
+                for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
+                    int gnode = checked_node(ielem, lnode);
+
+                    if (temp_completion[gnode]) continue;
+
+                    if (IEV_ind >= IEV_nnodes) {
+                        die("IEV_ind exceeded IEV_nnodes in build_IEV_nodes_legacy");
+                    }
+
+                    IEV_nodes[IEV_ind] = gnode;
+                    IEV_sd_ind[IEV_ind] = isd;
+                    IEV_sd_ptr[isd + 1]++;
+                    IEV_ind++;
+                    temp_completion[gnode] = 1;
+                }
+            }
+        }
+
+        if (IEV_ind != IEV_nnodes) {
+            printf("ERROR[UnstructuredIEVSplitting]: IEV_ind %d != IEV_nnodes %d\n", IEV_ind,
+                   IEV_nnodes);
+            std::exit(1);
+        }
+    }
+
+    void build_IEV_elem_conn_legacy() {
+        IEV_elem_conn.assign(num_elements * nodes_per_elem, -1);
+
+        for (int ielem = 0; ielem < num_elements; ielem++) {
+            int isd = elem_sd_ind[ielem];
+
+            for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
+                int gnode = checked_node(ielem, lnode);
+                int local_ind = -1;
+
+                for (int jp = IEV_sd_ptr[isd]; jp < IEV_sd_ptr[isd + 1]; jp++) {
+                    if (IEV_nodes[jp] == gnode) {
+                        local_ind = jp;
+                        break;
+                    }
+                }
+
+                if (local_ind < 0) {
                     printf(
                         "ERROR[UnstructuredIEVSplitting]: failed to find duplicated IEV node "
                         "for elem %d, isd %d, gnode %d\n",
@@ -577,7 +608,7 @@ class UnstructuredIEVSplitting {
                     std::exit(1);
                 }
 
-                IEV_elem_conn[nodes_per_elem * ielem + lnode] = it->second;
+                IEV_elem_conn[nodes_per_elem * ielem + lnode] = local_ind;
             }
         }
     }

@@ -6,6 +6,7 @@
 - [ ] show some of the beam multigrid stuff (only subset of elements cite dissertation).. (adding this in) - C1 is important
 - [ ] do include plate +/or cylinder very briefly
    * then this shows multigrid good solver but not fully robust to thin shells (with MITC4), and limitations of mixed IGA methods explain.
+- [ ] show comparison of runtimes on different hardware (RTX 3060, RTX 3090, A100, H100, B200?)
 - [ ] BDDC-LU improves performance but requires wraparound subdomain splitting
    - [ ] add multilevel BDDC dots into the cylinder + wing runtime comparisons
 - [ ] empirical / theoretical evidence of wraparound method
@@ -20,7 +21,7 @@
 
 * see examples/domdec/unstruct_bddc/todo.md for some more tasks
 
-0. [ ] multi-GPU direct-LU solver to use for BDDC
+0. [x] multi-GPU direct-LU solver to use for BDDC
    - [x] try single GPU direct solve on root GPU (just with larger subdomains)
    - [x] try CuDSS multi-GPU direct solve again has to be copied to root GPU so may not be great
    - [x] try to write my own distributed multi-GPU direct solve and see if it is better.. multifrontal or MUUMPS? Schur complement-LU? or sequential factorization?
@@ -31,11 +32,11 @@
    - [x] look at the solver on this paper now, https://www.sciencedirect.com/science/article/abs/pii/S0167819122000059
 
 1. [ ] Finish multi-GPU development
-   - [x] GMG-ASW on multi-GPU
+   - [ ] GMG-ASW on multi-GPU
       - [x] do unstructured prolong for wing case now - TacsComponentPartitioner + unstructured prolongation classes (no additional ghost nodes needed probably)
+      - [ ] show speedup of multi-GPUs (speedup values)
    - [ ] 2-level BDDC-LU on multi-GPU
-      * tried CuDSS multi-GPU Schur complement for coarse direct solve but not compatible with my BSR matrices and distributed mem S_VV (it expects on root GPU).. not great for my application
-   - [ ] maybe also try multi CPU + GPU (for really high DOF problems)? Worth for more than 4 GPUs?
+#    - [ ] maybe also try multi CPU + GPU (for really high DOF problems)? Worth for more than 4 GPUs?
 
 2. [ ] finish unstructured BDDC (do need this for paper)
    - [ ] finish tasks in domdec/examples/unstruct_bddc/todo.md
