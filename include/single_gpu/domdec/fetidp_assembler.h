@@ -519,8 +519,8 @@ class FetidpSolver : public BaseSolver {
         num_subdomains = subdomain_ind;
         int n_subdomain = num_subdomains;
 
-        printf("initial elem_sd_ind: ");
-        printVec<int>(num_elements, elem_sd_ind);
+        // printf("initial elem_sd_ind: ");
+        // printVec<int>(num_elements, elem_sd_ind);
 
         auto h_vars0 = assembler.createVarsVec().createHostVec();
         printToVTK_elemVec<int, ShellAssembler, HostVec<T>>(assembler, h_vars0, elem_sd_ind,

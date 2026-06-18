@@ -19,6 +19,13 @@
 #include "domdec/bddc_lu.h"
 #include "solvers/gpu_pcg_matfree.h"
 
+// unstruct splitting methods
+#include "domdec/subdomains/unstruct/edge_expand.h"
+#include "domdec/subdomains/unstruct/edge_expand2.h"
+#include "domdec/subdomains/unstruct/flood.h"
+#include "domdec/subdomains/unstruct/v1.h"
+#include "domdec/subdomains/unstruct/corner_sep.h"
+
 #include "mesh/TACSMeshLoader.h"
 #include "mesh/vtk_writer.h"
 #include <string>
@@ -80,8 +87,15 @@ int main(int argc, char **argv) {
     using Basis = LagrangeQuadBasis<T, Quad, 1>;
     using Assembler = GPU_MITCShellAssembler<T, Partitioner, Director, Basis, Physics>;
 
+    // splitter methods
+    // using Splitter = UnstructSplitterV1;
+    // using Splitter = UnstructFloodFillSplitter;
+    // using Splitter = UnstructEdgeFillSplitter;
+    // using Splitter = UnstructEdgeFillSplitterV2;
+    using Splitter = CornerSeparatingSplitter;
+
     // preconditioner and solver
-    using IEVSplit = UnstructuredIEVSplitting;
+    using IEVSplit = UnstructuredIEVSplitting<Splitter>;
     using BDDC = MultiGPUBDDC_LUSolver<T, Assembler, Partitioner, IEVSplit>;
     using PCG_MatFree = GPU_PCGMatfree<T, SDPartitioner, BDDC, BDDC>;
 

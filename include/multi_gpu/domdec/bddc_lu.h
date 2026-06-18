@@ -498,6 +498,13 @@ class MultiGPUBDDC_LUSolver {
         sgpu_node_class_ind = copy_vec(split->node_class_ind);
         sgpu_node_nsd = copy_vec(split->node_nsd);
 
+        // writeout the splitting
+        // printf("printToVTK\n");
+        T *h_soln0 = HostVec<T>(N).getPtr();
+        printToVTK_v2_elemsd<T, Assembler>(*assembler, h_soln0, sgpu_elem_sd_ind, "subdomains",
+                                           "out/elem_sd_ind.vtk");
+        // printf("printToVTK done\n");
+
         // if (debug) printf("[BDDC-import_splitting] copied elem/node classification arrays\n");
 
         sgpu_IEV_sd_ptr = copy_vec(split->IEV_sd_ptr);
