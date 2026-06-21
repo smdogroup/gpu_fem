@@ -10,3 +10,8 @@ nxe = 200, subdomain = 2x2 => 0 violations, conv in 57 iterations
 Poor performance
 nxe = 100, subdomain = 4x4 => 217 violations, conv in 404 iterations
 nxe = 200, subdomain = 4x4 => 917 violations, conv in 352 iterations
+
+
+Corner sep opt V2 (global-local):
+* Has good performance with (nxe, subdomain) = (120,3) instead of (100,3) so divisibility seems to matter?
+* still need more robust global-local optimizations.. to remove corner violations (it stalls a lot still)
