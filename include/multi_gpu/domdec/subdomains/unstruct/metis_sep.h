@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
+template <bool OPTIMIZE = true>
 class MetisCornerOptSplitter {
    public:
     int num_elements = 0, num_nodes = 0, nodes_per_elem = 0, target_sd_size = 0;
@@ -49,12 +50,14 @@ class MetisCornerOptSplitter {
         metis_initial_partition(elem_adj);
         compact_subdomain_ids();
 
-        local_corner_optimization(ne_ptr, ne_cols, elem_adj);
-        compact_subdomain_ids();
+        if constexpr (OPTIMIZE) {
+            local_corner_optimization(ne_ptr, ne_cols, elem_adj);
+            compact_subdomain_ids();
 
-        int remaining = count_all_corner_violations(ne_ptr, ne_cols);
-        if (remaining > 0) {
-            printf("WARNING[MetisCornerOptSplitter]: %d corner violations remain\n", remaining);
+            int remaining = count_all_corner_violations(ne_ptr, ne_cols);
+            if (remaining > 0) {
+                printf("WARNING[MetisCornerOptSplitter]: %d corner violations remain\n", remaining);
+            }
         }
     }
 

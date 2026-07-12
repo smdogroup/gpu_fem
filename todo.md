@@ -40,6 +40,10 @@
 
 2. [ ] finish unstructured BDDC (do need this for paper)
    - [ ] finish tasks in domdec/examples/unstruct_bddc/todo.md
+   - [ ] make a scatter plot with 4 dots (unstruct-cyl, struct-cyl, unstruct-wing, struct-wing) for thin shells and show how corner violations / whatever metrics influence the runtime
+      - [ ] it would show evidence / correlation of a pattern here..
+      - [ ] maybe also show diff thicks across diff cases affect sensitivity?
+      - [ ] keep wing vertex on patch boundary metric too and show how that influences runtime (again show a bunch of wing cases maybe in scatter plot to show evidence instead off proof!), like Aaron's paper with many optim cases back then
    - [ ] unstructured BDDC on plate/cylinder case
       * try adding subdomain vertices to subdomian interfaces with none (check), near bndry
    - [ ] unstructured wraparound BDDC on wing problem (implement pseudocode)

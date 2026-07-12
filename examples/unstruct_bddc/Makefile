@@ -1,4 +1,4 @@
-include ../../../Makefile.in
+include ../../Makefile.in
 
 CUDA_LINK := -lcublas -lcusparse -lcudart -lcusolver
 
