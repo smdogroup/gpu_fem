@@ -18,9 +18,11 @@
     * can I improve the irregular case more? What is limiting convergence still?
 
 - [ ] make a METIS corner sep optimizer for the wing case
-    - [ ] add METIS weights so initial mesh edges don't want to go on these junction boundaries?
-    - [ ] ensure no vertex nodes on the wing junction nodes.. corrections for this
-    - [ ] test this out..
+    - [x] add METIS weights so initial mesh edges don't want to go on these junction boundaries?
+    - [x] ensure no vertex nodes on the wing junction nodes.. corrections for this
+    - [x] test this out..
+    - [ ] speedup + simplify + improve the class for thin shells.. (it's probably checking BDDC vertex total after every swap so really slow?)
+    - [ ] add a subdomain splitting for structured wing (optimal junction one).. or do I already have it?
 
 - [ ] compare subdomain splitting methods from literature, see METIS ref https://www.cs.utexas.edu/~pingali/CS395T/2009fa/papers/metis.pdf?utm_source=chatgpt.com
     - [ ] a bunch of heatmap tables of thickness = {1e-1, 1e-2, 1e-3} x target_sd_size = {4, 16, 64} or something like that? Also do non-divisible values?
