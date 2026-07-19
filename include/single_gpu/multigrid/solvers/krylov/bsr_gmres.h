@@ -19,7 +19,7 @@ template <typename T, class GRID, int N_SUBSPACE = 50>
 class GMRESSolver : public BaseSolver {
    public:
     GMRESSolver(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_, GRID *grid_,
-                BaseSolver *pc_, SolverOptions options, int MAX_ITER_ = 200, int N_ = 0)
+                BaseSolver *pc_, SolverOptions options, int N_ = 0, int MAX_ITER_ = 200)
         : grid(grid_),
           pc(pc_),
           options(options),
@@ -27,6 +27,7 @@ class GMRESSolver : public BaseSolver {
           cusparseHandle(cusparseHandle_) {
         mat = grid->Kmat;
         MAX_ITER = MAX_ITER_;
+        printf("MAX_ITER = %d\n", MAX_ITER);
 
         auto bsr_data = mat.getBsrData();
 
@@ -265,6 +266,7 @@ class GMRESSolver : public BaseSolver {
          * This performs floor(MAX_ITER / N_SUBSPACE) complete restart cycles.
          */
         const int num_outer_iterations = MAX_ITER / N_SUBSPACE;
+        // printf("MAX_ITER = %d, N_SUBSPACE = %d\n");
 
         for (int iouter = 0; iouter < num_outer_iterations; iouter++) {
             int jj = N_SUBSPACE - 1;
