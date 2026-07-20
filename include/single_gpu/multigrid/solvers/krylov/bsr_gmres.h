@@ -19,7 +19,7 @@ template <typename T, class GRID, int N_SUBSPACE = 50>
 class GMRESSolver : public BaseSolver {
    public:
     GMRESSolver(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_, GRID *grid_,
-                BaseSolver *pc_, SolverOptions options, int N_ = 0, int MAX_ITER_ = 200)
+                BaseSolver *pc_, SolverOptions options, int N_ = 0, int MAX_ITER_ = 100)
         : grid(grid_),
           pc(pc_),
           options(options),

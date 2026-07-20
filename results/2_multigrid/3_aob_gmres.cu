@@ -181,8 +181,10 @@ void multigrid_solve(
             Assembler,
             false>;
 
+    constexpr int N_SUBSPACE = 100;
+
     using KrylovSolve =
-        PCGSolver<T, GRID>;
+        GMRESSolver<T, GRID, N_SUBSPACE>;
 
     using TwoLevelSolve =
         MultigridTwoLevelSolver<GRID>;

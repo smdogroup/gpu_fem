@@ -70,7 +70,7 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     using ASWC = StructuredAdditiveSchwarzSmoother<T, Assembler, S_CYLINDER, true>;
     
     // for K-cycles
-    const int N_SUBSPACE = 200;
+    const int N_SUBSPACE = 100; // if this is too high it inc memory a lot
     using KrylovSolve = GMRESSolver<T, GRID, N_SUBSPACE>;
     using TwoLevelSolve = MultigridTwoLevelSolver<GRID>;
     using KMG = MultilevelKcycleSolver<GRID, CoarseSolver, TwoLevelSolve, KrylovSolve>;
