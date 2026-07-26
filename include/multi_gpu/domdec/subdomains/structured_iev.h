@@ -1,13 +1,31 @@
 #pragma once
-
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
 #include "domdec/subdomains/_iev.h"
+
+struct CoarseStructuredSubdomains {
+    int num_elements = 0;
+    int num_nodes = 0;
+    int elem_nnz = 0;
+    int num_subdomains = 0;
+
+    // Coarse element -> coarse-node connectivity.
+    std::vector<int> elem_ptr;
+    std::vector<int> elem_conn;
+
+    // Coarse element (fine subdomain) -> next-level subdomain.
+    std::vector<int> elem_sd_ind;
+
+    // Coarse node -> original global node.
+    std::vector<int> nodes;
+};
 
 class StructuredIEVSplitting {
    public:
@@ -98,6 +116,132 @@ class StructuredIEVSplitting {
         IEV_sd_ind.clear();
         IEV_nodes.clear();
         IEV_elem_conn.clear();
+    }
+
+    CoarseStructuredSubdomains setup_coarse_structured_subdomains(int nxs2, int nys2) const {
+        // returns data for multilevel BDDC coarser splitting
+        if (elem_conn == nullptr) {
+            throw std::runtime_error("StructuredIEVSplitting has no element connectivity");
+        }
+
+        if (num_elements != nxe * nye) {
+            throw std::runtime_error("Structured mesh dimensions do not match num_elements");
+        }
+
+        if (nxs2 <= 0 || nys2 <= 0) {
+            throw std::invalid_argument("Coarse subdomain counts must be positive");
+        }
+
+        // Build the next, coarser element partition independently. This leaves
+        // the current fine splitting unchanged.
+        StructuredIEVSplitting parent_splitting(num_elements, num_nodes, nodes_per_elem, elem_conn,
+                                                nxe, nye, nxs2, nys2, order, close_hoop,
+                                                track_dirichlet);
+
+        CoarseStructuredSubdomains coarse;
+        coarse.num_elements = num_subdomains;
+        coarse.num_subdomains = parent_splitting.num_subdomains;
+
+        // ------------------------------------------------------------
+        // 1. Build coarse-node numbering from fine BDDC vertices.
+        // ------------------------------------------------------------
+        std::vector<int> global_to_coarse(num_nodes, -1);
+
+        for (int gnode = 0; gnode < num_nodes; gnode++) {
+            if (node_class_ind[gnode] != IEV_VERTEX) continue;
+
+            global_to_coarse[gnode] = static_cast<int>(coarse.nodes.size());
+            coarse.nodes.push_back(gnode);
+        }
+
+        coarse.num_nodes = static_cast<int>(coarse.nodes.size());
+
+        if (coarse.num_nodes != Vc_nnodes) {
+            throw std::runtime_error("Fine vertex count is inconsistent with Vc_nnodes");
+        }
+
+        // ------------------------------------------------------------
+        // 2. Treat each fine subdomain as one coarse element.
+        //
+        // Use sets because a fine-grid vertex may be encountered through
+        // several elements belonging to the same fine subdomain.
+        // ------------------------------------------------------------
+        std::vector<std::unordered_set<int>> coarse_element_nodes(coarse.num_elements);
+
+        for (int ielem = 0; ielem < num_elements; ielem++) {
+            const int fine_sd = elem_sd_ind[ielem];
+
+            if (fine_sd < 0 || fine_sd >= coarse.num_elements) {
+                throw std::runtime_error("Invalid fine element-to-subdomain index");
+            }
+
+            const int *local_conn = &elem_conn[nodes_per_elem * ielem];
+
+            for (int lnode = 0; lnode < nodes_per_elem; lnode++) {
+                const int gnode = local_conn[lnode];
+
+                if (node_class_ind[gnode] != IEV_VERTEX) continue;
+
+                const int coarse_node = global_to_coarse[gnode];
+                if (coarse_node < 0) {
+                    throw std::runtime_error("Failed to map a fine vertex to a coarse node");
+                }
+
+                coarse_element_nodes[fine_sd].insert(coarse_node);
+            }
+        }
+
+        // Flatten the connectivity into CSR form.
+        coarse.elem_ptr.assign(coarse.num_elements + 1, 0);
+
+        for (int celem = 0; celem < coarse.num_elements; celem++) {
+            coarse.elem_ptr[celem + 1] =
+                coarse.elem_ptr[celem] + static_cast<int>(coarse_element_nodes[celem].size());
+        }
+
+        coarse.elem_nnz = coarse.elem_ptr.back();
+        coarse.elem_conn.resize(coarse.elem_nnz);
+
+        for (int celem = 0; celem < coarse.num_elements; celem++) {
+            // Sorting makes the connectivity deterministic.
+            std::vector<int> nodes(coarse_element_nodes[celem].begin(),
+                                   coarse_element_nodes[celem].end());
+
+            std::sort(nodes.begin(), nodes.end());
+
+            std::copy(nodes.begin(), nodes.end(),
+                      coarse.elem_conn.begin() + coarse.elem_ptr[celem]);
+        }
+
+        // ------------------------------------------------------------
+        // 3. Map each coarse element/fine subdomain to exactly one
+        //    parent subdomain.
+        // ------------------------------------------------------------
+        coarse.elem_sd_ind.assign(coarse.num_elements, -1);
+
+        for (int ielem = 0; ielem < num_elements; ielem++) {
+            const int celem = elem_sd_ind[ielem];
+            const int parent_sd = parent_splitting.elem_sd_ind[ielem];
+
+            int &stored_parent = coarse.elem_sd_ind[celem];
+
+            if (stored_parent < 0) {
+                stored_parent = parent_sd;
+            } else if (stored_parent != parent_sd) {
+                throw std::invalid_argument(
+                    "The requested structured partitions are not nested: "
+                    "fine subdomain " +
+                    std::to_string(celem) + " overlaps multiple parent subdomains");
+            }
+        }
+
+        for (int celem = 0; celem < coarse.num_elements; celem++) {
+            if (coarse.elem_sd_ind[celem] < 0) {
+                throw std::runtime_error("Fine subdomain contains no elements");
+            }
+        }
+
+        return coarse;
     }
 
    private:

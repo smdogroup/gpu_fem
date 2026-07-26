@@ -79,6 +79,11 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     MG *mg;
     KMG *kmg;
 
+    if (cycle_type == "WK" or cycle_type == "FK") {
+        printf("run 1_cylinder_gmres.out as these cycles are non-symmetric and should not use PCG in this script.. FATAL : exiting\n");
+        return;
+    }
+
     // FSK is symmetric F-cycle to PCG
     bool is_kcycle = cycle_type == "VK" || cycle_type == "WK" || cycle_type == "FK" || cycle_type == "FSK";
     if (is_kcycle) {
@@ -86,6 +91,7 @@ void multigrid_solve(std::string smoother_type, int nxe, double SR, int nsmooth,
     } else {
         mg = new MG();
     }
+    
 
     // T omegaLS_min = 0.25, omegaLS_max = 2.0;
     T omegaLS_min = 1e-2, omegaLS_max = 4.0;

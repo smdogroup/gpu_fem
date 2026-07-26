@@ -1141,6 +1141,8 @@ class FetidpSolver : public BaseSolver {
                                      bool close_hoop = false, bool track_dirichlet = false) {
         clear_structured_host_data();
 
+        printf("checkpt1\n");
+
         nxe = nxe_;
         nye = nye_;
         nxs = nxs_;
@@ -1219,6 +1221,8 @@ class FetidpSolver : public BaseSolver {
         node_nsd = new int[num_nodes];
         std::memset(node_nsd, 0, num_nodes * sizeof(int));
 
+        printf("checkpt2\n");
+
         nnodes_interior = 0;
         nnodes_edge = 0;
         nnodes_vertex = 0;
@@ -1283,6 +1287,8 @@ class FetidpSolver : public BaseSolver {
         IEV_sd_ind = new int[IEV_nnodes];
         IEV_nodes = new int[IEV_nnodes];
 
+        printf("checkpt3\n");
+
         std::memset(IEV_sd_ptr, 0, (num_subdomains + 1) * sizeof(int));
 
         int IEV_ind = 0;
@@ -1320,6 +1326,9 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         // build IEV element connectivity
         // -----------------------------------------
+
+        printf("checkpt4\n");
+
         IEV_elem_conn = new int[num_elements * nodes_per_elem];
         for (int ielem = 0; ielem < num_elements; ielem++) {
             int *local_elem_conn = &elem_conn[nodes_per_elem * ielem];
@@ -5859,10 +5868,10 @@ class FetidpSolver : public BaseSolver {
             if (S_VV_MLIEV) S_VV_MLIEV->zeroValues();  // for 3+ level BDDC
             // printf("copyKmat to Svv\n");
             copyKmat_IEVtoSvv();
-            // printf("compute Svv inverse term\n");
+            printf("compute Svv inverse term\n");
             computeSvvInverseTerm();
             CHECK_CUDA(cudaDeviceSynchronize());
-            // printf("\tdone with Svv inverse term\n");
+            printf("\tdone with Svv inverse term\n");
         }
 
         // bool debug = true;

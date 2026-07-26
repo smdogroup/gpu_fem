@@ -480,7 +480,7 @@ void multigrid_solve(
 
     constexpr bool print_iterations = true;
     constexpr bool double_smooth = false;
-    constexpr bool print_cycle_times = true;
+    constexpr bool print_cycle_times = false;
 
     const T atol = static_cast<T>(1.0e-20);
     const T rtol = static_cast<T>(1.0e-6);

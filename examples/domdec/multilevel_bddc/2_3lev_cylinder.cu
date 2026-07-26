@@ -215,13 +215,17 @@ int main(int argc, char **argv) {
     int nye = nxe;
     int nxs = nxe / nxe_subdomain_size;
     int nys = nxe / nxe_subdomain_size;
-    double Lx = 1.0, Ly = 1.0;
+    
+    double SR = 1e3;
+    double Lx = 1.0;
     double E = 70e9, nu = 0.3, rho = 2500, ys = 350e6;
-    // int nxe_per_comp = nxe, nye_per_comp = nye;
-    int nxe_per_comp = nxe / 2, nye_per_comp = nye / 2;
-
-    auto assembler = createPlateClampedAssembler<Assembler>(
-        nxe, nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+    int nxe_per_comp = nxe, nye_per_comp = nye;
+    double R = 0.5;
+    // double rho = 2500, ys = 350e6;
+    bool imperfection = false; // option for geom imperfection
+    int imp_x = 1, imp_hoop = 1; // no imperfection this input doesn't matter rn..
+    auto assembler = createCylinderAssembler<Assembler>(nxe, nye, Lx, R, E, nu, thick, 
+        imperfection, imp_x, imp_hoop);
 
     // auto assembler = createPlateAssembler<Assembler>(nxe, nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
 
@@ -255,7 +259,7 @@ int main(int argc, char **argv) {
     bool print_timing = false;
     auto bddc = new BDDC(cublasHandle, cusparseHandle, assembler, kmat, print_timing);
 
-    bool close_hoop = false; // true for cylinder case (not cylindrical panel)
+    bool close_hoop = true; // true for cylinder case (not cylindrical panel)
 
     // 2x2 subdomains on coarse BDDC problem
     int nxs2 = nxs / 2; // num subdomains in x-direction (2x fewer on coarse problem)
@@ -274,15 +278,12 @@ int main(int argc, char **argv) {
     printf("\tdone with setup fine structured subdomains\n");
 
     // perform LU fillin and reordering (optional)
-
-    printf("bddc reordering\n");
     auto &I_bsr_data = bddc->I_bsr_data;
     auto &IE_bsr_data = bddc->IE_bsr_data;
     I_bsr_data.AMD_reordering(); 
     I_bsr_data.compute_full_LU_pattern(10.0);
     IE_bsr_data.AMD_reordering(); 
     IE_bsr_data.compute_full_LU_pattern(10.0);
-    printf("\tdone with bddc reordering\n");
 
     // now compute matrix sparsity, copy maps
     printf("setup matrix sparsity\n");
@@ -591,8 +592,8 @@ int main(int argc, char **argv) {
         assembler.add_fext_fast(load, mag, loads);
         assembler.apply_bcs(loads);
 
-        auto assembler2 = createPlateClampedAssembler<Assembler>(
-            nxe, nye, Lx, Ly, E, nu, thick, rho, ys, nxe_per_comp, nye_per_comp);
+        auto assembler2 = createCylinderAssembler<Assembler>(nxe, nye, Lx, R, E, nu, thick, 
+            imperfection, imp_x, imp_hoop);
 
         // BSR factorization (need to change it to )
         auto& bsr_data = assembler2.getBsrData();

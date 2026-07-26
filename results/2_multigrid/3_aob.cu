@@ -196,6 +196,11 @@ void multigrid_solve(
 
     const bool use_kmg = is_krylov_multigrid_cycle(cycle_type);
 
+    if (cycle_type == "WK" or cycle_type == "FK") {
+        printf("run 3_aob_gmres.out as these cycles are non-symmetric and should not use PCG in this script.. FATAL : exiting\n");
+        return;
+    }
+
     MG *mg = nullptr;
     KMG *kmg = nullptr;
 
@@ -478,7 +483,7 @@ void multigrid_solve(
 
     constexpr bool print_iterations = true;
     constexpr bool double_smooth = false;
-    constexpr bool print_cycle_times = true;
+    constexpr bool print_cycle_times = false;
 
     const T atol = static_cast<T>(1.0e-20);
     const T rtol = static_cast<T>(1.0e-6);

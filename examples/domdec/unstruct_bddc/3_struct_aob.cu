@@ -36,6 +36,7 @@
 #include "domdec/subdomains/unstruct/macro_elem.h"
 #include "domdec/subdomains/unstruct/macro_elem2.h"
 #include "domdec/subdomains/unstruct/v1.h"
+#include "domdec/subdomains/corner_iev.h"
 #include "mesh/TACSMeshLoader.h"
 #include "mesh/vtk_writer.h"
 
