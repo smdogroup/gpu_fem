@@ -23,6 +23,7 @@ from smoothers import BlockGaussSeidel, right_pcg2, right_pgmres2
 
 sys.path.append("../../asw/_py_demo/_src/")
 from asw import TwodimAddSchwarz
+from asw_interface import TwodimInterfaceAdditiveSchwarz
 
 import argparse
 parser = argparse.ArgumentParser()
@@ -245,6 +246,8 @@ if 'mg' in args.solve:
             smoother = BlockGaussSeidel.from_assembler(
                 grid, omega=args.omega, iters=nsmooth
             )
+        elif args.smoother == 'asw_interface':
+            smoother = TwodimInterfaceAdditiveSchwarz.from_assembler(grid, omega, iters=nsmooth, num_px=2, num_py=2, overlap=1)
         elif 'asw' in args.smoother:
             if args.elem in ['mig', 'migr']:
                 omega = args.omega * 0.5 # need extra mult for them (default best values)

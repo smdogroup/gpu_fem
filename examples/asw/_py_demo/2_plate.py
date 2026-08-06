@@ -13,6 +13,7 @@ from __src import plot_plate_vec
 sys.path.append("_src/")
 # from asw import OnedimAddSchwarz # works like line smoother
 from asw import TwodimAddSchwarz
+from asw_interface import TwodimInterfaceAdditiveSchwarz
 
 # ====================================================
 # 1) make plate case
@@ -27,7 +28,7 @@ parser.add_argument("--thick", type=float, default=1e-2) # 2e-3
 parser.add_argument("--justpc", action=argparse.BooleanOptionalAction, default=False, help="yes: just use pc one vec, no: solve with GMRES")
 # it can even do thin plate quite well! maybe even better than multigrid?
 parser.add_argument("--fill", type=int, default=0, help="ILU(k) fill level")
-parser.add_argument("--nxe", type=int, default=30, help="num elems each direction x and y")
+parser.add_argument("--nxe", type=int, default=32, help="num elems each direction x and y")
 parser.add_argument("--size", type=int, default=2, help="coupling size of schwarz smoother")
 parser.add_argument("--omega", type=float, default=0.25, help="additive coefficient for ASW")
 parser.add_argument("--iters", type=int, default=5, help="num schwarz smooths per krylov step (more than one allowed)")
@@ -55,8 +56,12 @@ x = sp.linalg.spsolve(A0.copy(), rhs0.copy())
 # pc = OnedimAddSchwarz(A0.copy(), rhs0.copy(), block_dim=6, 
 #                   coupled_size=args.size, omega=args.omega, iters=args.iters)
 
-pc = TwodimAddSchwarz(A0.copy(), rhs0.copy(), block_dim=6, nx=args.nxe+1, ny=args.nxe+1, 
+pc = TwodimAddSchwarz(A0.copy(), block_dim=6, nx=args.nxe+1, ny=args.nxe+1, 
                     coupled_size=args.size, omega=args.omega, iters=args.iters)
+
+# tried larger subdomains (only 4 subdomains vs 256 subdomains, only 2x fewer iterations so not worth it)
+# pc = TwodimInterfaceAdditiveSchwarz(A0.copy(), block_dim=6, nx=args.nxe + 1, ny=args.nxe+1, 
+#                       num_px=2, num_py=2, overlap=0, omega=args.omega, iters=1)
 
 if args.justpc:
     x2 = pc.solve(rhs)

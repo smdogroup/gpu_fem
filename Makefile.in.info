@@ -2,7 +2,7 @@ A2D_DIR := ${HOME}/git/_archive/a2d
 A2D_INCLUDE := -I${A2D_DIR}/include
 
 GPU_FEM_DIR = ${HOME}/git/gpu_fem
-GPU_FEM_INCLUDE = -I${GPU_FEM_DIR}/include
+GPU_FEM_INCLUDE = -I${GPU_FEM_DIR}/include -I${GPU_FEM_DIR}/include/single_gpu -I${GPU_FEM_DIR}/include/multi_gpu
 TACS_DIR = ${HOME}/git/_archive/tacs
 
 # USE_GPU := 1
@@ -10,9 +10,17 @@ USE_GPU := 0
 GPU_CXX = nvcc
 CXX = g++
 CC_FLAGS = -Wno-deprecated-declarations
-CUSPARSE_LINK = -lcublas -lcusparse -lcudart -lcusolver
-# GPU_CC_FLAGS := -O2 -arch=sm_86
-GPU_CC_FLAGS := -O3 --use_fast_math -arch=sm_86 #-w
+# CUSPARSE_LINK = -lcublas -lcusparse -lcudart -lcusolver
+# CUDSS_LINK = -L/usr/lib/x86_64-linux-gnu/libcudss/12 -lcudss
+
+
+CUSPARSE_LINK = -L/usr/local/cuda-12/lib64 \
+-L/usr/lib/x86_64-linux-gnu/libcudss/12 \
+-lcublas -lcusparse -lcudart -lcusolver -lcudss
+CUDSS_LINK =
+
+GPU_CC_FLAGS := -O3 -arch=sm_86
+# GPU_CC_FLAGS := -O3 --use_fast_math -arch=sm_86 #-w
 DEBUG_GPU_CC_FLAGS := -g ${GPU_CC_FLAGS}
 
 # --relocatable-device-code=false -flto 
@@ -22,14 +30,15 @@ DEBUG_GPU_CC_FLAGS := -g ${GPU_CC_FLAGS}
 # sparse-utils repo (smdogroup) and lapack, metis, etc.
 SPARSE_UTILS_INCLUDE = -I${HOME}/git/_archive/sparse-utils/include/
 
-PYBIND11_INCLUDE = PYBIND11_INCLUDE = $(shell python3 -m pybind11 --includes)
-
 LAPACK_DIR := ${HOME}/git/archive/lapack
 LAPACK_INCLUDE := -I${LAPACK_DIR}/build/include/
 LAPACK_LIB := -L${LAPACK_DIR}/build/lib/
 LAPACK_LINK := ${LAPACK_LIB} -llapacke -llapack -lblas
 
-# MPI include and lib, use 'mpicxx -show' to get the include and lib commands
+# PYBIND11_INCLUDE = -I/usr/include/python3.10 -I/home/seanfireball1/myenv/lib/python3.10/site-packages/pybind11/include
+PYBIND11_INCLUDE = -I/home/seanfireball1/anaconda3/envs/F2F/include/python3.9 -I/home/seanfireball1/anaconda3/envs/F2F/lib/python3.9/site-packages/pybind11/include
+
+# MPI include and lib
 MPI_INCLUDE = -I/usr/lib/x86_64-linux-gnu/openmpi/include -I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi
 MPI_LIB = -L/usr/lib/x86_64-linux-gnu/openmpi/lib -lmpi_cxx -lmpi
 
@@ -40,4 +49,4 @@ METIS_LIB = ${METIS_DIR}/lib/libmetis.a
 
 INCLUDE_FLAGS = ${A2D_INCLUDE} ${GPU_FEM_INCLUDE} ${METIS_INCLUDE} ${SPARSE_UTILS_INCLUDE} ${LAPACK_INCLUDE} ${MPI_INCLUDE}
 CPU_LINK = ${LAPACK_LINK} ${MPI_LIB}
-LINK = ${LAPACK_LINK} ${CUSPARSE_LINK} ${MPI_LIB} ${METIS_LIB}
+LINK = ${LAPACK_LINK} ${CUSPARSE_LINK} ${CUDSS_LINK} ${MPI_LIB} ${METIS_LIB}

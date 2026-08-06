@@ -1,0 +1,1 @@
+../../gmg/3_aob_wing/7_lin_asw.cu

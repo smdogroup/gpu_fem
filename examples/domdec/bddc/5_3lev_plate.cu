@@ -274,12 +274,15 @@ int main(int argc, char **argv) {
     printf("\tdone with setup fine structured subdomains\n");
 
     // perform LU fillin and reordering (optional)
+
+    printf("bddc reordering\n");
     auto &I_bsr_data = bddc->I_bsr_data;
     auto &IE_bsr_data = bddc->IE_bsr_data;
     I_bsr_data.AMD_reordering(); 
     I_bsr_data.compute_full_LU_pattern(10.0);
     IE_bsr_data.AMD_reordering(); 
     IE_bsr_data.compute_full_LU_pattern(10.0);
+    printf("\tdone with bddc reordering\n");
 
     // now compute matrix sparsity, copy maps
     printf("setup matrix sparsity\n");

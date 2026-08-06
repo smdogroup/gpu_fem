@@ -49,6 +49,18 @@ void to_lowercase(char *str) {
     }
 }
 
+template <typename T>
+void printVecOnHost(DeviceVec<T> &vec) {
+    int nvals = vec.getSize();
+    int _nnodes = nvals / 6;
+    auto h_vec = vec.createHostVec();
+    T *_ptr = h_vec.getPtr();
+    for (int inode = 0; inode < _nnodes; inode++) {
+        printf("node[%d]: ", inode);
+        printVec<T>(6, &_ptr[6 * inode]);
+    }   
+}
+
 template <typename T, class Assembler>
 void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, std::string cycle_type) {
     // geometric multigrid method here..
@@ -73,6 +85,7 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
 
     MG *mg;
     KMG *kmg;
+    T pressure = 8e6;
 
     // order of chebyshev polynomial
     int ORDER = 4; 
@@ -111,8 +124,9 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
         auto assembler = createCylinderAssembler<Assembler>(c_nxe, c_nhe, L, R, E, nu, thick, imperfection, imp_x, imp_hoop);
         constexpr bool compressive = false;
         const int load_case = 3; // petal and chirp load
-        double Q = 1.0; // load magnitude
-        T *my_loads = getCylinderLoads<T, Basis, Physics, load_case>(c_nxe, c_nhe, L, R, Q);
+        // double Q = 1.0; // load magnitude
+        T nodal_loads = pressure * (100.0 / SR) * (100.0 / SR) * (100.0 / SR);
+        T *my_loads = getCylinderLoads<T, Basis, Physics, load_case>(c_nxe, c_nhe, L, R, nodal_loads);
         printf("making grid with nxe %d\n", c_nxe);
 
         auto &bsr_data = assembler.getBsrData();
@@ -192,6 +206,58 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
     } else {
         mg->coarse_solver->factor();
     }
+    
+
+    // ------------------------------------------------------------
+    // DEBUG phase
+    // ------------------------------------------------------------
+
+    if (nxe * nxe < 100) {
+        auto grids = kmg->grids;
+        printf("fine rhs\n");
+        printVecOnHost<T>(grids[0].d_defect);
+
+        // pre-smooth
+        grids[0].smoothDefect(2, false, 1);
+        printf("fine defect after pre-smooth\n");
+        printVecOnHost<T>(grids[0].d_defect);
+        printf("fine soln after pre-smooth\n");
+        printVecOnHost<T>(grids[0].d_soln);
+
+        grids[1].restrict_defect(grids[0].d_defect);
+        // un-permute to Visualization order
+        grids[1].d_defect.permuteData(6, grids[1].d_perm);
+        printf("coarse defect\n");
+        printVecOnHost<T>(grids[1].d_defect);
+
+        // re-permute to solve order and do coarse solve
+        grids[1].d_defect.permuteData(6, grids[1].d_iperm);
+        kmg->coarse_solver->solve(grids[1].d_defect, grids[1].d_soln);
+        // un-permute to vis order
+        grids[1].d_soln.permuteData(6, grids[1].d_perm);
+        printf("coarse soln\n");
+        printVecOnHost<T>(grids[1].d_soln);
+        // re-permute
+        grids[1].d_soln.permuteData(6, grids[1].d_iperm);
+
+        // intermed prolongate
+        grids[0].prolongation->prolongate(grids[1].d_soln, grids[0].d_temp_vec);
+        grids[0].d_temp_vec.permuteData(6, grids[0].d_perm);
+        printf("prolong fine soln\n");
+        printVecOnHost<T>(grids[0].d_temp_vec);
+
+        // prolongate with line search
+        grids[0].prolongate(grids[1].d_soln);
+        // un-permute to vis order
+        grids[0].d_soln.permuteData(6, grids[0].d_perm);
+        printf("prolong fine soln w line search\n");
+        printVecOnHost<T>(grids[0].d_soln);
+        
+        return;
+    }
+
+
+    // ------------------------------------------------------------
 
     // fastest is K-cycle usually
     if (cycle_type == "V") {
@@ -215,12 +281,12 @@ void multigrid_solve(int nxe, double SR, int nsmooth, int ninnercyc, T omega, st
         // print some of the data of host residual
         int *d_perm = kmg->grids[0].d_perm;
         auto h_soln = kmg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
-        printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/cylinder_mg.vtk");
+        printToVTK<Assembler,HostVec<T>>(kmg->grids[0].assembler, h_soln, "out/cyl_gmg3.vtk");
     } else {
         // print some of the data of host residual
         int *d_perm = mg->grids[0].d_perm;
         auto h_soln = mg->grids[0].d_soln.createPermuteVec(6, d_perm).createHostVec();
-        printToVTK<Assembler,HostVec<T>>(mg->grids[0].assembler, h_soln, "out/cylinder_mg.vtk");
+        printToVTK<Assembler,HostVec<T>>(mg->grids[0].assembler, h_soln, "out/cyl_gmg3.vtk");
     }
 }
 
