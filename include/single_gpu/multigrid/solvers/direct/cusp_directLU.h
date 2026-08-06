@@ -130,6 +130,8 @@ class CusparseMGDirectLU : public BaseSolver {
     int get_num_iterations() { return 1; }
     void set_cycle_type(std::string cycle_) {}
     int get_nnzb() { return nnzb; }
+    void add_res_IEV(T a, T b, DeviceVec<T> vec) {}  // dummy method needed for other code
+    void get_res_IEV(DeviceVec<T> vec) {}
 
     void assemble_matrix(DeviceVec<T> &vars) {
         assembler.set_variables(vars);

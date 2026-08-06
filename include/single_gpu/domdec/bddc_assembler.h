@@ -14,8 +14,8 @@
 #include "multigrid/solvers/solve_utils.h"
 
 template <typename T, class ShellAssembler_, template <typename> class Vec_,
-          template <typename> class Mat_>
-class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
+          template <typename> class Mat_, class CoarseSolver>
+class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_, CoarseSolver> {
     // adapted from FETI-DP solver in same folder
 
    public:
@@ -42,8 +42,8 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
     BddcSolver(cublasHandle_t &cublasHandle_, cusparseHandle_t &cusparseHandle_,
                ShellAssembler &assembler_, BsrMatType &kmat_, bool print_timing_ = false,
                bool warnings_ = true)
-        : FetidpSolver<T, ShellAssembler_, Vec_, Mat_>(cublasHandle_, cusparseHandle_, assembler_,
-                                                       kmat_, print_timing_) {
+        : FetidpSolver<T, ShellAssembler_, Vec_, Mat_, CoarseSolver>(
+              cublasHandle_, cusparseHandle_, assembler_, kmat_, print_timing_) {
         warnings = warnings_;
     }
 
@@ -53,7 +53,8 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
 
     void setup_unstructured_subdomains(int target_sd_size = 16) {
         // call base FETI-DP setup
-        FetidpSolver<T, ShellAssembler_, Vec_, Mat_>::setup_unstructured_subdomains(target_sd_size);
+        FetidpSolver<T, ShellAssembler_, Vec_, Mat_, CoarseSolver>::setup_unstructured_subdomains(
+            target_sd_size);
 
         // TODO: BDDC unique maps/weights for edge averaging
 
@@ -78,7 +79,7 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
     void setup_structured_subdomains(int nxe_, int nye_, int nxs_, int nys_,
                                      bool close_hoop = false, bool track_dirichlet = false) {
         // call base FETI-DP setup
-        FetidpSolver<T, ShellAssembler_, Vec_, Mat_>::setup_structured_subdomains(
+        FetidpSolver<T, ShellAssembler_, Vec_, Mat_, CoarseSolver>::setup_structured_subdomains(
             nxe_, nye_, nxs_, nys_, close_hoop, track_dirichlet);
 
         // TODO: BDDC unique maps/weights for edge averaging
@@ -101,11 +102,16 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         this->temp_lam2 = Vec(this->lam_nnodes * this->block_dim);
     }
 
+    void set_level(int _level) {
+        // set level for multilevel BDDC
+        level = _level;
+    }
+
     void setup_tacs_component_subdomains(int nxse_, int nyse_, int MOD_WRAPAROUND = -1,
                                          T wrap_frac = 1.0, bool track_dirichlet = false) {
         // call base FETI-DP setup
         bool compute_jump = false;
-        FetidpSolver<T, ShellAssembler_, Vec_, Mat_>::setup_tacs_component_subdomains(
+        FetidpSolver<T, ShellAssembler_, Vec_, Mat_, CoarseSolver>::setup_tacs_component_subdomains(
             nxse_, nyse_, MOD_WRAPAROUND, wrap_frac, compute_jump, track_dirichlet);
 
         // TODO: BDDC unique maps/weights for edge averaging
@@ -136,9 +142,15 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
                                             int &coarse_num_nodes, int &coarse_elem_nnz,
                                             int *&coarse_elem_ptr, int *&coarse_elem_conn,
                                             int *&coarse_elem_sd_ind) {
-        FetidpSolver<T, ShellAssembler_, Vec_, Mat_>::setup_coarse_structured_subdomains(
-            nxe_, nye_, nxs_, nys_, nxs2_, nys2_, close_hoop, coarse_num_elements, coarse_num_nodes,
-            coarse_elem_nnz, coarse_elem_ptr, coarse_elem_conn, coarse_elem_sd_ind);
+        FetidpSolver<T, ShellAssembler_, Vec_, Mat_,
+                     CoarseSolver>::setup_coarse_structured_subdomains(nxe_, nye_, nxs_, nys_,
+                                                                       nxs2_, nys2_, close_hoop,
+                                                                       coarse_num_elements,
+                                                                       coarse_num_nodes,
+                                                                       coarse_elem_nnz,
+                                                                       coarse_elem_ptr,
+                                                                       coarse_elem_conn,
+                                                                       coarse_elem_sd_ind);
     }
 
     void setup_coarse_tacs_component_subdomains(const int nxse_, const int nyse_, const int nxse2_,
@@ -148,10 +160,16 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
                                                 int *&coarse_elem_ptr, int *&coarse_elem_conn,
                                                 int *&coarse_elem_sd_ind) {
         bool compute_jump = false;
-        FetidpSolver<T, ShellAssembler_, Vec_, Mat_>::setup_coasre_tacs_component_subdomains(
-            nxse_, nyse_, nxse2_, nyse2_, MOD_WRAPAROUND, wrap_frac, compute_jump,
-            coarse_num_elements, coarse_num_nodes, coarse_elem_nnz, coarse_elem_ptr,
-            coarse_elem_conn, coarse_elem_sd_ind);
+        FetidpSolver<T, ShellAssembler_, Vec_, Mat_,
+                     CoarseSolver>::setup_coarse_tacs_component_subdomains(nxse_, nyse_, nxse2_,
+                                                                           nyse2_, MOD_WRAPAROUND,
+                                                                           wrap_frac, compute_jump,
+                                                                           coarse_num_elements,
+                                                                           coarse_num_nodes,
+                                                                           coarse_elem_nnz,
+                                                                           coarse_elem_ptr,
+                                                                           coarse_elem_conn,
+                                                                           coarse_elem_sd_ind);
     }
 
     void update_after_assembly(DeviceVec<T> &vars) {
@@ -219,7 +237,7 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
     }
 
     void set_inner_solvers(BaseSolver *subdomainIESolver_, BaseSolver *subdomainISolver_,
-                           BaseSolver *coarseSolver_, BaseSolver *subdomainIKrylov = nullptr) {
+                           CoarseSolver *coarseSolver_, BaseSolver *subdomainIKrylov = nullptr) {
         // subdomainIKrylov matrix can be avoided only if use full fillin on K_II
         this->subdomainIESolver = subdomainIESolver_;
         this->subdomainISolver = subdomainISolver_;
@@ -233,7 +251,7 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         // printf("FineBDDC :: pre-synchronize\n");
 
         this->res_IEV.copyValuesTo(this->f_IEV);
-        // printf("[BDDC-get_lam_rhs]: res_IEV\n");
+        // printf("[BDDC-get_lam_rhs]: L%d-res_IEV\n", !is_fine_bddc);
         // this->printDeviceNodeVec(this->IEV_nnodes, this->res_IEV.getPtr());
         // printf("[BDDC-get_lam_rhs]: f_IEV\n");
         // this->printDeviceNodeVec(this->IEV_nnodes, this->f_IEV.getPtr());
@@ -271,7 +289,7 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         // printf("FineBDDC :: post kmat_IEV SpMV\n");
 
         this->addVecIEVtoGam(this->f_IEV, gam_rhs, 1.0, 0.0);
-        // printf("[BDDC-get_lam_rhs]: final_gam_rhs\n");
+        // printf("[BDDC-get_lam_rhs]: L%d-final_gam_rhs\n", !is_fine_bddc);
         // this->printDeviceNodeVec(ngam, gam_rhs.getPtr());
     }
 
@@ -325,10 +343,11 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         const bool SCALED = true;
 
         // bool debug = true;
-        // if (debug) {
-        //     printf("[BDDC-solve]: gam_rhs\n");
-        //     this->printDeviceNodeVec(ngam, gam_rhs.getPtr());
-        // }
+        bool debug = false;
+        if (debug) {
+            printf("[BDDC-solve]: L%d-gam_rhs\n", !is_fine_bddc);
+            this->printDeviceNodeVec(ngam, gam_rhs.getPtr());
+        }
 
         // printf("BDDCsolve: addVecGamtoIEV\n");
         this->addVecGamtoIEV<SCALED>(gam_rhs, this->f_IEV, 1.0, 0.0);
@@ -338,8 +357,8 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         // }
 
         // debug check initial V_rhs
-        // printf("BDDCsolve: addVecIEVtoVc\n");
-        this->template addVecIEVtoVc<SCALED>(this->f_IEV, this->f_V, 1.0, 0.0);
+        // printf("BDDCsolve: addVecIEVtoVc 1\n");
+        this->template addVecIEVtoVc<true, true>(this->f_IEV, this->f_V, 1.0, 0.0);
 
         // IE solve
         this->addVecIEVtoIE(this->f_IEV, this->f_IE, 1.0, 0.0);
@@ -353,14 +372,63 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
         this->sparseMatVec(*this->kmat_IEV, this->u_IEV, -1.0, 0.0, this->f_IEV);
 
         // coarse solve
-        // printf("BDDCsolve: solveCoarse\n");
-        this->addVecIEVtoVc(this->f_IEV, this->f_V, 1.0, 1.0);
+        // printf("BDDCsolve: solveCoarse with IEVtoVc 2\n");
+        this->template addVecIEVtoVc<false, true>(this->f_IEV, this->f_V, 1.0, 1.0);
 
-        // if (debug) {
-        //     printf("[BDDC-solve]: f_V\n");
-        //     this->printDeviceNodeVec(this->Vc_nnodes, this->f_V.getPtr());
-        // }
+        if (debug) {
+            printf("[BDDC-solve]: L%d-solve_coarse: f_V\n", !is_fine_bddc);
+            this->printDeviceNodeVec(this->Vc_nnodes, this->f_V.getPtr());
+        }
+        // this->solveCoarse(this->f_V, this->u_V); // commented out so we can debug on it below
+
+        // check relative residual here.. (DEBUG)
+        T init_norm;
+        // bool debug2 = true && is_fine_bddc;  // only check the coarse solve without
+        // re-partitioning
+        //                                      // from the fine BDDC.. cause coarseBDDC has node
+        //                                      // reordering issue, so residual check below won't
+        //                                      work
+        bool debug2 = false;
+        if (debug2) {
+            int Nc = this->Vc_nnodes * this->block_dim;
+            CHECK_CUBLAS(cublasDnrm2(this->cublasHandle, Nc, this->f_V.getPtr(), 1, &init_norm));
+            this->f_V.copyValuesTo(this->temp_V);
+        }
+
+        // main solve (not DEBUG)
         this->solveCoarse(this->f_V, this->u_V);
+
+        // continue check relative residual
+        if (debug2) {
+            int Nc = this->Vc_nnodes * this->block_dim;
+            this->sparseMatVec(*this->S_VV, this->u_V, -1.0, 1.0, this->temp_V);
+            T fin_norm;
+            CHECK_CUBLAS(cublasDnrm2(this->cublasHandle, Nc, this->temp_V.getPtr(), 1, &fin_norm));
+            T rel_nrm = fin_norm / init_norm;
+            printf("solveCoarse norms (init %.4e => fin %.4e, rel = %.4e)\n", init_norm, fin_norm,
+                   rel_nrm);
+            if (this->num_nodes < 500) {
+                T *h_fv = this->f_V.createHostVec().getPtr();
+                T *h_residv = this->temp_V.createHostVec().getPtr();
+                printf("h_fv:\n");
+                for (int ivc = 0; ivc < this->Vc_nnodes; ivc++) {
+                    int iglob = this->Vc_nodes[ivc];
+                    printf("f_V[ivc %d, glob node %d]: ", ivc, iglob);
+                    for (int idof = 0; idof < this->block_dim; idof++) {
+                        int vc_dof = this->block_dim * ivc + idof;
+                        printf("%.6e,", h_fv[vc_dof]);
+                    }
+                    printf("\n");
+                    printf("resid_V[ivc %d, glob node %d]: ", ivc, iglob);
+                    for (int idof = 0; idof < this->block_dim; idof++) {
+                        int vc_dof = this->block_dim * ivc + idof;
+                        printf("%.6e,", h_residv[vc_dof]);
+                    }
+                    printf("\n");
+                }
+            }
+        }
+
         // if (debug) {
         //     printf("[BDDC-solve]: u_V\n");
         //     this->printDeviceNodeVec(this->Vc_nnodes, this->u_V.getPtr());
@@ -842,4 +910,6 @@ class BddcSolver : public FetidpSolver<T, ShellAssembler_, Vec_, Mat_> {
     DeviceVec<T> temp_lam, temp_lam2;
     int *gam_nodes;
     BaseSolver *subdomainIKrylov;
+    bool is_fine_bddc = true;
+    int level = 0;
 };

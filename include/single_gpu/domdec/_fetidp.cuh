@@ -82,6 +82,24 @@ __global__ static void k_addVec_IEVtoVc(const int V_nnodes, const int block_dim,
     atomicAdd(&y[dof_Vc], a * x[dof_IEV]);
 }
 
+
+template <typename T>
+__global__ static void k_addVec_IEVtoV_MLIEV(const int V_nnodes, const int block_dim, const int *d_IEVtoV_imap, 
+    const T *x, T *y, const T a) {
+    int N_V = V_nnodes * block_dim;
+    int tid = threadIdx.x + blockDim.x * blockIdx.x;
+    if (tid >= N_V) return;
+
+    int V_node = tid / block_dim;
+    // int Vc_node = d_VcToV_imap[V_node];
+    int IEV_node = d_IEVtoV_imap[V_node];
+    int idof = tid % block_dim;
+    int dof_V = block_dim * V_node + idof;
+    int dof_IEV = block_dim * IEV_node + idof;
+
+    atomicAdd(&y[dof_V], a * x[dof_IEV]);
+}
+
 template <typename T>
 __global__ static void k_addVec_VctoIEV(const int V_nnodes, const int block_dim, const int *d_IEVtoV_imap, 
     const int *d_VcToV_imap, const T *x, T *y, const T a) {

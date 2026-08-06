@@ -15,8 +15,9 @@
 #include "multigrid/solvers/solve_utils.h"
 
 template <typename T, class ShellAssembler_, template <typename> class Vec_,
-          template <typename> class Mat_>
-class CoarseBddcSolver : public BddcSolver<T, FakeAssembler<T, ShellAssembler_>, Vec_, Mat_> {
+          template <typename> class Mat_, class CoarseSolver>
+class CoarseBddcSolver
+    : public BddcSolver<T, FakeAssembler<T, ShellAssembler_>, Vec_, Mat_, CoarseSolver> {
     // adapted from BDDC
 
     using ShellAssembler = ShellAssembler_;
@@ -31,7 +32,7 @@ class CoarseBddcSolver : public BddcSolver<T, FakeAssembler<T, ShellAssembler_>,
     using Mat = Mat_<Vec_<T>>;
     using BsrMatType = BsrMat<DeviceVec<T>>;
     using FAssembler = FakeAssembler<T, ShellAssembler>;
-    using FineBDDC = BddcSolver<T, FAssembler, Vec_, Mat_>;
+    using FineBDDC = BddcSolver<T, FAssembler, Vec_, Mat_, CoarseSolver>;
 
    public:
     static constexpr int32_t nodes_per_elem = Basis::num_nodes;
@@ -53,6 +54,7 @@ class CoarseBddcSolver : public BddcSolver<T, FakeAssembler<T, ShellAssembler_>,
         // warnings_);
 
         // more general element connectivity here.. for wing cases
+        this->is_fine_bddc = false;
         this->elem_nnz = elem_nnz_;
         this->elem_ptr = h_elem_ptr_;
         this->elem_conn = h_elem_conn_;
@@ -96,7 +98,7 @@ class CoarseBddcSolver : public BddcSolver<T, FakeAssembler<T, ShellAssembler_>,
     }
 
     void set_inner_solvers(BaseSolver *subdomainIESolver_, BaseSolver *subdomainISolver_,
-                           BaseSolver *coarseSolver_, BaseSolver *subdomainIKrylov = nullptr) {
+                           CoarseSolver *coarseSolver_, BaseSolver *subdomainIKrylov = nullptr) {
         // subdomainIKrylov matrix can be avoided only if use full fillin on K_II
         this->subdomainIESolver = subdomainIESolver_;
         this->subdomainISolver = subdomainISolver_;
@@ -107,6 +109,14 @@ class CoarseBddcSolver : public BddcSolver<T, FakeAssembler<T, ShellAssembler_>,
     // void mat_vec(DeviceVec<T> &gam_in, DeviceVec<T> &gam_out) {}
     // bool solve(DeviceVec<T> gam_rhs, DeviceVec<T> gam, bool check_conv = false) {}
     // void get_global_soln(DeviceVec<T> &gam, DeviceVec<T> &soln) {}
+
+    void get_IEV_nodes(int &_IEV_nnodes, int *&_IEV_nodes) {
+        printf("IEV nodes from coarse BDDC with #nodes=%d and #IEV_nodes=%d\n", this->num_nodes,
+               this->IEV_nnodes);
+        printVec<int>(this->IEV_nnodes, this->IEV_nodes);
+        _IEV_nnodes = this->IEV_nnodes;
+        _IEV_nodes = this->IEV_nodes;
+    }
 
     void setup_matrix_sparsity() {
         // USER must call this routine..
@@ -355,17 +365,17 @@ class CoarseBddcSolver : public BddcSolver<T, FakeAssembler<T, ShellAssembler_>,
     }
 
     void get_lam_rhs(DeviceVec<T> &gam_rhs) {
-        printf("coarse BDDC get_lam_rhs\n");
-        CHECK_CUDA(cudaDeviceSynchronize());
-        printf("post synchronize in CBDDC::get_lam_rhs\n");
+        // printf("coarse BDDC get_lam_rhs\n");
+        // CHECK_CUDA(cudaDeviceSynchronize());
+        // printf("post synchronize in CBDDC::get_lam_rhs\n");
 
         FineBDDC::get_lam_rhs(gam_rhs);
 
-        CHECK_CUDA(cudaDeviceSynchronize());
-        T *h_gam_rhs = gam_rhs.createHostVec().getPtr();
-        int nvals = gam_rhs.getSize();
-        printf("coarseBddc : h_gam_rhs\n");
-        printVec<T>(nvals, h_gam_rhs);
+        // CHECK_CUDA(cudaDeviceSynchronize());
+        // T *h_gam_rhs = gam_rhs.createHostVec().getPtr();
+        // int nvals = gam_rhs.getSize();
+        // printf("coarseBddc : h_gam_rhs\n");
+        // printVec<T>(nvals, h_gam_rhs);
     }
 
     void mat_vec(DeviceVec<T> &gam_in, DeviceVec<T> &gam_out) {
@@ -456,6 +466,7 @@ class CoarseBddcSolver : public BddcSolver<T, FakeAssembler<T, ShellAssembler_>,
         std::memset(this->node_class_ind, 0, this->num_nodes * sizeof(int));
 
         this->node_nsd = new int[this->num_nodes];
+        std::memset(this->node_nsd, 0, this->num_nodes * sizeof(int));
         this->I_nnodes = 0, this->IE_nnodes = 0, this->IEV_nnodes = 0;
         this->Vc_nnodes = 0, this->V_nnodes = 0, this->lam_nnodes = 0;
 
@@ -484,10 +495,12 @@ class CoarseBddcSolver : public BddcSolver<T, FakeAssembler<T, ShellAssembler_>,
                 this->IEV_nnodes += nsd;
             }
         }
-        printf("node_class_ind: ");
-        printVec<int>(this->num_nodes, this->node_class_ind);
-        printf("IEV_nnodes %d\n", this->IEV_nnodes);
-        printf("num subdomains %d\n", this->num_subdomains);
+        // printf("node_nsd: ");
+        // printVec<int>(this->num_nodes, this->node_nsd);
+        // printf("node_class_ind: ");
+        // printVec<int>(this->num_nodes, this->node_class_ind);
+        // printf("IEV_nnodes %d\n", this->IEV_nnodes);
+        // printf("num subdomains %d\n", this->num_subdomains);
 
         // -----------------------------------------
         // build duplicated IEV nodal layout

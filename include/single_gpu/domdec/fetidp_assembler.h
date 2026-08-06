@@ -19,7 +19,7 @@
 enum NodeClass { INTERIOR = 0, DIRICHLET_EDGE = 1, EDGE = 2, VERTEX = 3 };
 
 template <typename T, class ShellAssembler_, template <typename> class Vec_,
-          template <typename> class Mat_>
+          template <typename> class Mat_, class CoarseSolver>
 class FetidpSolver : public BaseSolver {
    public:
     using ShellAssembler = ShellAssembler_;
@@ -4525,10 +4525,10 @@ class FetidpSolver : public BaseSolver {
         }
         coarse_num_nodes = Vc_nnodes;
         coarse_num_elements = num_subdomains;
-        // printf("coarse_num_nodes %d, coarse_num_elements %d\n", coarse_num_nodes,
-        //        coarse_num_elements);
-        // printf("elem_sd_ind1: ");
-        // printVec<int>(num_elements, elem_sd_ind1);
+        printf("coarse_num_nodes %d, coarse_num_elements %d\n", coarse_num_nodes,
+               coarse_num_elements);
+        printf("elem_sd_ind1: ");
+        printVec<int>(num_elements, elem_sd_ind1);
 
         // build coarse element connectivity from elem_sd_ind1 (first refinement level)
         int *coarse_elem_cts = new int[coarse_num_elements];
@@ -4583,13 +4583,19 @@ class FetidpSolver : public BaseSolver {
             }
         }
 
+        // save the nodes that are Vc_nnodes from this level
+        // int saved_Vc_nnodes = Vc_nnodes;
+        // int *saved_Vc_nodes = new int[Vc_nnodes];
+        // memcpy(saved_Vc_nodes, Vc_nodes, Vc_nnodes * sizeof(int));
+        // int *saved_elem_conn_is_Vc =
+
         // DEBUG
         // printf("coarse_elem_conn (nnz %d): ", coarse_elem_nnz);
         // printVec<int>(coarse_elem_nnz, coarse_elem_conn);
         // for (int i_subdomain = 0; i_subdomain < this->num_subdomains; i_subdomain++) {
         //     printf("subdomain %d (elem_conn): ", i_subdomain);
-        //     for (int elemp = coarse_elem_ptr[i_subdomain]; elemp < coarse_elem_ptr[i_subdomain +
-        //     1];
+        //     for (int elemp = coarse_elem_ptr[i_subdomain]; elemp <
+        //     coarse_elem_ptr[i_subdomain + 1];
         //          elemp++) {
         //         int ivc = coarse_elem_conn[elemp];
         //         printf("%d ", ivc);
@@ -4632,6 +4638,25 @@ class FetidpSolver : public BaseSolver {
         }
         // printf("coarse_elem_sd_ind: ");
         // printVec<int>(coarse_num_elements, coarse_elem_sd_ind);
+
+        // create IEV node splitting of coarse nodes
+        // but all I need are the number of IEV-split coarse nodes, some maps and the # repeated
+        // nodes
+        // uses info from the 2nd splitting now
+        int *coarse_elem_cts2 = new int[num_subdomains];
+        memset(coarse_elem_cts2, 0, num_subdomains * sizeof(int));
+        for (int i = 0; i < num_elements; i++) {
+            int i_subdomain = elem_sd_ind2[i];  // use larger subdomains now..
+            for (int local_node = 0; local_node < nodes_per_elem; local_node++) {
+                int gnode = elem_conn[nodes_per_elem * i + local_node];
+                // using the larger subdomains for coarse multilevel problem (3-level super
+                // subdomains)
+                int node_class = node_class_ind[gnode];
+                if (node_class == VERTEX) {
+                    coarse_elem_cts[i_subdomain]++;
+                }
+            }
+        }
     }
 
     void setup_coarse_tacs_component_subdomains(const int nxse_, const int nyse_, const int nxse2_,
@@ -5116,34 +5141,211 @@ class FetidpSolver : public BaseSolver {
         // IEV => V kmat block copy map (for A_{VV} copy in S_{VV})
         // -----------------------------------------
 
+        // Svv_copy_nnzb = 0;
+        // std::vector<int> Svv_IEV_copyBlocks;
+        // std::vector<int> Svv_Vc_copyBlocks;
+        // for (int IEV_row = 0; IEV_row < IEV_nnodes; IEV_row++) {
+        //     int glob_row = IEV_nodes[IEV_row];
+        //     int row_class = node_class_ind[glob_row];
+        //     if (row_class != VERTEX) continue;
+        //     int Vc_row = Vc_node_imap[glob_row];
+        //     int Vc_rowperm = SVV_iperm[Vc_row];
+
+        //     for (int jp = IEV_rowp[IEV_row]; jp < IEV_rowp[IEV_row + 1]; jp++) {
+        //         int IEV_col = IEV_cols[jp];
+        //         int glob_col = IEV_nodes[IEV_col];
+        //         int col_class = node_class_ind[glob_col];
+        //         if (col_class == VERTEX) {
+        //             int Vc_col = Vc_node_imap[glob_col];
+        //             for (int kp = Svv_rowp[Vc_rowperm]; kp < Svv_rowp[Vc_rowperm + 1]; kp++) {
+        //                 int k_perm = Svv_cols[kp];
+        //                 int k = SVV_perm[k_perm];
+        //                 if (k == Vc_col) {
+        //                     Svv_IEV_copyBlocks.push_back(jp);
+        //                     Svv_Vc_copyBlocks.push_back(kp);
+        //                     Svv_copy_nnzb++;
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+
+        // -----------------------------------------
+        // IEV => V kmat block copy map
+        // -----------------------------------------
+
         Svv_copy_nnzb = 0;
+
         std::vector<int> Svv_IEV_copyBlocks;
         std::vector<int> Svv_Vc_copyBlocks;
-        for (int IEV_row = 0; IEV_row < IEV_nnodes; IEV_row++) {
-            int glob_row = IEV_nodes[IEV_row];
-            int row_class = node_class_ind[glob_row];
-            if (row_class != VERTEX) continue;
-            int Vc_row = Vc_node_imap[glob_row];
-            int Vc_rowperm = SVV_iperm[Vc_row];
 
-            for (int jp = IEV_rowp[IEV_row]; jp < IEV_rowp[IEV_row + 1]; jp++) {
-                int IEV_col = IEV_cols[jp];
-                int glob_col = IEV_nodes[IEV_col];
-                int col_class = node_class_ind[glob_col];
-                if (col_class == VERTEX) {
-                    int Vc_col = Vc_node_imap[glob_col];
-                    for (int kp = Svv_rowp[Vc_rowperm]; kp < Svv_rowp[Vc_rowperm + 1]; kp++) {
-                        int k_perm = Svv_cols[kp];
-                        int k = SVV_perm[k_perm];
-                        if (k == Vc_col) {
-                            Svv_IEV_copyBlocks.push_back(jp);
-                            Svv_Vc_copyBlocks.push_back(kp);
-                            Svv_copy_nnzb++;
-                        }
+        // // Verify CSR structure first.
+        // if (static_cast<int>(IEV_rowp.size()) != IEV_nnodes + 1) {
+        //     printf("ERROR: IEV_rowp.size()=%zu, expected %d\n", IEV_rowp.size(), IEV_nnodes + 1);
+        //     exit(-1);
+        // }
+
+        // if (IEV_rowp[0] != 0) {
+        //     printf("ERROR: IEV_rowp[0]=%d, expected 0\n", IEV_rowp[0]);
+        //     exit(-1);
+        // }
+
+        // for (int i = 0; i < IEV_nnodes; i++) {
+        //     if (IEV_rowp[i] > IEV_rowp[i + 1]) {
+        //         printf("ERROR: nonmonotonic IEV_rowp at row %d: %d > %d\n", i, IEV_rowp[i],
+        //                IEV_rowp[i + 1]);
+        //         exit(-1);
+        //     }
+        // }
+
+        const int actual_IEV_nnzb = IEV_rowp[IEV_nnodes];
+        const int actual_Svv_nnzb = Svv_rowp[Vc_nnodes];  // Use actual Svv row count here.
+
+        if (actual_Svv_nnzb != Svv_nnzb) {
+            printf(
+                "ERROR: Svv count mismatch: Svv_nnzb=%d, "
+                "but Svv_rowp[Vc_nnodes]=%d\n",
+                Svv_nnzb, actual_Svv_nnzb);
+            exit(-1);
+        }
+
+        for (int IEV_row = 0; IEV_row < IEV_nnodes; IEV_row++) {
+            const int glob_row = IEV_nodes[IEV_row];
+
+            if (glob_row < 0 || glob_row >= num_nodes) {
+                printf("ERROR: IEV_nodes[%d]=%d, expected [0,%d)\n", IEV_row, glob_row, num_nodes);
+                exit(-1);
+            }
+
+            const int row_class = node_class_ind[glob_row];
+            if (row_class != VERTEX) {
+                continue;
+            }
+
+            const int Vc_row = Vc_node_imap[glob_row];
+            if (Vc_row < 0 || Vc_row >= Vc_nnodes) {
+                printf("ERROR: Vc_node_imap[%d]=%d, expected [0,%d)\n", glob_row, Vc_row,
+                       Vc_nnodes);
+                exit(-1);
+            }
+
+            const int Vc_rowperm = SVV_iperm[Vc_row];
+            if (Vc_rowperm < 0 || Vc_rowperm >= Vc_nnodes) {
+                printf("ERROR: SVV_iperm[%d]=%d, expected [0,%d)\n", Vc_row, Vc_rowperm, Vc_nnodes);
+                exit(-1);
+            }
+
+            const int jp_begin = IEV_rowp[IEV_row];
+            const int jp_end = IEV_rowp[IEV_row + 1];
+
+            if (jp_begin < 0 || jp_end < jp_begin || jp_end > actual_IEV_nnzb) {
+                printf("ERROR: invalid IEV row range for row %d: [%d,%d), nnzb=%d\n", IEV_row,
+                       jp_begin, jp_end, actual_IEV_nnzb);
+                exit(-1);
+            }
+
+            for (int jp = jp_begin; jp < jp_end; jp++) {
+                const int IEV_col = IEV_cols[jp];
+
+                if (IEV_col < 0 || IEV_col >= IEV_nnodes) {
+                    printf("ERROR: IEV_cols[%d]=%d, expected [0,%d)\n", jp, IEV_col, IEV_nnodes);
+                    exit(-1);
+                }
+
+                const int glob_col = IEV_nodes[IEV_col];
+
+                if (glob_col < 0 || glob_col >= num_nodes) {
+                    printf("ERROR: IEV_nodes[%d]=%d, expected [0,%d)\n", IEV_col, glob_col,
+                           num_nodes);
+                    exit(-1);
+                }
+
+                if (node_class_ind[glob_col] != VERTEX) {
+                    continue;
+                }
+
+                const int Vc_col = Vc_node_imap[glob_col];
+                if (Vc_col < 0 || Vc_col >= Vc_nnodes) {
+                    printf("ERROR: Vc_node_imap[%d]=%d, expected [0,%d)\n", glob_col, Vc_col,
+                           Vc_nnodes);
+                    exit(-1);
+                }
+
+                const int kp_begin = Svv_rowp[Vc_rowperm];
+                const int kp_end = Svv_rowp[Vc_rowperm + 1];
+
+                if (kp_begin < 0 || kp_end < kp_begin || kp_end > Svv_nnzb) {
+                    printf(
+                        "ERROR: invalid Svv row range:\n"
+                        "  IEV_row=%d glob_row=%d Vc_row=%d Vc_rowperm=%d\n"
+                        "  Svv range=[%d,%d), Svv_nnzb=%d\n",
+                        IEV_row, glob_row, Vc_row, Vc_rowperm, kp_begin, kp_end, Svv_nnzb);
+                    exit(-1);
+                }
+
+                bool found = false;
+
+                for (int kp = kp_begin; kp < kp_end; kp++) {
+                    if (kp < 0 || kp >= Svv_nnzb) {
+                        printf("ERROR: kp=%d, expected [0,%d)\n", kp, Svv_nnzb);
+                        exit(-1);
                     }
+
+                    const int k_perm = Svv_cols[kp];
+                    if (k_perm < 0 || k_perm >= Vc_nnodes) {
+                        printf("ERROR: Svv_cols[%d]=%d, expected [0,%d)\n", kp, k_perm, Vc_nnodes);
+                        exit(-1);
+                    }
+
+                    const int k = SVV_perm[k_perm];
+                    if (k < 0 || k >= Vc_nnodes) {
+                        printf("ERROR: SVV_perm[%d]=%d, expected [0,%d)\n", k_perm, k, Vc_nnodes);
+                        exit(-1);
+                    }
+
+                    if (k == Vc_col) {
+                        Svv_IEV_copyBlocks.push_back(jp);
+                        Svv_Vc_copyBlocks.push_back(kp);
+                        found = true;
+                        break;  // There should only be one matching CSR block.
+                    }
+                }
+
+                if (!found) {
+                    printf(
+                        "ERROR: missing Svv block for IEV block jp=%d\n"
+                        "  global pair=(%d,%d), Vc pair=(%d,%d), "
+                        "permuted row=%d\n",
+                        jp, glob_row, glob_col, Vc_row, Vc_col, Vc_rowperm);
+                    exit(-1);
                 }
             }
         }
+
+        Svv_copy_nnzb = static_cast<int>(Svv_IEV_copyBlocks.size());
+
+        if (Svv_Vc_copyBlocks.size() != Svv_IEV_copyBlocks.size()) {
+            printf("ERROR: copy-map size mismatch: IEV=%zu, Svv=%zu\n", Svv_IEV_copyBlocks.size(),
+                   Svv_Vc_copyBlocks.size());
+            exit(-1);
+        }
+
+        for (int i = 0; i < Svv_copy_nnzb; i++) {
+            if (Svv_IEV_copyBlocks[i] < 0 || Svv_IEV_copyBlocks[i] >= actual_IEV_nnzb) {
+                printf("ERROR: final in_map[%d]=%d, expected [0,%d)\n", i, Svv_IEV_copyBlocks[i],
+                       actual_IEV_nnzb);
+                exit(-1);
+            }
+
+            if (Svv_Vc_copyBlocks[i] < 0 || Svv_Vc_copyBlocks[i] >= Svv_nnzb) {
+                printf("ERROR: final out_map[%d]=%d, expected [0,%d)\n", i, Svv_Vc_copyBlocks[i],
+                       Svv_nnzb);
+                exit(-1);
+            }
+        }
+
+        printf("Created valid Svv copy maps: %d entries\n", Svv_copy_nnzb);
+
         d_Svv_IEV_copyBlocks =
             HostVec<int>(Svv_copy_nnzb, Svv_IEV_copyBlocks.data()).createDeviceVec().getPtr();
         d_Svv_Vc_copyBlocks =
@@ -5440,12 +5642,14 @@ class FetidpSolver : public BaseSolver {
         d_Svv_MLIEV_vals = this->S_VV_MLIEV->getVec();
 
         // used in multilevel BDDC (since coarse solver uses Svv matrix with different sparsity)
-        int coarse_IEV_nnodes = this->d_Svv_MLIEV_bsr_data.nnodes;
+        coarse_IEV_nnodes = this->d_Svv_MLIEV_bsr_data.nnodes;
         this->Svv_MLIEV_rowp = this->Svv_MLIEV_bsr_data.rowp;
         this->Svv_MLIEV_cols = this->Svv_MLIEV_bsr_data.cols;
         this->Svv_MLIEV_nnzb = this->Svv_MLIEV_bsr_data.nnzb;
         this->SVV_MLIEV_perm = this->Svv_MLIEV_bsr_data.perm;
         this->SVV_MLIEV_iperm = this->Svv_MLIEV_bsr_data.iperm;
+
+        f_ML_coarseIEV = Vec(coarse_IEV_nnodes * block_dim);
 
         // -------------------------------------------------------------------------
         // Build matched fine-IEV <-> coarse-IEV pairs.
@@ -5545,11 +5749,11 @@ class FetidpSolver : public BaseSolver {
             }
         }
 
-        this->d_Svv_IEV_copyBlocks =
+        this->d_Svv_MLIEV_IEV_copyBlocks =
             HostVec<int>(this->Svv_MLIEV_copy_nnzb, Svv_IEV_copyBlocks.data())
                 .createDeviceVec()
                 .getPtr();
-        this->d_Svv_Vc_copyBlocks =
+        this->d_Svv_MLIEV_Vc_copyBlocks =
             HostVec<int>(this->Svv_MLIEV_copy_nnzb, Svv_Vc_copyBlocks.data())
                 .createDeviceVec()
                 .getPtr();
@@ -5800,6 +6004,60 @@ class FetidpSolver : public BaseSolver {
         }
     }
 
+    void setup_MLIEV_coarse_vec_maps(int *coarse_IEV_nodes, const int *coarse_IEV_sd_ptr,
+                                     const int *coarse_IEV_sd_ind, const int *coarse_elem_sd_ind) {
+        // sets up ability to copy fine-IEV to coarse-IEV rhs for coarseBDDC solve
+        // method based on matrix version (which was developed first)..
+        // setup_MLIEV_coarse_matrix_sparsity
+
+        // get num coarse-IEV nodes
+        this->d_Svv_MLIEV_bsr_data = this->S_VV_MLIEV->getBsrData();
+        coarse_IEV_nnodes = this->d_Svv_MLIEV_bsr_data.nnodes;
+        _coarse_IEV_nodes = coarse_IEV_nodes;
+
+        // build map from V nodes (duplicated coarse) to coarse-IEV
+        // since V nodes are duplicated more.. V_nodes => coarse-IEV nodes is unique map
+        // (injection?)
+        MLIEVtoV_imap = new int[V_nnodes];
+        memset(MLIEVtoV_imap, 0, V_nnodes * sizeof(int));
+        for (int V_ind = 0; V_ind < V_nnodes; V_ind++) {
+            int IEV_ind = IEVtoV_imap[V_ind];
+            int fine_glob_node = this->IEV_nodes[IEV_ind];
+            int fine_subdomain = this->IEV_sd_ind[IEV_ind];
+            int coarse_subdomain = coarse_elem_sd_ind[fine_subdomain];
+
+            for (int coarse_IEV_ind = coarse_IEV_sd_ptr[coarse_subdomain];
+                 coarse_IEV_ind < coarse_IEV_sd_ptr[coarse_subdomain + 1]; coarse_IEV_ind++) {
+                int coarse_glob_node = this->Vc_nodes[coarse_IEV_nodes[coarse_IEV_ind]];
+
+                if (fine_glob_node == coarse_glob_node) {
+                    MLIEVtoV_imap[V_ind] = coarse_IEV_ind;
+                    break;
+                }
+            }
+        }
+        this->d_MLIEVtoV_imap = HostVec<int>(V_nnodes, MLIEVtoV_imap).createDeviceVec().getPtr();
+
+        // count the vertex nsd at global nodes, then we'll copy back
+        int *ML_glob_node_nsd = new int[num_nodes];
+        memset(ML_glob_node_nsd, 0, num_nodes * sizeof(int));
+        for (int i = 0; i < coarse_IEV_nnodes; i++) {
+            int coarse_node = coarse_IEV_nodes[i];
+            int glob_node = this->Vc_nodes[coarse_node];
+            ML_glob_node_nsd[glob_node]++;
+        }
+        ML_vertex_nsd = new int[coarse_IEV_nnodes];
+        memset(ML_vertex_nsd, 0, coarse_IEV_nnodes * sizeof(int));
+        for (int i = 0; i < coarse_IEV_nnodes; i++) {
+            int coarse_node = coarse_IEV_nodes[i];
+            int glob_node = this->Vc_nodes[coarse_node];
+            // ML_vertex_nsd[i] = ML_glob_node_nsd[glob_node];
+            ML_vertex_nsd[i] = this->node_nsd[glob_node];  // rescaling is constnat 4
+        }
+        this->d_ML_vertex_nsd =
+            HostVec<int>(coarse_IEV_nnodes, ML_vertex_nsd).createDeviceVec().getPtr();
+    }
+
     void assemble_subdomains() {
         // TODO:
         // build workspace vectors / allocate reduced matrices if needed
@@ -5867,7 +6125,9 @@ class FetidpSolver : public BaseSolver {
             S_VV->zeroValues();
             if (S_VV_MLIEV) S_VV_MLIEV->zeroValues();  // for 3+ level BDDC
             // printf("copyKmat to Svv\n");
+            // test_IEV_vecs("before copyKmat_IEVtoSvv\n");
             copyKmat_IEVtoSvv();
+            // test_IEV_vecs("after copyKmat_IEVtoSvv, before computeSvvInverseTerm\n");
             printf("compute Svv inverse term\n");
             computeSvvInverseTerm();
             CHECK_CUDA(cudaDeviceSynchronize());
@@ -5875,21 +6135,39 @@ class FetidpSolver : public BaseSolver {
         }
 
         // bool debug = true;
-        // if (debug) {
-        //     printf("S_VV vals on GPU[0] with nnzb=%d: \n", Svv_nofill_nnzb);
-        //     T *h_Svv_vals = d_Svv_vals.createHostVec().getPtr();
-        //     // int *Svv_nofill_map =
-        //     //     DeviceVec<int>(Svv_nofill_nnzb, d_Svv_Vc_copyBlocks).createHostVec().getPtr();
-        //     for (int i = 0; i < Svv_nofill_nnzb; i++) {
-        //         // int i2 = Svv_nofill_map[i];
-        //         int row = Svv_rows[i], col = Svv_cols[i];
-        //         T *h_block = &h_Svv_vals[block_dim2 * i];
-        //         printf("S_VV: block[%d] (%d,%d):\n", i, row, col);
-        //         for (int j = 0; j < block_dim; j++) {
-        //             printVec<T>(block_dim, &h_block[block_dim * j]);
-        //         }
-        //     }
-        // }
+        bool debug = false;
+        if (debug) {
+            printf("S_VV vals on GPU[0] with nnzb=%d: \n", Svv_nofill_nnzb);
+            T *h_Svv_vals = d_Svv_vals.createHostVec().getPtr();
+            // int *Svv_nofill_map =
+            //     DeviceVec<int>(Svv_nofill_nnzb, d_Svv_Vc_copyBlocks).createHostVec().getPtr();
+            for (int i = 0; i < Svv_nofill_nnzb; i++) {
+                // int i2 = Svv_nofill_map[i];
+                int row = Svv_rows[i], col = Svv_cols[i];
+                T *h_block = &h_Svv_vals[block_dim2 * i];
+                printf("S_VV: block[%d] (%d,%d):\n", i, row, col);
+                for (int j = 0; j < block_dim; j++) {
+                    printVec<T>(block_dim, &h_block[block_dim * j]);
+                }
+            }
+        }
+
+        // bool debug = true;
+        if (debug && S_VV_MLIEV != nullptr) {
+            printf("S_VV MLIEV vals on GPU[0] with nnzb=%d: \n", Svv_MLIEV_nnzb);
+            T *h_Svv_vals = d_Svv_MLIEV_vals.createHostVec().getPtr();
+            // int *Svv_nofill_map =
+            //     DeviceVec<int>(Svv_nofill_nnzb, d_Svv_Vc_copyBlocks).createHostVec().getPtr();
+            for (int i = 0; i < Svv_MLIEV_nnzb; i++) {
+                // int i2 = Svv_nofill_map[i];
+                int row = Svv_MLIEV_rows[i], col = Svv_MLIEV_cols[i];
+                T *h_block = &h_Svv_vals[block_dim2 * i];
+                printf("S_VV_MLIEV: block[%d] (%d,%d):\n", i, row, col);
+                for (int j = 0; j < block_dim; j++) {
+                    printVec<T>(block_dim, &h_block[block_dim * j]);
+                }
+            }
+        }
     }
     void _assemble_coarse_problem_timing() {
         cudaEvent_t s1, e1, s2, e2;
@@ -5964,7 +6242,7 @@ class FetidpSolver : public BaseSolver {
     }
 
     void set_inner_solvers(BaseSolver *subdomainIESolver_, BaseSolver *subdomainISolver_,
-                           BaseSolver *coarseSolver_) {
+                           CoarseSolver *coarseSolver_) {
         subdomainIESolver = subdomainIESolver_;
         subdomainISolver = subdomainISolver_;
         coarseSolver = coarseSolver_;
@@ -5975,6 +6253,15 @@ class FetidpSolver : public BaseSolver {
         // addVec_globalToIEV<scaled>(rhs, fext_IEV, block_dim, 1.0, 0.0);
         // fext_IEV.apply_bcs(d_IEV_bcs);
     }
+
+    void add_res_IEV(T a, T b, DeviceVec<T> &_res_IEV) {
+        CHECK_CUBLAS(cublasDscal(cublasHandle, block_dim * IEV_nnodes, &b, res_IEV.getPtr(), 1));
+        CHECK_CUBLAS(cublasDaxpy(cublasHandle, block_dim * IEV_nnodes, &a, _res_IEV.getPtr(), 1,
+                                 res_IEV.getPtr(), 1));
+        res_IEV.copyValuesTo(fext_IEV);
+    }
+
+    void get_res_IEV(DeviceVec<T> &_res_IEV) { res_IEV.copyValuesTo(_res_IEV); }
 
     void set_IEV_linear_rhs(DeviceVec<T> &vars) {
         // set fext_IEV back into res_IEV
@@ -6116,7 +6403,39 @@ class FetidpSolver : public BaseSolver {
         //     printf("\n");
         // }
 
+        // // check relative residual here.. (DEBUG)
+        // int Nc = Vc_nnodes * block_dim;
+        // T init_norm;
+        // CHECK_CUBLAS(cublasDnrm2(cublasHandle, Nc, f_V.getPtr(), 1, &init_norm));
+        // f_V.copyValuesTo(temp_V);
+
+        // main solve (not DEBUG)
         solveCoarse(f_V, u_V);
+
+        // // continue check relative residual
+        // sparseMatVec(*S_VV, u_V, -1.0, 1.0, temp_V);
+        // T fin_norm;
+        // CHECK_CUBLAS(cublasDnrm2(cublasHandle, Nc, temp_V.getPtr(), 1, &fin_norm));
+        // T rel_nrm = fin_norm / init_norm;
+        // printf("get_lam_rhs norms (init %.4e => fin %.4e, rel = %.4e)\n", init_norm, fin_norm,
+        //        rel_nrm);
+        // T *h_fv = f_V.createHostVec().getPtr();
+        // T *h_residv = temp_V.createHostVec().getPtr();
+        // printf("h_fv:\n");
+        // for (int ivc = 0; ivc < Vc_nnodes; ivc++) {
+        //     int iglob = Vc_nodes[ivc];
+        //     printf("f_V[ivc %d, glob node %d]: ", ivc, iglob);
+        //     for (int idof = 0; idof < block_dim; idof++) {
+        //         int vc_dof = block_dim * ivc + idof;
+        //         printf("%.6e,", h_fv[vc_dof]);
+        //     }
+        //     printf("resid_V[ivc %d, glob node %d]: ", ivc, iglob);
+        //     for (int idof = 0; idof < block_dim; idof++) {
+        //         int vc_dof = block_dim * ivc + idof;
+        //         printf("%.6e,", h_residv[vc_dof]);
+        //     }
+        //     printf("\n");
+        // }
 
         // T *h_uc = u_V.createHostVec().getPtr();
         // printf("h_uc:\n");
@@ -6380,6 +6699,266 @@ class FetidpSolver : public BaseSolver {
         }
     }
 
+    void debug_multilevel_SVV_matrix(const int *coarse_IEV_nodes, const int *coarse_IEV_sd_ptr,
+                                     const int *coarse_IEV_sd_ind, const int *coarse_elem_sd_ind) {
+        // ============================================================
+        // Regular S_VV matrix
+        // ============================================================
+        auto h_Svv_vec = S_VV->getVec().createHostVec();
+        T *h_Svv_vals = h_Svv_vec.getPtr();
+        int Svv_nvals = h_Svv_vec.getSize();
+
+        auto SVV_bsr_data = S_VV->getBsrData();
+
+        auto h_SVV_rowp_vec = DeviceVec<int>(Vc_nnodes + 1, SVV_bsr_data.rowp).createHostVec();
+        auto h_SVV_rows_vec = DeviceVec<int>(Svv_nnzb, SVV_bsr_data.rows).createHostVec();
+        auto h_SVV_cols_vec = DeviceVec<int>(Svv_nnzb, SVV_bsr_data.cols).createHostVec();
+
+        int *h_SVV_rowp = h_SVV_rowp_vec.getPtr();
+        int *h_SVV_rows = h_SVV_rows_vec.getPtr();
+        int *h_SVV_cols = h_SVV_cols_vec.getPtr();
+
+        // ============================================================
+        // Multilevel IEV S_VV matrix
+        // ============================================================
+        auto h_Svv_MLIEV_vec = S_VV_MLIEV->getVec().createHostVec();
+        T *h_Svv_MLIEV_vals = h_Svv_MLIEV_vec.getPtr();
+        int Svv_MLIEV_nvals = h_Svv_MLIEV_vec.getSize();
+
+        auto SVV_MLIEV_bsr_data = S_VV_MLIEV->getBsrData();
+
+        auto h_SVV_MLIEV_rowp_vec =
+            DeviceVec<int>(coarse_IEV_nnodes + 1, SVV_MLIEV_bsr_data.rowp).createHostVec();
+        auto h_SVV_MLIEV_rows_vec =
+            DeviceVec<int>(Svv_MLIEV_nnzb, SVV_MLIEV_bsr_data.rows).createHostVec();
+        auto h_SVV_MLIEV_cols_vec =
+            DeviceVec<int>(Svv_MLIEV_nnzb, SVV_MLIEV_bsr_data.cols).createHostVec();
+
+        int *h_SVV_MLIEV_rowp = h_SVV_MLIEV_rowp_vec.getPtr();
+        int *h_SVV_MLIEV_rows = h_SVV_MLIEV_rows_vec.getPtr();
+        int *h_SVV_MLIEV_cols = h_SVV_MLIEV_cols_vec.getPtr();
+
+        printf("\nSVV sizes:\n");
+        printf("  regular: nnzb %d, nvals %d\n", Svv_nnzb, Svv_nvals);
+        printf("  MLIEV:   nnzb %d, nvals %d\n", Svv_MLIEV_nnzb, Svv_MLIEV_nvals);
+
+        // ============================================================
+        // Accumulate MLIEV blocks into the regular S_VV pattern
+        // ============================================================
+        auto h_Svv_vals2_vec = HostVec<T>(Svv_nvals);
+        T *h_Svv_vals2 = h_Svv_vals2_vec.getPtr();
+
+        // Do not assume HostVec initializes its memory.
+        for (int i = 0; i < Svv_nvals; i++) {
+            h_Svv_vals2[i] = T(0.0);
+        }
+
+        int missing_regular_blocks = 0;
+
+        for (int ciev_row = 0; ciev_row < coarse_IEV_nnodes; ciev_row++) {
+            int c_row = coarse_IEV_nodes[ciev_row];
+
+            for (int ciev_ptr = h_SVV_MLIEV_rowp[ciev_row];
+                 ciev_ptr < h_SVV_MLIEV_rowp[ciev_row + 1]; ciev_ptr++) {
+                int ciev_col = h_SVV_MLIEV_cols[ciev_ptr];
+                int c_col = coarse_IEV_nodes[ciev_col];
+
+                int matching_c_ptr = -1;
+
+                for (int c_ptr = h_SVV_rowp[c_row]; c_ptr < h_SVV_rowp[c_row + 1]; c_ptr++) {
+                    if (h_SVV_cols[c_ptr] == c_col) {
+                        matching_c_ptr = c_ptr;
+                        break;
+                    }
+                }
+
+                if (matching_c_ptr < 0) {
+                    int grow = Vc_nodes[c_row];
+                    int gcol = Vc_nodes[c_col];
+
+                    printf(
+                        "ERROR: MLIEV block %d maps to missing regular block "
+                        "(Vc row %d, col %d), global nodes (%d,%d)\n",
+                        ciev_ptr, c_row, c_col, grow, gcol);
+
+                    missing_regular_blocks++;
+                    continue;
+                }
+
+                for (int jj = 0; jj < block_dim2; jj++) {
+                    h_Svv_vals2[block_dim2 * matching_c_ptr + jj] +=
+                        h_Svv_MLIEV_vals[block_dim2 * ciev_ptr + jj];
+                }
+            }
+        }
+
+        // ============================================================
+        // Compare every regular node block
+        // ============================================================
+        const T abs_tol = T(1e-10);
+        const T rel_tol = T(1e-8);
+
+        int matching_blocks = 0;
+        int mismatching_blocks = 0;
+        int mismatching_values = 0;
+
+        T global_max_abs_val = T(0.0);
+        T global_max_abs_diff = T(0.0);
+        T global_max_rel_diff = T(0.0);
+
+        printf("\n============================================================\n");
+        printf("S_VV BLOCK-BY-BLOCK COMPARISON\n");
+        printf("============================================================\n");
+
+        for (int iblock = 0; iblock < Svv_nnzb; iblock++) {
+            int row = h_SVV_rows[iblock];
+            int col = h_SVV_cols[iblock];
+
+            int grow = Vc_nodes[row];
+            int gcol = Vc_nodes[col];
+
+            T *SVV_block = &h_Svv_vals[block_dim2 * iblock];
+            T *SVV_reduced_block = &h_Svv_vals2[block_dim2 * iblock];
+
+            T block_max_abs_val = T(0.0);
+            T block_max_abs_diff = T(0.0);
+            int block_mismatches = 0;
+
+            for (int jj = 0; jj < block_dim2; jj++) {
+                T val1 = SVV_block[jj];
+                T val2 = SVV_reduced_block[jj];
+
+                T abs_diff = std::abs(val1 - val2);
+                block_max_abs_val =
+                    std::max(block_max_abs_val, std::max(std::abs(val1), std::abs(val2)));
+                T scale = std::max(std::abs(val1), std::abs(val2));
+                T rel_diff = (scale > T(0.0)) ? abs_diff / scale : T(0.0);
+
+                block_max_abs_diff = std::max(block_max_abs_diff, abs_diff);
+                // block_max_rel_diff = std::max(block_max_rel_diff, rel_diff);
+
+                // if (abs_diff > abs_tol + rel_tol * scale) {
+                //     block_mismatches++;
+                //     mismatching_values++;
+                // }
+            }
+
+            T block_rel_diff = (block_max_abs_val > T(0.0)) ? block_max_abs_diff / block_max_abs_val
+                                                            : block_max_abs_diff;
+            bool block_matches = block_rel_diff <= rel_tol || block_max_abs_diff <= abs_tol;
+            if (block_matches) {
+                matching_blocks++;
+            } else {
+                mismatching_blocks++;
+                mismatching_values += block_dim2;
+            }
+
+            printf("\n------------------------------------------------------------\n");
+            printf("Regular block %d\n", iblock);
+            printf("  Vc indices:   (%d,%d)\n", row, col);
+            printf("  Global nodes: (%d,%d)\n", grow, gcol);
+            printf("  Result:       %s\n", block_matches ? "MATCH" : "MISMATCH");
+            printf("  Max abs diff: %.6e\n", static_cast<double>(block_max_abs_diff));
+            printf("  Max rel diff: %.6e\n", static_cast<double>(block_rel_diff));
+
+            // Print every MLIEV block contributing to this regular block.
+            int num_contributors = 0;
+
+            printf("\n  Contributing S_VV_MLIEV blocks:\n");
+
+            for (int ciev_row = 0; ciev_row < coarse_IEV_nnodes; ciev_row++) {
+                if (coarse_IEV_nodes[ciev_row] != row) {
+                    continue;
+                }
+
+                for (int ciev_ptr = h_SVV_MLIEV_rowp[ciev_row];
+                     ciev_ptr < h_SVV_MLIEV_rowp[ciev_row + 1]; ciev_ptr++) {
+                    int ciev_col = h_SVV_MLIEV_cols[ciev_ptr];
+
+                    if (coarse_IEV_nodes[ciev_col] != col) {
+                        continue;
+                    }
+
+                    num_contributors++;
+
+                    printf("    MLIEV block %d, coarse IEV nodes (%d,%d):\n", ciev_ptr, ciev_row,
+                           ciev_col);
+
+                    T *MLIEV_block = &h_Svv_MLIEV_vals[block_dim2 * ciev_ptr];
+
+                    for (int iy = 0; iy < block_dim; iy++) {
+                        printf("      ");
+
+                        for (int ix = 0; ix < block_dim; ix++) {
+                            int jj = block_dim * iy + ix;
+                            printf("% .6e,", static_cast<double>(MLIEV_block[jj]));
+                        }
+
+                        printf("\n");
+                    }
+                }
+            }
+
+            if (num_contributors == 0) {
+                printf("    NONE\n");
+            }
+
+            printf("\n  Original h_Svv_vals block:\n");
+            for (int iy = 0; iy < block_dim; iy++) {
+                printf("    ");
+
+                for (int ix = 0; ix < block_dim; ix++) {
+                    int jj = block_dim * iy + ix;
+                    printf("% .6e,", static_cast<double>(SVV_block[jj]));
+                }
+
+                printf("\n");
+            }
+
+            printf("\n  Reduced h_Svv_vals2 block:\n");
+            for (int iy = 0; iy < block_dim; iy++) {
+                printf("    ");
+
+                for (int ix = 0; ix < block_dim; ix++) {
+                    int jj = block_dim * iy + ix;
+                    printf("% .6e,", static_cast<double>(SVV_reduced_block[jj]));
+                }
+
+                printf("\n");
+            }
+
+            printf("\n  Difference (h_Svv_vals - h_Svv_vals2):\n");
+            for (int iy = 0; iy < block_dim; iy++) {
+                printf("    ");
+
+                for (int ix = 0; ix < block_dim; ix++) {
+                    int jj = block_dim * iy + ix;
+                    T diff = SVV_block[jj] - SVV_reduced_block[jj];
+
+                    printf("% .6e,", static_cast<double>(diff));
+                }
+
+                printf("\n");
+            }
+        }
+
+        // ============================================================
+        // Final summary
+        // ============================================================
+        printf("\n============================================================\n");
+        printf("S_VV COMPARISON SUMMARY\n");
+        printf("============================================================\n");
+        printf("Matching blocks:         %d / %d\n", matching_blocks, Svv_nnzb);
+        printf("Mismatching blocks:      %d / %d\n", mismatching_blocks, Svv_nnzb);
+        printf("Mismatching values:      %d / %d\n", mismatching_values, Svv_nvals);
+        printf("Missing regular blocks:  %d\n", missing_regular_blocks);
+        printf("Global max abs diff:     %.6e\n", static_cast<double>(global_max_abs_diff));
+        printf("Global max rel diff:     %.6e\n", static_cast<double>(global_max_rel_diff));
+        printf("Overall result:          %s\n",
+               mismatching_blocks == 0 && missing_regular_blocks == 0 ? "MATCH" : "MISMATCH");
+        printf("============================================================\n");
+    }
+
    protected:
     void clear_host_data() { clear_structured_host_data(); }
 
@@ -6525,12 +7104,16 @@ class FetidpSolver : public BaseSolver {
         // copy Avv part from kmat_IEV to Svv
         // note need Svv_copy_nnzb (not Svv_nnzb) cause Vc are duplicate nodes in IEV
         // multiple blocks copied into the same node in S_VV
+
+        // test_IEV_vecs("copyKmat_IEVtoSvv=>checkpt1\n");
+        // printf("Svv_copy_nnzb = %d\n", Svv_copy_nnzb);
         int n_Svv_vals = Svv_copy_nnzb * block_dim2;
         dim3 block(32), grid((n_Svv_vals + 31) / 32);
         k_copyMatToMat_restrict<T, true><<<grid, block>>>(Svv_copy_nnzb, block_dim,
                                                           d_Svv_IEV_copyBlocks, d_Svv_Vc_copyBlocks,
                                                           d_IEV_vals.getPtr(), d_Svv_vals.getPtr());
 
+        // test_IEV_vecs("copyKmat_IEVtoSvv=>checkpt2\n");
         // for 3+ BDDC levels, also copy the Avv part into S_VV_MLIEV
         bool MLIEV_isnot_null = S_VV_MLIEV != nullptr;
         // printf("MLIEV_isnot_null %d\n", MLIEV_isnot_null);
@@ -6542,12 +7125,14 @@ class FetidpSolver : public BaseSolver {
             dim3 block2(32), grid2((n_Svv_MLIEV_vals + 31) / 32);
 
             k_copyMatToMat_restrict<T, true><<<grid2, block2>>>(
-                Svv_MLIEV_copy_nnzb, block_dim, d_Svv_IEV_copyBlocks, d_Svv_Vc_copyBlocks,
-                d_IEV_vals.getPtr(), d_Svv_MLIEV_vals.getPtr());
+                Svv_MLIEV_copy_nnzb, block_dim, d_Svv_MLIEV_IEV_copyBlocks,
+                d_Svv_MLIEV_Vc_copyBlocks, d_IEV_vals.getPtr(), d_Svv_MLIEV_vals.getPtr());
 
             CHECK_CUDA(cudaDeviceSynchronize());
             printf("\tdone with copyKmatIEV to MLIEV\n");
         }
+
+        // test_IEV_vecs("copyKmat_IEVtoSvv=>checkpt3\n");
     }
 
     void printNodeVec(int nnodes, T *vec) {
@@ -6730,6 +7315,26 @@ class FetidpSolver : public BaseSolver {
     //     }
     // }
 
+    void test_IEV_vecs(const std::string &str) {
+        CHECK_CUDA(cudaDeviceSynchronize());
+        // debug routine.. for multilevel BDDC
+        printf("test_IEV_vecs: %s", str.c_str());
+        for (int block_col = 0; block_col < MAX_NUM_VERTEX_PER_SUBDOMAIN; block_col++) {
+            int set_nnzb = IEVtoSVV_nnzb[block_col];
+            int *d_iev_blocks = d_IEVout_blocks[block_col];
+            std::vector<int> h_dbg_iev(set_nnzb);
+            CHECK_CUDA(cudaMemcpy(h_dbg_iev.data(), d_iev_blocks, set_nnzb * sizeof(int),
+                                  cudaMemcpyDeviceToHost));
+            for (int i = 0; i < set_nnzb; i++) {
+                if (h_dbg_iev[i] < 0 || h_dbg_iev[i] >= IEV_nnodes) {
+                    printf("ERROR: regular iev block invalid at slot %d, i %d: %d not in [0,%d)\n",
+                           block_col, i, h_dbg_iev[i], IEV_nnodes);
+                    exit(-1);
+                }
+            }
+        }
+    }
+
     void addMat_IEVtoV_vals(const int icol, DeviceVec<T> hvec) {
         // printf("addMat_IEVtoV_vals ENTER icol %d\n", icol);
 
@@ -6789,58 +7394,60 @@ class FetidpSolver : public BaseSolver {
         // -----------------------------------------
         if (S_VV_MLIEV != nullptr) {
             CHECK_CUDA(cudaDeviceSynchronize());
-            printf("addMat_IEVtoV_vals: MLIEV part icol %d\n", icol);
+            // printf("addMat_IEVtoV_vals: MLIEV part icol %d\n", icol);
 
             int ML_block_col = icol / block_dim;
             int ML_set_nnzb = ML_IEVtoSVV_nnzb[ML_block_col];
             int *d_ML_svv_blocks = d_ML_IEVtoSVV_blocks[ML_block_col];
             int *d_ML_iev_blocks = d_ML_IEVout_blocks[ML_block_col];
 
-            printf("  ML_block_col %d, ML_set_nnzb %d, d_ML_iev_blocks %p, d_ML_svv_blocks %p\n",
-                   ML_block_col, ML_set_nnzb, (void *)d_ML_iev_blocks, (void *)d_ML_svv_blocks);
+            // printf("  ML_block_col %d, ML_set_nnzb %d, d_ML_iev_blocks %p, d_ML_svv_blocks %p\n",
+            //        ML_block_col, ML_set_nnzb, (void *)d_ML_iev_blocks, (void *)d_ML_svv_blocks);
 
             if (ML_set_nnzb > 0) {
-                std::vector<int> h_dbg_iev(ML_set_nnzb);
-                std::vector<int> h_dbg_svv(ML_set_nnzb);
+                //     std::vector<int> h_dbg_iev(ML_set_nnzb);
+                //     std::vector<int> h_dbg_svv(ML_set_nnzb);
 
-                CHECK_CUDA(cudaMemcpy(h_dbg_iev.data(), d_ML_iev_blocks, ML_set_nnzb * sizeof(int),
-                                      cudaMemcpyDeviceToHost));
-                CHECK_CUDA(cudaMemcpy(h_dbg_svv.data(), d_ML_svv_blocks, ML_set_nnzb * sizeof(int),
-                                      cudaMemcpyDeviceToHost));
+                //     CHECK_CUDA(cudaMemcpy(h_dbg_iev.data(), d_ML_iev_blocks, ML_set_nnzb *
+                //     sizeof(int),
+                //                           cudaMemcpyDeviceToHost));
+                //     CHECK_CUDA(cudaMemcpy(h_dbg_svv.data(), d_ML_svv_blocks, ML_set_nnzb *
+                //     sizeof(int),
+                //                           cudaMemcpyDeviceToHost));
 
-                for (int i = 0; i < ML_set_nnzb; i++) {
-                    if (h_dbg_iev[i] < 0 || h_dbg_iev[i] >= IEV_nnodes) {
-                        printf(
-                            "ERROR: device ML iev block invalid at slot %d, i %d: %d not in "
-                            "[0,%d)\n",
-                            ML_block_col, i, h_dbg_iev[i], IEV_nnodes);
-                        exit(-1);
-                    }
-                    if (h_dbg_svv[i] < 0 || h_dbg_svv[i] >= Svv_MLIEV_nnzb) {
-                        printf(
-                            "ERROR: device ML svv block invalid at slot %d, i %d: %d not in "
-                            "[0,%d)\n",
-                            ML_block_col, i, h_dbg_svv[i], Svv_MLIEV_nnzb);
-                        exit(-1);
-                    }
-                }
+                //     for (int i = 0; i < ML_set_nnzb; i++) {
+                //         if (h_dbg_iev[i] < 0 || h_dbg_iev[i] >= IEV_nnodes) {
+                //             printf(
+                //                 "ERROR: device ML iev block invalid at slot %d, i %d: %d not in "
+                //                 "[0,%d)\n",
+                //                 ML_block_col, i, h_dbg_iev[i], IEV_nnodes);
+                //             exit(-1);
+                //         }
+                //         if (h_dbg_svv[i] < 0 || h_dbg_svv[i] >= Svv_MLIEV_nnzb) {
+                //             printf(
+                //                 "ERROR: device ML svv block invalid at slot %d, i %d: %d not in "
+                //                 "[0,%d)\n",
+                //                 ML_block_col, i, h_dbg_svv[i], Svv_MLIEV_nnzb);
+                //             exit(-1);
+                //         }
+                //     }
 
-                printf("  first few ML device blocks for slot %d:\n", ML_block_col);
-                for (int i = 0; i < ML_set_nnzb && i < 12; i++) {
-                    printf("    i %d: iev %d, svv %d\n", i, h_dbg_iev[i], h_dbg_svv[i]);
-                }
+                //     printf("  first few ML device blocks for slot %d:\n", ML_block_col);
+                //     for (int i = 0; i < ML_set_nnzb && i < 12; i++) {
+                //         printf("    i %d: iev %d, svv %d\n", i, h_dbg_iev[i], h_dbg_svv[i]);
+                //     }
+
+                dim3 ML_grid((ML_set_nnzb * block_dim + 31) / 32);
+                // printf("  launching ML k_addMat_IEVtoV_vals, grid.x %d block.x %d\n",
+                //        (int)ML_grid.x, (int)block.x);
+
+                k_addMat_IEVtoV_vals<T>
+                    <<<ML_grid, block>>>(ML_set_nnzb, block_dim, icol, d_ML_iev_blocks,
+                                         d_ML_svv_blocks, hvec.getPtr(), d_Svv_MLIEV_vals.getPtr());
+
+                CHECK_CUDA(cudaDeviceSynchronize());
+                // printf("\tdone with addMat_IEVtoV_vals: MLIEV part icol %d\n", icol);
             }
-
-            dim3 ML_grid((ML_set_nnzb * block_dim + 31) / 32);
-            printf("  launching ML k_addMat_IEVtoV_vals, grid.x %d block.x %d\n", (int)ML_grid.x,
-                   (int)block.x);
-
-            k_addMat_IEVtoV_vals<T><<<ML_grid, block>>>(ML_set_nnzb, block_dim, icol,
-                                                        d_ML_iev_blocks, d_ML_svv_blocks,
-                                                        hvec.getPtr(), d_Svv_MLIEV_vals.getPtr());
-
-            CHECK_CUDA(cudaDeviceSynchronize());
-            printf("\tdone with addMat_IEVtoV_vals: MLIEV part icol %d\n", icol);
         }
 
         // printf("addMat_IEVtoV_vals EXIT icol %d\n", icol);
@@ -6932,7 +7539,7 @@ class FetidpSolver : public BaseSolver {
             <<<grid, block>>>(I_nnodes, block_dim, d_IEVtoI_imap, x.getPtr(), y.getPtr(), a);
     }
 
-    template <bool scaled = false>
+    template <bool scaled = false, bool multilevel = false>
     void addVecIEVtoVc(const DeviceVec<T> &x, DeviceVec<T> &y, T a, T b) {
         // gather/scatter assembled primal V entries from IEV into Vc (coarse vertex,
         // non-repeated) map(a * x) + b * y => y
@@ -6947,6 +7554,204 @@ class FetidpSolver : public BaseSolver {
             dim3 block(32), grid((Vc_nvals + 31) / 32);
             k_subdomain_normalize_vec_inout<T>
                 <<<grid, block>>>(this->Vc_nnodes, this->block_dim, this->d_vertex_nsd, y.getPtr());
+        }
+
+        // call method to send IEV nodes to an IEV version of coarse nodes for multilevel BDDC
+        // the reason multilevel bool and the S_VV_MLIEV are both checked is we need S_VV_MLIEV !=
+        // nullptr, but we don't pass down to coarse IEV form of Vc for every IEVtoVc call.. only
+        // ones near coarseSolver
+        if (S_VV_MLIEV != nullptr && multilevel) {
+            f_ML_coarseIEV.zeroValues();
+            int nvals2 = V_nnodes * block_dim;
+            dim3 block(32), grid((nvals2 + 31) / 32);
+            T a2 = 1.0;
+            // CHECK_CUDA(cudaDeviceSynchronize());
+            // printf("addVecIEVtoVc part 1\n");
+
+            k_addVec_IEVtoVc<T><<<grid, block>>>(V_nnodes, block_dim, d_IEVtoV_imap,
+                                                 d_MLIEVtoV_imap, x.getPtr(),
+                                                 f_ML_coarseIEV.getPtr(), a2);
+            // CHECK_CUDA(cudaDeviceSynchronize());
+            // printf("addVecIEVtoVc part 2\n");
+
+            // how to do this part?
+            if constexpr (scaled) {
+                int MLVc_nvals = coarse_IEV_nnodes * block_dim;
+                dim3 block(32), grid((MLVc_nvals + 31) / 32);
+                k_subdomain_normalize_vec_inout<T>
+                    <<<grid, block>>>(this->coarse_IEV_nnodes, this->block_dim,
+                                      this->d_ML_vertex_nsd, f_ML_coarseIEV.getPtr());
+
+                // CHECK_CUDA(cudaDeviceSynchronize());
+                // printf("addVecIEVtoVc part 3\n");
+            }
+
+            // now pass to the inner coarse solver
+            // try negating it?
+            // T a3 = -a;
+            // T b2 = -b;
+            coarseSolver->add_res_IEV(a, b, f_ML_coarseIEV);
+            // CHECK_CUDA(cudaDeviceSynchronize());
+            // printf("addVecIEVtoVc part 4\n");
+        }
+
+        // Debug the f_V regular and IEV forms
+        // bool _debug = true;
+        bool _debug = false;
+        if (S_VV_MLIEV != nullptr && multilevel && _debug) {
+            coarseSolver->get_res_IEV(f_ML_coarseIEV);
+
+            int Nc = Vc_nnodes * block_dim;
+            int Nc_iev = coarse_IEV_nnodes * block_dim;
+
+            // Keep host-vector owners alive.
+            auto h_fV_vec = y.createHostVec();
+            auto h_iev_fV_vec = f_ML_coarseIEV.createHostVec();
+            auto h_fV2_vec = HostVec<T>(Nc);
+
+            T *h_fV = h_fV_vec.getPtr();
+            T *h_iev_fV = h_iev_fV_vec.getPtr();
+            T *h_fV2 = h_fV2_vec.getPtr();
+
+            // Do not assume HostVec initializes its values.
+            for (int i = 0; i < Nc; i++) {
+                h_fV2[i] = T(0.0);
+            }
+
+            // Add IEV f_V values into the regular Vc-node ordering.
+            for (int c_iev = 0; c_iev < coarse_IEV_nnodes; c_iev++) {
+                int c = _coarse_IEV_nodes[c_iev];
+
+                if (c < 0 || c >= Vc_nnodes) {
+                    printf("ERROR: _coarse_IEV_nodes[%d] = %d, expected [0,%d)\n", c_iev, c,
+                           Vc_nnodes);
+                    continue;
+                }
+
+                for (int jj = 0; jj < block_dim; jj++) {
+                    h_fV2[block_dim * c + jj] += h_iev_fV[block_dim * c_iev + jj];
+                }
+            }
+
+            const T abs_tol = T(1e-10);
+            const T rel_tol = T(1e-8);
+
+            int matching_nodes = 0;
+            int mismatching_nodes = 0;
+            int mismatching_values = 0;
+
+            T global_max_abs_diff = T(0.0);
+            T global_max_block_rel_diff = T(0.0);
+
+            printf("\n============================================================\n");
+            printf("f_V REGULAR vs IEV-REDUCED COMPARISON\n");
+            printf("============================================================\n");
+            printf("Regular size: %d\n", Nc);
+            printf("IEV size:     %d\n", Nc_iev);
+
+            for (int c = 0; c < Vc_nnodes; c++) {
+                int iglob = Vc_nodes[c];
+
+                T block_max_abs_value = T(0.0);
+                T block_max_abs_diff = T(0.0);
+
+                for (int jj = 0; jj < block_dim; jj++) {
+                    int idof = block_dim * c + jj;
+
+                    T val1 = h_fV[idof];
+                    T val2 = h_fV2[idof];
+                    T abs_diff = std::abs(val1 - val2);
+
+                    block_max_abs_value = std::max(block_max_abs_value, std::abs(val1));
+                    block_max_abs_value = std::max(block_max_abs_value, std::abs(val2));
+                    block_max_abs_diff = std::max(block_max_abs_diff, abs_diff);
+                }
+
+                T block_rel_diff = (block_max_abs_value > T(0.0))
+                                       ? block_max_abs_diff / block_max_abs_value
+                                       : block_max_abs_diff;
+
+                bool block_matches = block_max_abs_diff <= abs_tol || block_rel_diff <= rel_tol;
+
+                if (block_matches) {
+                    matching_nodes++;
+                } else {
+                    mismatching_nodes++;
+                }
+
+                global_max_abs_diff = std::max(global_max_abs_diff, block_max_abs_diff);
+                global_max_block_rel_diff = std::max(global_max_block_rel_diff, block_rel_diff);
+
+                printf("\n------------------------------------------------------------\n");
+                printf("Vc node %d, global node %d\n", c, iglob);
+                printf("Result:              %s\n", block_matches ? "MATCH" : "MISMATCH");
+                printf("Max block magnitude: %.6e\n", static_cast<double>(block_max_abs_value));
+                printf("Max abs error:       %.6e\n", static_cast<double>(block_max_abs_diff));
+                printf("Block rel error:     %.6e\n", static_cast<double>(block_rel_diff));
+
+                printf("Regular f_V:         ");
+                for (int jj = 0; jj < block_dim; jj++) {
+                    int idof = block_dim * c + jj;
+                    printf("% .6e, ", static_cast<double>(h_fV[idof]));
+                }
+                printf("\n");
+
+                printf("IEV-reduced f_V2:    ");
+                for (int jj = 0; jj < block_dim; jj++) {
+                    int idof = block_dim * c + jj;
+                    printf("% .6e, ", static_cast<double>(h_fV2[idof]));
+                }
+                printf("\n");
+
+                printf("Difference:          ");
+                for (int jj = 0; jj < block_dim; jj++) {
+                    int idof = block_dim * c + jj;
+                    T diff = h_fV[idof] - h_fV2[idof];
+
+                    printf("% .6e, ", static_cast<double>(diff));
+
+                    // Use the whole node-block magnitude as the scale.
+                    if (std::abs(diff) > abs_tol + rel_tol * block_max_abs_value) {
+                        mismatching_values++;
+                    }
+                }
+                printf("\n");
+
+                // Print the individual IEV node blocks contributing here.
+                printf("IEV contributors:\n");
+                int num_contributors = 0;
+
+                for (int c_iev = 0; c_iev < coarse_IEV_nnodes; c_iev++) {
+                    if (_coarse_IEV_nodes[c_iev] != c) {
+                        continue;
+                    }
+
+                    num_contributors++;
+
+                    printf("  coarse IEV node %d: ", c_iev);
+                    for (int jj = 0; jj < block_dim; jj++) {
+                        int idof = block_dim * c_iev + jj;
+                        printf("% .6e, ", static_cast<double>(h_iev_fV[idof]));
+                    }
+                    printf("\n");
+                }
+
+                if (num_contributors == 0) {
+                    printf("  NONE\n");
+                }
+            }
+
+            printf("\n============================================================\n");
+            printf("f_V COMPARISON SUMMARY\n");
+            printf("============================================================\n");
+            printf("Matching node blocks:    %d / %d\n", matching_nodes, Vc_nnodes);
+            printf("Mismatching node blocks: %d / %d\n", mismatching_nodes, Vc_nnodes);
+            printf("Mismatching values:      %d / %d\n", mismatching_values, Nc);
+            printf("Global max abs error:    %.6e\n", static_cast<double>(global_max_abs_diff));
+            printf("Max node-block rel err:  %.6e\n",
+                   static_cast<double>(global_max_block_rel_diff));
+            printf("Overall result:          %s\n", mismatching_nodes == 0 ? "MATCH" : "MISMATCH");
+            printf("============================================================\n");
         }
     }
 
@@ -7403,7 +8208,8 @@ class FetidpSolver : public BaseSolver {
     cublasHandle_t &cublasHandle;
     cusparseHandle_t &cusparseHandle;
 
-    BaseSolver *subdomainISolver, *subdomainIESolver, *coarseSolver;
+    BaseSolver *subdomainISolver, *subdomainIESolver;  //, *coarseSolver;
+    CoarseSolver *coarseSolver;
 
     int *elem_sd_ind, *elem_conn;
     int node_elem_nnz;
@@ -7490,6 +8296,12 @@ class FetidpSolver : public BaseSolver {
     // int **d_IEVtoV_blocks;  // length 4, each entry is device ptr to block list
     // int *IEVtoSVV_nnzb;       // length 4
     // int **d_IEVtoSVV_blocks;  // length 4, each entry is device ptr to block list
+
+    int *d_MLIEVtoV_imap, *MLIEVtoV_imap;
+    int coarse_IEV_nnodes;
+    DeviceVec<T> f_ML_coarseIEV;
+    int *_coarse_IEV_nodes;  // helper
+    int *d_ML_vertex_nsd, *ML_vertex_nsd;
 
     int block_dim, block_dim2;
     Vec d_IEV_vals, d_IE_vals, d_I_vals;

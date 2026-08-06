@@ -101,26 +101,28 @@ int main(int argc, char **argv) {
     // using Basis = LagrangeQuadBasis<T, Quad, 2>;
 
     using Assembler = MITCShellAssembler<T, Director, Basis, Physics, VecType, BsrMat>;
-    using BDDC = BddcSolver<T, Assembler, VecType, BsrMat>;
-    using CoarseBDDC = CoarseBddcSolver<T, Assembler, VecType, BsrMat>;
     using InnerSolver = CusparseMGDirectLU<T, Assembler>;
     using InnerSolver_JUSTLU = CusparseMGDirectLU<T, Assembler, true>;
     using DUMMY = InnerSolver;
     using GRID = SingleGrid<Assembler, DUMMY, DUMMY, NONE>; // GRID class largely unused
     using KIPCG = PCGSolver<T, GRID>;
-    using GamPCG = MatrixFreePCGSolver<T, BDDC>; // BDDC is the operator and preconditioner
-    using CoarseGamPCG = MatrixFreePCGSolver<T, CoarseBDDC>; // BDDC is the operator and preconditioner
     
+    using CoarseBDDC = CoarseBddcSolver<T, Assembler, VecType, BsrMat, InnerSolver_JUSTLU>;
+    using CoarseGamPCG = MatrixFreePCGSolver<T, CoarseBDDC>; // BDDC is the operator and preconditioner
+
     using CoarseBDDCWrapper = DomDecKrylovWrapper<T, CoarseBDDC, CoarseGamPCG>;
+    using BDDC = BddcSolver<T, Assembler, VecType, BsrMat, CoarseBDDCWrapper>;
+    using GamPCG = MatrixFreePCGSolver<T, BDDC>; // BDDC is the operator and preconditioner
 
 
     // can't run this small a problem (1 vertex with S_VV coarse solver for some reason)
-    // int nxe = 4, nxe_subdomain_size = 2;
-    int nxe = 12, nxe_subdomain_size = 2;
-    // int nxe = 128, nxe_subdomain_size = 4; // this problem has optimal runtime for 4x4 subdomains
-    // int nxe = 128, nxe_subdomain_size = 8;
-    // int nxe = 256, nxe_subdomain_size = 8; // 8 subdomains slightly faster (cause shrinks coarse problem) for local + HPC
-    // NOTE : full fillin with fill_level = -1, but lower fill results in less ILU(k) factor time
+    
+    // int nxe = 12, nxe_subdomain_size = 2; // DEBUG case for development
+    int nxe = 64, nxe_subdomain_size = 4; // medium case
+
+    // number of inner coarseGamPCG iterations (an important hyperparameter)
+    int ninner = 5;
+
     // for the coarse problem..
     T omega;
     int nsmooth, fill_level;
@@ -202,6 +204,13 @@ int main(int argc, char **argv) {
                 std::cerr << "Missing value for --nsmooth\n";
                 return 1;
             }
+        } else if (strcmp(arg, "--ninner") == 0) {
+            if (i + 1 < argc) {
+                ninner = std::atoi(argv[++i]);
+            } else {
+                std::cerr << "Missing value for --nsmooth\n";
+                return 1;
+            }
         } else {
             std::cerr << "Unknown argument: " << argv[i] << std::endl;
             std::cerr << "Usage: " << argv[0] << " [direct/krylov] [--nxe value] [--SR value] [--nsmooth int]" << std::endl;
@@ -262,8 +271,8 @@ int main(int argc, char **argv) {
     bool close_hoop = true; // true for cylinder case (not cylindrical panel)
 
     // 2x2 subdomains on coarse BDDC problem
-    int nxs2 = nxs / 2; // num subdomains in x-direction (2x fewer on coarse problem)
-    int nys2 = nys / 2;
+    int nxs2 = nxs / nxe_subdomain_size;
+    int nys2 = nys / nxe_subdomain_size;
     int coarse_num_elements, coarse_num_nodes, coarse_elem_nnz;
     int *coarse_elem_ptr, *coarse_elem_conn, *coarse_elem_sd_ind;
     printf("setup coarse structured subdomains\n");
@@ -323,14 +332,16 @@ int main(int argc, char **argv) {
 
     // also build the new K_II Krylov solver (subdomain parallel + needed for set rhs and soln recovery)
     SolverOptions ki_opts;
-    ki_opts.ncycles = 50;
+    ki_opts.ncycles = ninner;
+    // ki_opts.ncycles = 50;
     // opts.ncycles = 500;
-    ki_opts.print = true;
+    // ki_opts.print = true;
     ki_opts.print = false;
     ki_opts.print_freq = 5;
-    ki_opts.debug = true;
-    // ki_opts.rtol = 1e-4;
-    ki_opts.rtol = 1e-6;
+    // ki_opts.debug = true;
+    ki_opts.debug = false;
+    ki_opts.rtol = 1e-4;
+    // ki_opts.rtol = 1e-6;
     ki_opts.atol = 1e-30;
     // coarse solver is matrix-free Krylov with CoarseBDDC preconditioner
     auto v_krylov =
@@ -350,6 +361,7 @@ int main(int argc, char **argv) {
     auto S_VV_MLIEV = c_bddc->getKmatIEV();
     printf("setup multilevel coarse matrix sparsity\n");
     bddc->setup_MLIEV_coarse_matrix_sparsity(S_VV_MLIEV, coarse_IEV_nodes, coarse_IEV_sd_ptr, coarse_IEV_sd_ind, coarse_elem_sd_ind);
+    bddc->setup_MLIEV_coarse_vec_maps(coarse_IEV_nodes, coarse_IEV_sd_ptr, coarse_IEV_sd_ind, coarse_elem_sd_ind);
     printf("\tdone with setup multilevel coarse matrix sparsity\n");
 
     // ==============================================
@@ -456,8 +468,8 @@ int main(int argc, char **argv) {
     // matrix-free PCG for FETI-DP interface problem
     SolverOptions opts;
     // opts.ncycles = 2;
-    opts.ncycles = 50;
-    // opts.ncycles = 500;
+    // opts.ncycles = 50;
+    opts.ncycles = 500;
     opts.print = true;
     opts.print_freq = 5;
     opts.debug = true;

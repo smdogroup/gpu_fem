@@ -84,7 +84,7 @@ class MatrixFreePCGSolver : public BaseSolver {
             CHECK_CUBLAS(cublasDnrm2(cublasHandle, N, r_vec.getPtr(), 1, &init_resid_norm));
             if (options.print) {
                 if (ilevel == 0)
-                    printf("MF-PCG init_resid = %.8e\n", init_resid_norm);
+                    printf("TopLEVEL MF-PCG init_resid = %.8e\n", init_resid_norm);
                 else
                     printf("\tL%d-MF-PCG init_resid = %.8e\n", ilevel, init_resid_norm);
             }

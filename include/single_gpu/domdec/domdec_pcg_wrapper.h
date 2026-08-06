@@ -40,6 +40,12 @@ class DomDecKrylovWrapper : public BaseSolver {
         // but here we compute it in the FETI u_IEV, f_IEV decomposed system instead..
         fetidp->set_IEV_residual(lambdaE, lambdaI, vars);
     }
+    void add_res_IEV(T a, T b, DeviceVec<T> &_res_IEV) {
+        // compute res = lambdaE * fext - lambdaI * fint where fint = kmat(u) * u
+        // but here we compute it in the FETI u_IEV, f_IEV decomposed system instead..
+        fetidp->add_res_IEV(a, b, _res_IEV);
+    }
+    void get_res_IEV(DeviceVec<T> &_res_IEV) { fetidp->get_res_IEV(_res_IEV); }
     void update_after_assembly(DeviceVec<T> &vars) {
         // krylov calls for DOMDEC preconditioner (so don't need to call on that)
         // printf("update after assembly in DomDecKrylovWrapper\n");
